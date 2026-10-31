@@ -11,7 +11,17 @@ struct DisplaySnap {
   int rssi = 0;
   uint32_t rxBytes = 0, good = 0, uptimeMs = 0, ageMs = 0;
   int stations = 0;
+  String devices = "[]", protocol, connAuth; // last scan result (JSON)
+  bool automatic = false, wifiOn = true;
 };
+
+// Actions shared by the web API and the on-screen UI (main.cpp).
+void bmsScan();
+bool bmsConnect(const String &mac, uint8_t type, const String &protocol);
+void bmsAuto();
+void bmsDisconnect();
+bool wifiEnabled();
+void wifiSetEnabled(bool on);
 
 void takeDisplaySnapshot(DisplaySnap &out); // implemented in main.cpp
 void displayStart();                        // no-op on boards without display

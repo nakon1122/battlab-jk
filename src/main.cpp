@@ -14,9 +14,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.6.0-cyd35"
+#define BATTLAB_FW "1.7.0-cyd35"
 #else
-#define BATTLAB_FW "1.6.0-s3"
+#define BATTLAB_FW "1.7.0-s3"
 #endif
 WebServer web(80);
 Preferences prefs;
@@ -1044,6 +1044,106 @@ static void ledJson(JsonDocument &d) {
     o["hex"] = hx;
   }
 }
+// ---- BMS / Wi-Fi actions shared by the web API and the on-screen UI ----
+// Each uses its own Preferences handle so it is safe from any task.
+static bool wifiOn = true;
+static void wifiStartAp() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                    IPAddress(255, 255, 255, 0));
+  WiFi.softAP("BATTLAB-JK");
+}
+bool wifiEnabled() { return wifiOn; }
+void wifiSetEnabled(bool on) {
+  if (on == wifiOn) return;
+  wifiOn = on;
+  Preferences p;
+  p.begin("battlab-jk", false);
+  p.putBool("wifi", on);
+  p.end();
+  if (on) wifiStartAp();
+  else {
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }
+}
+void bmsScan() {
+  Guard g;
+  scanWanted = true;
+}
+bool bmsConnect(const String &mac, uint8_t type, const String &p) {
+  if (!validMac(mac) ||
+      (p != "AUTO" && p != "JK02_24S" && p != "JK02_32S" && p != "ANT" && p != "JBD") ||
+      type > 1)
+    return false;
+  {
+    Guard g;
+    persistWanted = false;
+    cfg.automatic = p == "AUTO";
+    cfg.mac = mac;
+    cfg.protocol = p;
+    cfg.type = type;
+    configChanged = true;
+    generation++;
+    shared.have = false;
+    shared.haveParams = false;
+    shared.detected = "";
+    shared.model = "";
+    shared.hardware = "";
+    shared.software = "";
+    shared.linked = false;
+    shared.state = "RECONFIGURING";
+  }
+  Preferences pr;
+  pr.begin("battlab-jk", false);
+  pr.putBool("auto", p == "AUTO");
+  pr.putString("mac", mac);
+  pr.putString("protocol", p);
+  pr.putUChar("type", type);
+  pr.end();
+  return true;
+}
+void bmsAuto() {
+  {
+    Guard g;
+    persistWanted = false;
+    cfg.automatic = true;
+    cfg.mac = "";
+    cfg.protocol = "AUTO";
+    configChanged = true;
+    generation++;
+    shared.have = false;
+    shared.haveParams = false;
+    shared.detected = "";
+    shared.linked = false;
+    shared.state = "AUTO_DISCOVERY";
+  }
+  Preferences pr;
+  pr.begin("battlab-jk", false);
+  pr.putBool("auto", true);
+  pr.remove("mac");
+  pr.putString("protocol", "AUTO");
+  pr.end();
+}
+void bmsDisconnect() {
+  {
+    Guard g;
+    persistWanted = false;
+    cfg.automatic = false;
+    cfg.mac = "";
+    configChanged = true;
+    generation++;
+    shared.have = false;
+    shared.haveParams = false;
+    shared.linked = false;
+    shared.state = "UNCONFIGURED";
+  }
+  Preferences pr;
+  pr.begin("battlab-jk", false);
+  pr.putBool("auto", false);
+  pr.remove("mac");
+  pr.end();
+}
 void takeDisplaySnapshot(DisplaySnap &o) {
   {
     Guard g;
@@ -1061,7 +1161,12 @@ void takeDisplaySnapshot(DisplaySnap &o) {
     o.rxBytes = shared.rxBytes;
     o.good = shared.good;
     o.ageMs = shared.have ? uint32_t(millis() - shared.stamp) : 0;
+    o.devices = shared.devices;
+    o.protocol = cfg.protocol;
+    o.automatic = cfg.automatic;
+    o.connAuth = shared.connectionAuth;
   }
+  o.wifiOn = wifiOn;
   o.firmware = BATTLAB_FW;
   o.uptimeMs = millis();
   o.stations = WiFi.softAPgetStationNum();
@@ -1074,10 +1179,15 @@ void setup() {
   cfg.protocol = prefs.getString("protocol", "AUTO");
   cfg.automatic = prefs.getBool("auto", true);
   cfg.type = prefs.getUChar("type", 0);
-  WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
-                    IPAddress(255, 255, 255, 0));
-  const bool apStarted = WiFi.softAP("BATTLAB-JK");
+#ifdef BATTLAB_DISPLAY
+  wifiOn = prefs.getBool("wifi", true); // can be switched off on the screen
+#endif
+  bool apStarted = false;
+  if (wifiOn) {
+    wifiStartAp();
+    apStarted = true;
+  } else
+    WiFi.mode(WIFI_OFF);
   Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
@@ -1137,12 +1247,8 @@ void setup() {
     web.send(200, "text/plain; charset=utf-8", s);
   });
   web.on("/api/scan", HTTP_POST, []() {
-    if (!localRequest())
-      return;
-    {
-      Guard g;
-      scanWanted = true;
-    }
+    if (!localRequest()) return;
+    bmsScan();
     web.send(202, "application/json", "{\"queued\":true}");
   });
   web.on("/api/devices", HTTP_GET, []() {
@@ -1178,87 +1284,26 @@ void setup() {
     json(202,result);
   });
   web.on("/api/connect", HTTP_POST, []() {
-    if (!localRequest())
-      return;
-    if (web.arg("plain").length() > 256) {
-      error(413, "Too large");
-      return;
-    }
+    if (!localRequest()) return;
+    if (web.arg("plain").length() > 256) { error(413, "Too large"); return; }
     StaticJsonDocument<256> d;
-    if (deserializeJson(d, web.arg("plain"))) {
-      error(400, "Invalid JSON");
-      return;
-    }
+    if (deserializeJson(d, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
     String mac = d["mac"] | "", p = d["protocol"] | "";
     int type = d["type"] | 0;
-    if (!validMac(mac) || (p != "AUTO" && p != "JK02_24S" && p != "JK02_32S" && p != "ANT" && p != "JBD") ||
-        (type != 0 && type != 1)) {
+    if (type < 0 || type > 1 || !bmsConnect(mac, uint8_t(type), p)) {
       error(400, "Invalid MAC, protocol or address type");
       return;
     }
-    {
-      Guard g;
-      persistWanted = false;
-      cfg.automatic = p == "AUTO";
-      cfg.mac = mac;
-      cfg.protocol = p;
-      cfg.type = (uint8_t)type;
-      configChanged = true;
-      generation++;
-      shared.have = false;
-      shared.haveParams = false;
-      shared.detected = "";
-      shared.model = "";
-      shared.hardware = "";
-      shared.software = "";
-      shared.linked = false;
-      shared.state = "RECONFIGURING";
-    }
-    prefs.putBool("auto", p == "AUTO");
-    prefs.putString("mac", mac);
-    prefs.putString("protocol", p);
-    prefs.putUChar("type", type);
     web.send(202, "application/json", "{\"saved\":true}");
   });
   web.on("/api/auto", HTTP_POST, []() {
-    if (!localRequest())
-      return;
-    {
-      Guard g;
-      persistWanted = false;
-      cfg.automatic = true;
-      cfg.mac = "";
-      cfg.protocol = "AUTO";
-      configChanged = true;
-      generation++;
-      shared.have = false;
-      shared.haveParams = false;
-      shared.detected = "";
-      shared.linked = false;
-      shared.state = "AUTO_DISCOVERY";
-    }
-    prefs.putBool("auto", true);
-    prefs.remove("mac");
-    prefs.putString("protocol", "AUTO");
+    if (!localRequest()) return;
+    bmsAuto();
     web.send(202, "application/json", "{\"automatic\":true}");
   });
   web.on("/api/disconnect", HTTP_POST, []() {
-    if (!localRequest())
-      return;
-    {
-      Guard g;
-      persistWanted = false;
-      cfg.automatic = false;
-      cfg.mac = "";
-      configChanged = true;
-      generation++;
-      shared.have = false;
-      shared.haveParams = false;
-      shared.linked = false;
-      shared.state = "UNCONFIGURED";
-    }
-    prefs.putBool("auto", false);
-    prefs.remove("mac");
+    if (!localRequest()) return;
+    bmsDisconnect();
     web.send(202, "application/json", "{\"disconnected\":true}");
   });
   web.on("/api/read", HTTP_POST, []() {
