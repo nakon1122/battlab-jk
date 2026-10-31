@@ -4,6 +4,13 @@
 <meta name="theme-color" content="#0b1117">
 <title>BattLab Cloud</title>
 <link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BattLab">
+<meta name="description" content="BattLab Cloud - ดูและควบคุมแบตเตอรี่ลิเธียมของคุณจากทุกที่">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css">
@@ -104,10 +111,76 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 .cl{display:flex;gap:8px;align-items:center;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)}.cl b{flex:1;font-weight:600}.st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid var(--line);color:var(--muted)}.st.done{color:var(--good);border-color:var(--good)}.st.error,.st.expired{color:var(--bad);border-color:var(--bad)}.st.sent,.st.pending{color:var(--warn);border-color:var(--warn)}
 .ledc{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.ledc span{width:34px;height:34px;border-radius:50%;cursor:pointer;border:3px solid transparent}.ledc span.on{border-color:var(--text)}
 .devrow{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.devrow .l{flex:1;min-width:0}.devrow .l b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.devrow select{width:auto;margin:0;padding:7px}.devrow button{padding:8px 12px}
+@media(max-width:480px){.hide-s{display:none}}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:10px 16px;border-radius:12px;max-width:90vw;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.3)}
 .empty{text-align:center;padding:26px 10px}.empty .e{font-size:44px}
 @media(max-width:480px){header{gap:6px;padding-left:12px;padding-right:12px}header img{height:22px}header button{padding:7px 10px;font-size:14px}header .badge{font-size:11px;padding:2px 7px}}
 @media(max-width:560px){.hero{grid-template-columns:1fr;justify-items:center;text-align:center}.hero .pills{justify-content:center}.status{justify-content:center}.th3{grid-template-columns:1fr}}
+
+/* ===== BattLab Cloud 3 look ===== */
+:root{--bg:#060a0f;--card:rgba(20,29,38,.74);--card2:rgba(10,16,22,.62);--line:rgba(140,170,190,.14);--text:#eef3f6;--muted:#8fa0ac;--grid:rgba(140,170,190,.10);--glass:blur(16px) saturate(140%)}
+:root[data-theme=light]{--bg:#eef3f7;--card:rgba(255,255,255,.82);--card2:rgba(240,245,249,.9);--line:rgba(20,40,60,.10);--grid:rgba(20,40,60,.07)}
+html,body{font-family:"Noto Sans Thai","Prompt",system-ui,-apple-system,"Segoe UI",sans-serif}
+body{min-height:100vh;background:
+ radial-gradient(900px 520px at 0% -8%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 62%),
+ radial-gradient(800px 480px at 105% 4%,rgba(79,143,240,.16),transparent 60%),
+ radial-gradient(700px 600px at 50% 120%,rgba(139,124,240,.10),transparent 60%),var(--bg);background-attachment:fixed}
+.big,h3,.status,.tile b,.ring .v b,.kv b,.dcard .big,.hl{font-family:"Prompt","Noto Sans Thai",sans-serif;letter-spacing:.1px}
+header{background:color-mix(in srgb,var(--bg) 72%,transparent);backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass);border-bottom:1px solid var(--line)}
+.card{background:var(--card);backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass);border:1px solid var(--line);border-radius:22px;box-shadow:0 12px 34px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.04)}
+[data-theme=light] .card{box-shadow:0 10px 28px rgba(20,40,60,.08)}
+button{border-radius:14px;transition:transform .12s,box-shadow .2s,filter .2s}
+button:not(.soft):not(.ghost):not(.danger){background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#4f8ff0));box-shadow:0 8px 22px color-mix(in srgb,var(--accent) 30%,transparent)}
+button:active{transform:scale(.97)}
+button.soft,button.ghost{background:color-mix(in srgb,var(--card2) 80%,transparent)}
+.chip{background:color-mix(in srgb,var(--card) 80%,transparent);backdrop-filter:var(--glass)}
+.chip.on{background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#4f8ff0));box-shadow:0 6px 16px color-mix(in srgb,var(--accent) 30%,transparent)}
+.chip svg{width:16px;height:16px;vertical-align:-3px;margin-right:6px}
+input,select{background:var(--card2);border-radius:14px}
+input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 60%,transparent);border-color:transparent}
+.tile{background:linear-gradient(160deg,color-mix(in srgb,var(--card2) 90%,transparent),color-mix(in srgb,var(--card) 60%,transparent));border-radius:16px;position:relative;overflow:hidden}
+.tile:after{content:"";position:absolute;right:-30px;top:-30px;width:90px;height:90px;border-radius:50%;background:radial-gradient(color-mix(in srgb,var(--accent) 16%,transparent),transparent 70%)}
+.hero{position:relative;overflow:hidden}
+.hero:before{content:"";position:absolute;left:-60px;top:-60px;width:320px;height:320px;border-radius:50%;background:radial-gradient(color-mix(in srgb,var(--socc,var(--good)) 22%,transparent),transparent 65%);pointer-events:none}
+.ring .v b{font-size:50px;font-weight:700}
+.pflow{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13px;color:var(--muted)}
+.pflow i{flex:1;height:6px;border-radius:3px;background:repeating-linear-gradient(90deg,var(--fc) 0 14px,transparent 14px 26px);background-size:26px 6px;opacity:.9}
+.pflow.chg i{--fc:var(--good);animation:flowL 0.9s linear infinite}.pflow.dsg i{--fc:var(--warn);animation:flowR 0.9s linear infinite}.pflow.idle i{--fc:var(--neu);opacity:.35}
+.pflow svg{width:26px;height:26px;flex:none}
+@keyframes flowR{to{background-position:26px 0}}@keyframes flowL{to{background-position:-26px 0}}
+.dcard{transition:transform .15s,box-shadow .2s;position:relative;overflow:hidden}
+.dcard:hover{transform:translateY(-2px);box-shadow:0 16px 40px rgba(0,0,0,.3)}
+.dcard:before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--dc,var(--line))}
+.batt{width:44px;height:22px;border:2px solid var(--muted);border-radius:6px;position:relative;flex:none}.batt:after{content:"";position:absolute;right:-6px;top:6px;width:4px;height:8px;border-radius:0 2px 2px 0;background:var(--muted)}
+.batt i{position:absolute;left:2px;top:2px;bottom:2px;border-radius:3px;background:var(--bc,var(--good));box-shadow:0 0 10px var(--bc,var(--good))}
+/* landing */
+.landing{display:grid;grid-template-columns:1.1fr .9fr;gap:22px;align-items:center;max-width:1000px;margin:10px auto 0}
+.landing h1{font-family:Prompt,sans-serif;font-size:42px;line-height:1.12;margin:0 0 12px}
+.landing h1 span{background:linear-gradient(90deg,var(--accent),#4f8ff0);-webkit-background-clip:text;background-clip:text;color:transparent}
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:18px 0}
+.feat div{display:flex;gap:10px;align-items:flex-start;font-size:14px;padding:12px;border-radius:16px;background:var(--card2);border:1px solid var(--line)}
+.feat svg{width:22px;height:22px;flex:none;color:var(--accent)}
+.hero-batt{width:200px;height:96px;margin:6px 0 4px;position:relative}
+.hero-batt .shell{position:absolute;inset:0 14px 0 0;border:4px solid var(--text);border-radius:18px;opacity:.85}
+.hero-batt .cap{position:absolute;right:0;top:30px;width:12px;height:36px;border-radius:0 8px 8px 0;background:var(--text);opacity:.85}
+.hero-batt .lvl{position:absolute;left:10px;top:10px;bottom:10px;border-radius:10px;background:linear-gradient(90deg,var(--accent),#4f8ff0);animation:charge 3.2s ease-in-out infinite;box-shadow:0 0 28px color-mix(in srgb,var(--accent) 60%,transparent)}
+@keyframes charge{0%{width:18%}60%{width:calc(100% - 44px)}100%{width:calc(100% - 44px)}}
+.lmore{grid-column:1/-1}
+.quick{display:flex;gap:10px;flex-wrap:wrap}
+.quick button{flex:1;min-width:140px}
+/* install guide */
+.steps2{counter-reset:s;list-style:none;padding:0;margin:10px 0}.steps2 li{counter-increment:s;display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.steps2 li:before{content:counter(s);width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--on-accent);font-weight:700;flex:none}
+/* mobile: device tabs as a bottom bar */
+@media(max-width:700px){
+ .landing{grid-template-columns:1fr}.landing h1{font-size:32px}.feat{grid-template-columns:1fr}
+ .dtabs{position:fixed;top:auto;bottom:0;left:0;right:0;margin:0;padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--bg) 80%,transparent);backdrop-filter:var(--glass);-webkit-backdrop-filter:var(--glass);border-top:1px solid var(--line);z-index:30}
+ .dtabs .chips{justify-content:space-between;gap:2px}
+ .dtabs .chip{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 2px;border:0;background:transparent;font-size:11px;border-radius:12px;box-shadow:none}
+ .dtabs .chip svg{width:22px;height:22px;margin:0}
+ .dtabs .chip.on{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+ main{padding-bottom:110px}
+}
 </style></head>
 <body>
 <header>
@@ -116,23 +189,32 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
  <span class="sp"></span>
  <button class="ghost hide" id="btnBack">‹ กลับ</button>
  <button class="ghost hide" id="btnLogin">เข้าสู่ระบบ</button>
+ <button class="ghost hide" id="btnInstall" title="ติดตั้งเป็นแอป">📲 <span class="hide-s">ติดตั้งแอป</span></button>
  <button class="ghost icon hide" id="btnSet" title="ตั้งค่า" aria-label="ตั้งค่า">⚙</button>
 </header>
 <main>
 <!-- sign in -->
 <section id="vLogin" class="hide">
- <div class="card" style="max-width:460px;margin:20px auto">
-  <div class="big">BattLab Cloud</div>
-  <p class="muted small">ดูแบตเตอรี่ของคุณได้จากทุกที่: ค่าสด เซลล์ กราฟย้อนหลัง 30 วัน และแจ้งเตือน</p>
-  <label>อีเมล<input id="email" type="email" autocomplete="email"></label>
-  <label>รหัสผ่าน (อย่างน้อย 8 ตัว)<input id="pass" type="password" autocomplete="current-password"></label>
-  <div class="row"><button id="btnIn">เข้าสู่ระบบ</button><button class="soft" id="btnUp">สมัครใหม่</button></div>
-  <p class="small" id="loginMsg" style="min-height:1.4em"></p>
-  <div class="row small"><button class="ghost" id="btnResend" style="padding:8px">ส่งอีเมลยืนยันอีกครั้ง</button><button class="ghost" id="btnForgot" style="padding:8px">ลืมรหัสผ่าน</button></div>
- </div>
- <div class="card" style="max-width:460px;margin:0 auto;text-align:center">
-  <b>อยากเห็นหน้าตาก่อน?</b><p class="muted small">เปิดแดชบอร์ดตัวอย่างพร้อมข้อมูลจำลอง (แบต 48V 16 เซลล์)</p>
-  <button class="soft" id="btnDemo">ดูตัวอย่างแดชบอร์ด</button>
+ <div class="landing">
+  <div>
+   <div class="hero-batt"><div class="shell"></div><div class="cap"></div><div class="lvl"></div></div>
+   <h1>แบตเตอรี่ของคุณ<br><span>อยู่ในมือทุกที่</span></h1>
+   <p class="muted">ดูค่าสด เซลล์ทุกก้อน กราฟย้อนหลัง 30 วัน แจ้งเตือน และสั่งงาน BMS ได้จากมือถือ รองรับ JK · ANT · JBD</p>
+  </div>
+  <div class="card" style="margin:0">
+   <div class="big">เข้าสู่ระบบ</div>
+   <p class="muted small" style="margin-top:4px">ใช้อีเมลเดียวกันได้ทุกเครื่อง</p>
+   <label>อีเมล<input id="email" type="email" autocomplete="email"></label>
+   <label>รหัสผ่าน (อย่างน้อย 8 ตัว)<input id="pass" type="password" autocomplete="current-password"></label>
+   <div class="row"><button id="btnIn">เข้าสู่ระบบ</button><button class="soft" id="btnUp">สมัครใหม่</button></div>
+   <p class="small" id="loginMsg" style="min-height:1.4em"></p>
+   <div class="row small"><button class="ghost" id="btnResend" style="padding:8px">ส่งอีเมลยืนยันอีกครั้ง</button><button class="ghost" id="btnForgot" style="padding:8px">ลืมรหัสผ่าน</button></div>
+  </div>
+  <div class="lmore">
+
+   <div class="feat"><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><span><b>ค่าสดทุก 3 วินาที</b><br><span class="muted small">SOC, แรงดัน, กระแส, อุณหภูมิ</span></span></div><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 20h18"/><path d="M4 16l5-6 4 3 7-8"/></svg><span><b>กราฟและพลังงาน</b><br><span class="muted small">ย้อนหลัง 30 วัน · kWh รายวัน</span></span></div><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/></svg><span><b>สั่งงานระยะไกล</b><br><span class="muted small">MOS, พารามิเตอร์, ไฟ, Wi-Fi</span></span></div><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg><span><b>ตั้งค่าผ่านบลูทูธ</b><br><span class="muted small">ไม่ต้องต่อ Wi-Fi ของบอร์ด</span></span></div></div>
+   <div class="quick"><button class="soft" id="btnDemo">✨ ดูตัวอย่าง</button><button class="soft" id="btnBleL">🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</button><button class="soft" id="btnInstallL">📲 ติดตั้งแอป</button>  </div>
+  </div>
  </div>
 </section>
 <!-- device list -->
@@ -140,6 +222,7 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
  <div class="card" id="fleet"></div>
  <div class="grid" id="devList"></div>
  <div class="card hide" style="margin-top:14px" id="viewList"></div>
+ <div class="card row wrap" style="margin-top:14px" id="bleCard"><div><b>🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</b><div class="small muted">ตั้ง Wi-Fi บ้าน ดูรหัสจับคู่ และสั่งงานบอร์ดที่อยู่ใกล้ โดยไม่ต้องต่อ Wi-Fi ของบอร์ด</div></div><button class="nf" id="btnBle">เชื่อมต่อบลูทูธ</button></div>
  <div class="card" style="margin-top:14px" id="addCard"><h3>เพิ่มอุปกรณ์</h3><p class="muted small">บนจอ BattLab ไปที่ INFO → CLOUD แล้วกรอกรหัสจับคู่ที่เห็น (บอร์ดต้องต่อ Wi-Fi บ้านและขึ้นว่า online แล้ว) · บอร์ด S3: ดูรหัสในหน้าเว็บ 192.168.4.1 → ตั้งค่า · จอ Cloud Screen: รหัสขึ้นบนจอตอนเปิดครั้งแรก (หรือ SETUP → PAIRING)</p>
   <div class="row wrap"><label style="min-width:180px">รหัสจับคู่<input id="pair" placeholder="K7Q2-9XMA" autocapitalize="characters" maxlength="9"></label><label style="min-width:180px">ตั้งชื่อ (ไม่บังคับ)<input id="pairName" placeholder="แบตรถ 72V" maxlength="40"></label></div>
   <button id="btnPair">เพิ่มอุปกรณ์</button></div>
@@ -148,7 +231,7 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 <section id="vDev" class="hide">
  <div class="row" style="margin-bottom:4px"><div><div class="big" id="dName">—</div><div class="small muted" id="dSub">—</div></div></div>
  <div class="dtabs"><div class="chips" id="dTabs">
-  <span class="chip" data-t="ov">ภาพรวม</span><span class="chip" data-t="cells">เซลล์</span><span class="chip" data-t="hist">กราฟ</span><span class="chip" data-t="ctl">ควบคุม</span><span class="chip" data-t="alert">แจ้งเตือน</span><span class="chip" data-t="set">ตั้งค่าอุปกรณ์</span>
+  <span class="chip" data-t="ov"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 1 18 0"/><path d="M12 12l4-4"/><path d="M5 16h14"/></svg><span>ภาพรวม</span></span><span class="chip" data-t="cells"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="7" height="7" rx="2"/><rect x="14" y="4" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>เซลล์</span></span><span class="chip" data-t="hist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 20h18"/><path d="M4 16l5-6 4 3 7-8"/></svg><span>กราฟ</span></span><span class="chip" data-t="ctl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>ควบคุม</span></span><span class="chip" data-t="alert"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg><span>แจ้งเตือน</span></span><span class="chip" data-t="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg><span>ตั้งค่า</span></span>
  </div></div>
  <div id="tab_ov"></div>
  <div id="tab_cells" class="hide"></div>
@@ -204,7 +287,7 @@ let demo=false,devs=[],latest={},cur=null,tab='ov',pollT=null,listT=null,rt=null
 const ROUTE=()=>location.hash.replace(/^#\/?/,'').split('/');
 function go(h){if(location.hash!=='#'+h)location.hash=h;else route()}
 window.addEventListener('hashchange',route);
-function show(v){['vLogin','vList','vDev'].forEach(x=>$(x).classList.toggle('hide',x!==v));$('btnBack').classList.toggle('hide',v!=='vDev');$('btnSet').classList.toggle('hide',v==='vLogin');$('btnLogin').classList.toggle('hide',!demo);$('demoBadge').classList.toggle('hide',!demo)}
+function show(v){['vLogin','vList','vDev'].forEach(x=>$(x).classList.toggle('hide',x!==v));$('btnBack').classList.toggle('hide',v!=='vDev');$('btnSet').classList.toggle('hide',v==='vLogin');updInstall();$('btnLogin').classList.toggle('hide',!demo);$('demoBadge').classList.toggle('hide',!demo)}
 $('btnBack').onclick=()=>go('');$('logo').onclick=()=>{if(demo||devs.length)go('')};
 $('btnLogin').onclick=()=>{demo=false;devs=[];stopAll();show('vLogin');history.replaceState(null,'',location.pathname)};
 
@@ -218,7 +301,7 @@ function demoAt(t){// t seconds
  return {fw:'2.1.0-cyd35',state:'LIVE',bms:'JK02_32S',model:'JK-B2A24S20P',rssi:-61,up:Math.round(t%200000),heap:61440,blk:31744,v:+v.toFixed(2),i:cur,p:+(v*cur).toFixed(0),soc:+soc.toFixed(0),cap:+(soc/100*280).toFixed(1),cyc:37,t1:+t1.toFixed(1),t2:+(t1-0.8).toFixed(1),mos:+(t1+7).toFixed(1),chg:true,dsg:true,cells,cmin:Math.min(...cells),cmax:Math.max(...cells),...demoExtra()}}
 function demoExtra(){const S=demoState();return {chg:S.chg,dsg:S.dsg,jk:{v:S.jk,sw:[S.chg,S.dsg,S.bal]},devs:S.devs||undefined,wscan:S.wscan||undefined,cfg:{board:'cyd35',remote:1,led:S.led,ap:S.ap,tx:S.tx,ssid:S.ssid,ip:'192.168.1.57',wrssi:-55,note:S.note||undefined,mac:'c8:47:80:12:34:56',proto:'AUTO',auto:true,atype:0,fam:1,scanning:false,lw:'',disp:S.disp}}}
 function demoHist(from,to,b){const out=[];for(let t=Math.ceil(from/1000/b)*b;t<to/1000;t+=b){const d=demoAt(t);out.push({t:new Date(t*1000).toISOString(),soc:d.soc,voltage:d.v,current:d.i,power:d.p,temp:d.t1,mos:d.mos,cell_min:d.cmin,cell_max:d.cmax,n:Math.max(1,Math.round(b/60))})}return out}
-async function fetchLatest(dev){if(dev.demo)return {ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};const {data}=await sb.from('latest').select('ts,data').eq('device_id',dev.id).maybeSingle();return data}
+async function fetchLatest(dev){if(dev.ble)return latest[BLE_ID]||null;if(dev.demo)return {ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};const {data}=await sb.from('latest').select('ts,data').eq('device_id',dev.id).maybeSingle();return data}
 async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);const {data,error}=await sb.rpc('history_buckets',{p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}
 
 // ---------- derived values
@@ -273,12 +356,12 @@ sb.auth.onAuthStateChange(async(e,s)=>{
  if(e==='PASSWORD_RECOVERY'){const np=prompt('ตั้งรหัสผ่านใหม่ (อย่างน้อย 8 ตัว)');if(np&&np.length>=8){const {error}=await sb.auth.updateUser({password:np});toast(error?thErr(error):'เปลี่ยนรหัสผ่านแล้ว')}afterLogin()}
  else if(e==='SIGNED_OUT'&&!demo){stopAll();show('vLogin')}});
 async function afterLogin(){demo=false;const {data}=await sb.auth.getUser();const up=data&&data.user&&data.user.user_metadata&&data.user.user_metadata.prefs;if(up){P={...PREF_DEF,...up};ls.set('bl_prefs',P);applyTheme()}await loadDevices();route()}
-async function boot(){if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
+async function boot(){updInstall();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
 
 // ---------- routing
 function stopAll(){clearTimeout(cmdT);cmdT=null;cmds=[];clearInterval(pollT);clearInterval(listT);pollT=listT=null;if(rt){sb.removeChannel(rt);rt=null}rtOn=false;cur=null;destroyCharts()}
 async function route(){const [a,id,t]=ROUTE();
- if(!demo){const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');return}}
+ if(!demo&&!(id===BLE_ID&&ble)){const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');return}}
  if(a==='d'&&id){const dev=devs.find(d=>d.id===id);if(!dev){go('');return}openDev(dev,t||'ov');return}
  stopAll();showList()}
 
@@ -293,7 +376,7 @@ function renderList(){
  devs.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
  $('fleet').innerHTML='<div class="row wrap"><div><div class="big">อุปกรณ์ของฉัน</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b></div>':'')+'</div>';
  const cards=devs.map(d=>{const l=latest[d.id],s=dset(d),[st,txt]=statusOf(l),al=evalAlerts(d,l);trackAlerts(d,al);const x=l&&l.data||{};const live=st==='on';
-  return '<div class="card dcard" data-id="'+esc(d.id)+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf big">'+(live&&num(x.soc)?Math.round(x.soc)+'%':'')+'</div></div>'+
+  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?'<span class="batt" style="--bc:'+socColor(x.soc)+'"><i style="width:calc('+Math.max(4,Math.min(100,x.soc))+'% - 4px)"></i></span><span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
   (live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span><b>'+fmt(x.p,0)+'</b> W</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'});
  if(!demo)cards.push('<div class="card dcard" data-id="'+DEMO_ID+'" style="border-style:dashed"><div class="row"><span class="ic nf">✨</span><div><b>ดูตัวอย่างแดชบอร์ด</b><div class="small muted">ข้อมูลจำลอง ให้เห็นทุกฟังก์ชัน</div></div></div></div>');
  $('devList').innerHTML=devs.length||!demo?cards.join(''):'';
@@ -310,18 +393,18 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
-function openDev(dev,t){const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;energyAt=0;energyToday=null;hist=[]}tab=t;show('vDev');
+function openDev(dev,t){if(dev.ble&&!['ov','cells','ctl'].includes(t))t='ctl';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!dev.ble&&!['ov','cells','ctl'].includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;energyAt=0;energyToday=null;hist=[]}tab=t;show('vDev');
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
  ctlKey='';renderDev();if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
-function subRT(){if(cur.demo)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
+function subRT(){if(cur.demo||cur.ble)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
 async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(dev).catch(()=>null);if(cur!==dev)return;if(l)latest[dev.id]=l;
- if(Date.now()-energyAt>300000){energyAt=Date.now();const m=new Date();m.setHours(0,0,0,0);fetchHist(dev,m.getTime(),Date.now(),dev.demo?600:3600).then(r=>{energyToday=energyOf(r);if(tab==='ov')renderDev()}).catch(()=>{})}
+ if(!dev.ble&&Date.now()-energyAt>300000){energyAt=Date.now();const m=new Date();m.setHours(0,0,0,0);fetchHist(dev,m.getTime(),Date.now(),dev.demo?600:3600).then(r=>{energyToday=energyOf(r);if(tab==='ov')renderDev()}).catch(()=>{})}
  if(tab!=='hist'&&tab!=='set'&&tab!=='alert')renderDev();else renderHeader();if(tab==='ctl')ctlTouch();
  trackAlerts(dev,evalAlerts(dev,latest[dev.id]))}
 function energyOf(rows){let i=0,o=0;for(const r of rows){if(!num(r.power))continue;const wh=r.power*(r.n||1)/60;if(wh>0)i+=wh;else o-=wh}return {in:i/1000,out:o/1000}}
 function renderHeader(){const l=latest[cur.id],s=dset(cur),[st,txt]=statusOf(l),d=l&&l.data||{};$('dName').textContent=s.icon+' '+cur.name;
- $('dSub').innerHTML='<span class="dot '+st+'"></span> '+esc(txt)+(l?' · อัปเดต '+ago(l.ts):'')+(rtOn?' · <b style="color:var(--good)">สด</b>':'')+(d.bms?' · '+esc(d.bms):'')}
+ $('dSub').innerHTML='<span class="dot '+st+'"></span> '+esc(txt)+(l?' · อัปเดต '+ago(l.ts):'')+(rtOn||cur.ble?' · <b style="color:var(--good)">'+(cur.ble?'🔵 บลูทูธ':'สด')+'</b>':'')+(d.bms?' · '+esc(d.bms):'')}
 function renderDev(){if(!cur)return;renderHeader();if(tab==='ov')renderOv();else if(tab==='cells')renderCells();else if(tab==='alert')renderAlert();else if(tab==='set')renderSet();else if(tab==='ctl')renderCtl()}
 
 function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
@@ -351,15 +434,17 @@ function renderOv(){const l=latest[cur.id],s=dset(cur),d=l&&l.data||{},x=derive(
  else if(!x.live){h+='<div class="card empty"><div class="e">🔋</div><b>บอร์ดออนไลน์แล้ว รอเชื่อมต่อ BMS</b><ol class="steps small muted" style="text-align:left;max-width:440px;margin:10px auto"><li>CYD: ไปแท็บ <b>BMS</b> แล้วกด <b>AUTO</b> (หรือ SCAN แล้วเลือกแบต)</li><li>S3: เปิดหน้าเว็บ 192.168.4.1 แล้วกดค้นหา BMS</li><li>เมื่อเชื่อมได้ ค่าทั้งหมดจะขึ้นที่นี่ภายใน 10 วินาที และเริ่มเก็บกราฟ</li></ol><div class="small muted">สถานะตอนนี้: '+esc(d.state||'--')+'</div></div>'}
  if(x.live){const soc=num(d.soc)?Math.max(0,Math.min(100,d.soc)):0,L=2*Math.PI*80*0.75;
   const st=x.mode==='chg'?'กำลังชาร์จ':x.mode==='dsg'?'กำลังจ่ายไฟ':'พัก';
-  h+='<div class="card hero"><div class="ring"><svg viewBox="0 0 190 190" width="190" height="190"><g transform="rotate(135 95 95)"><circle cx="95" cy="95" r="80" fill="none" stroke="var(--line)" stroke-width="16" stroke-dasharray="'+L+' 999" stroke-linecap="round"/><circle cx="95" cy="95" r="80" fill="none" stroke="'+socColor(soc)+'" stroke-width="16" stroke-dasharray="'+(L*soc/100)+' 999" stroke-linecap="round"/></g></svg><div class="v"><b>'+Math.round(soc)+'%</b><span class="muted small">SOC</span></div></div>'+
+  h+='<div class="card hero" style="--socc:'+socColor(soc)+'"><div class="ring"><svg viewBox="0 0 190 190" width="190" height="190"><g transform="rotate(135 95 95)"><circle cx="95" cy="95" r="80" fill="none" stroke="var(--line)" stroke-width="16" stroke-dasharray="'+L+' 999" stroke-linecap="round"/><circle cx="95" cy="95" r="80" fill="none" stroke="'+socColor(soc)+'" stroke-width="16" stroke-dasharray="'+(L*soc/100)+' 999" stroke-linecap="round" style="filter:drop-shadow(0 0 7px '+socColor(soc)+')"/></g></svg><div class="v"><b>'+Math.round(soc)+'%</b><span class="muted small">SOC</span></div></div>'+
    '<div><div class="status"><span class="flow '+x.mode+'"></span>'+st+(x.mode!=='idle'&&num(d.p)?' '+Math.abs(d.p).toFixed(0)+' W':'')+'</div>'+
    '<div class="muted" style="margin-top:4px">'+(x.mode==='chg'&&num(x.eta)?'เต็มในอีกประมาณ <b style="color:var(--text)">'+hm(x.eta)+'</b>':x.mode==='dsg'&&num(x.eta)?'ใช้ได้อีกประมาณ <b style="color:var(--text)">'+hm(x.eta)+'</b>':'')+'</div>'+
    '<div style="margin-top:10px;font-size:28px;font-weight:800;font-variant-numeric:tabular-nums">'+fmt(d.v,2)+' <span class="muted" style="font-size:16px">V</span> &nbsp; '+fmt(d.i,1)+' <span class="muted" style="font-size:16px">A</span></div>'+
-   '<div class="pills"><span class="pill '+(d.chg?'on':'off')+'">ชาร์จ '+(d.chg?'เปิด':'ปิด')+'</span><span class="pill '+(d.dsg?'on':'off')+'">จ่ายไฟ '+(d.dsg?'เปิด':'ปิด')+'</span><span class="pill">'+esc(CHEM[x.chem].n)+'</span>'+(x.cells?'<span class="pill">'+x.cells.length+'S</span>':'')+'</div></div></div>';
+   '<div class="pills"><span class="pill '+(d.chg?'on':'off')+'">ชาร์จ '+(d.chg?'เปิด':'ปิด')+'</span><span class="pill '+(d.dsg?'on':'off')+'">จ่ายไฟ '+(d.dsg?'เปิด':'ปิด')+'</span><span class="pill">'+esc(CHEM[x.chem].n)+'</span>'+(x.cells?'<span class="pill">'+x.cells.length+'S</span>':'')+'</div>'+flowHtml(x.mode,d)+'</div></div>';
   const tiles=s.order.filter(k=>!s.hidden.includes(k)).map(k=>tileHtml(k,d,x,s)).join('');
   h+='<div class="card"><div class="row"><h3 style="margin:0">ค่าทั้งหมด</h3><button class="ghost nf" style="padding:6px 12px;font-size:13px" onclick="go(\'d/'+esc(cur.id)+'/set\')">ปรับแต่ง</button></div><div class="tiles" style="margin-top:10px">'+tiles+'</div></div>';
   if(x.cells)h+='<div class="card" style="cursor:pointer" onclick="go(\'d/'+esc(cur.id)+'/cells\')"><div class="row"><h3 style="margin:0">เซลล์ '+x.cells.length+' ก้อน</h3><span class="nf small muted">ดูทั้งหมด ›</span></div>'+cellDevSvg(x,120)+'<div class="small muted">ต่ำสุด '+x.cmin.toFixed(3)+' V (#'+x.imin+') · สูงสุด '+x.cmax.toFixed(3)+' V (#'+x.imax+') · Δ '+x.delta+' mV · '+balanceTxt(x.delta)+'</div></div>'}
  h+=infoHtml(d,l);$('tab_ov').innerHTML=h}
+const IC_SUN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>',IC_BAT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/></svg>',IC_LOAD='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>';
+function flowHtml(mode,d){const w=num(d.p)?Math.abs(d.p).toFixed(0)+' W':'';return mode==='chg'?'<div class="pflow chg">'+IC_BAT+'<i></i>'+IC_SUN+'<span>ชาร์จเข้า '+w+'</span></div>':mode==='dsg'?'<div class="pflow dsg">'+IC_BAT+'<i></i>'+IC_LOAD+'<span>จ่ายออก '+w+'</span></div>':'<div class="pflow idle">'+IC_BAT+'<i></i><span>พัก</span></div>'}
 function balanceTxt(dm){return dm<=10?'สมดุลดีมาก':dm<=30?'สมดุลดี':dm<=60?'พอใช้':'ควรบาลานซ์'}
 // diverging bars: each cell's deviation from the pack average (mV), zero line = average
 function cellDevSvg(x,H){const c=x.cells,dev=c.map(v=>(v-x.cavg)*1000),m=Math.max(5,...dev.map(Math.abs)),half=H/2-6;
@@ -462,26 +547,27 @@ function keepForm(){if(!editS)return;editS.chem=$('sChem').value;const c=parseFl
 const LED_MODES=['รุ้ง (Rainbow)','สีเดียว','หายใจ (Breathe)','ตามสถานะแบต'];
 const LED_PAL=[['#FF0000','แดง'],['#FF5000','ส้ม'],['#FFBE00','เหลือง'],['#00FF28','เขียว'],['#00DCFF','ฟ้า'],['#0032FF','น้ำเงิน'],['#AA00FF','ม่วง'],['#FFFFFF','ขาว']];
 const JKP=[['Cell OVP','แรงดันเซลล์สูงสุด (OVP)','V',.01,2.8,4.3,3],['OVP recovery','คืนค่าจาก OVP','V',.01,2.7,4.25,3],['Cell UVP','แรงดันเซลล์ต่ำสุด (UVP)','V',.01,2.0,3.4,3],['UVP recovery','คืนค่าจาก UVP','V',.01,2.1,3.6,3],['Power off','แรงดันตัดระบบ','V',.01,2.0,3.3,3],['Balance start','เริ่มบาลานซ์ที่','V',.01,2.8,4.2,3],['Balance trigger','บาลานซ์เมื่อต่างกัน','V',.001,.003,.1,3],['Max balance I','กระแสบาลานซ์สูงสุด','A',.1,.3,4,1],['Max charge I','กระแสชาร์จสูงสุด','A',1,1,300,0],['Max discharge I','กระแสจ่ายสูงสุด','A',1,1,400,0],['Charge OTP','อุณหภูมิสูงสุดขณะชาร์จ','°C',1,30,70,0],['Discharge OTP','อุณหภูมิสูงสุดขณะจ่าย','°C',1,30,80,0],['Charge UTP','อุณหภูมิต่ำสุดขณะชาร์จ','°C',1,-30,15,0],['MOS OTP','อุณหภูมิ MOS สูงสุด','°C',1,50,100,0],['Capacity','ความจุแบต','Ah',1,1,2000,0]];
-const CMD_TH={led:'ไฟ RGB',bms_scan:'ค้นหา BMS',bms_connect:'เชื่อม BMS',bms_auto:'เชื่อม BMS อัตโนมัติ',bms_disconnect:'ตัดการเชื่อม BMS',bms_param:'ตั้งพารามิเตอร์',bms_switch:'สวิตช์ MOS',bms_read:'อ่านค่าจาก BMS',wifi_ap:'ฮอตสปอต BATTLAB',radio_max:'กำลังส่งวิทยุ',home_wifi:'เปลี่ยน Wi-Fi บ้าน',wifi_scan:'ค้นหา Wi-Fi',display:'ตั้งค่าหน้าจอ',restart:'รีสตาร์ทบอร์ด',ping:'ทดสอบการเชื่อมต่อ'};
+const CMD_TH={forget_wifi:'ลืม Wi-Fi บ้าน',led:'ไฟ RGB',bms_scan:'ค้นหา BMS',bms_connect:'เชื่อม BMS',bms_auto:'เชื่อม BMS อัตโนมัติ',bms_disconnect:'ตัดการเชื่อม BMS',bms_param:'ตั้งพารามิเตอร์',bms_switch:'สวิตช์ MOS',bms_read:'อ่านค่าจาก BMS',wifi_ap:'ฮอตสปอต BATTLAB',radio_max:'กำลังส่งวิทยุ',home_wifi:'เปลี่ยน Wi-Fi บ้าน',wifi_scan:'ค้นหา Wi-Fi',display:'ตั้งค่าหน้าจอ',restart:'รีสตาร์ทบอร์ด',ping:'ทดสอบการเชื่อมต่อ'};
 const ST_TH={pending:'รอบอร์ด',sent:'บอร์ดรับแล้ว',done:'สำเร็จ',error:'ไม่สำเร็จ',expired:'หมดเวลา'};
 let cmds=[],cmdT=null,touchAt=0,ctlKey='',DS=null;
-function ctlTouch(force){if(!cur||cur.demo)return;if(force||Date.now()-touchAt>60000){touchAt=Date.now();sb.rpc('remote_touch',{p_device:cur.id}).then(()=>{},()=>{})}}
-async function loadCmds(){clearTimeout(cmdT);if(!cur||tab!=='ctl')return;const dev=cur;
+function ctlTouch(force){if(!cur||cur.demo||cur.ble)return;if(force||Date.now()-touchAt>60000){touchAt=Date.now();sb.rpc('remote_touch',{p_device:cur.id}).then(()=>{},()=>{})}}
+async function loadCmds(){clearTimeout(cmdT);if(!cur||tab!=='ctl')return;const dev=cur;if(dev.ble){renderCmdLog();return}
  if(!dev.demo){const {data}=await sb.from('commands').select('id,cmd,args,status,result,created_at').eq('device_id',dev.id).order('id',{ascending:false}).limit(15);if(cur!==dev)return;const prev=new Map(cmds.map(c=>[c.id,c.status]));cmds=data||[];
   for(const c of cmds){const was=prev.get(c.id);if(was&&was!==c.status&&(c.status==='done'||c.status==='error'||c.status==='expired')){toast((c.status==='done'?'✓ ':'✗ ')+(CMD_TH[c.cmd]||c.cmd)+(c.result?': '+c.result:''));refresh()}}}
  renderCmdLog();const busy=cmds.some(c=>c.status==='pending'||c.status==='sent');cmdT=setTimeout(loadCmds,busy?1500:8000)}
-async function sendCmd(cmd,args,okMsg){if(!cur)return;args=args||{};
+async function sendCmd(cmd,args,okMsg){if(!cur)return;args=args||{};if(cur.ble)return bleSend(cmd,args);
  if(cur.demo){const c={id:Date.now(),cmd,args,status:'sent',result:null,created_at:new Date().toISOString()};cmds.unshift(c);renderCmdLog();setTimeout(()=>{demoApply(cmd,args);c.status='done';c.result=okMsg||'ok';toast('✓ '+(CMD_TH[cmd]||cmd));if(cur&&cur.demo)latest[cur.id]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};ctlKey='';renderDev();renderCmdLog()},1200);return}
  const {data,error}=await sb.rpc('send_command',{p_device:cur.id,p_cmd:cmd,p_args:args});if(error){toast('ส่งไม่สำเร็จ: '+error.message);return}
  touchAt=Date.now();cmds.unshift({id:data,cmd,args,status:'pending',created_at:new Date().toISOString()});renderCmdLog();toast('ส่งคำสั่งแล้ว รอบอร์ดรับ…');clearTimeout(cmdT);cmdT=setTimeout(loadCmds,1200)}
 function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length?cmds.map(c=>'<div class="cl"><b>'+esc(CMD_TH[c.cmd]||c.cmd)+(c.args&&Object.keys(c.args).length&&c.cmd!=='home_wifi'?' <span class="muted tiny">'+esc(JSON.stringify(c.args))+'</span>':'')+'</b><span class="muted tiny">'+new Date(c.created_at).toLocaleTimeString('th-TH')+'</span><span class="st '+c.status+'" title="'+esc(c.result||'')+'">'+(ST_TH[c.status]||c.status)+'</span></div>'+(c.result&&c.status!=='done'?'<div class="tiny muted" style="padding:0 0 6px">'+esc(c.result)+'</div>':'')).join(''):'<div class="small muted">ยังไม่มีคำสั่ง</div>'}
 function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
+function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>🔵 '+esc(c.name||'')+'</b><div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
 function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
  const key=JSON.stringify([c,d.jk,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit]);const ae=document.activeElement;
  if(key===ctlKey&&$('cmdLog'))return;if(ae&&$('tab_ctl').contains(ae)&&/INPUT|SELECT/.test(ae.tagName)&&$('cmdLog'))return;ctlKey=key;
  if(!l||!c){$('tab_ctl').innerHTML='<div class="card empty"><div class="e">🛰️</div><b>'+(!l?'บอร์ดยังไม่เคยส่งข้อมูลขึ้น cloud':'ต้องอัปเดตเฟิร์มแวร์เป็น 2.1.0 ขึ้นไปก่อน')+'</b><div class="small muted">'+(!l?'ตั้ง Wi-Fi บ้านบนบอร์ดก่อน':'เฟิร์มแวร์ตอนนี้: '+esc(d.fw||'--')+' · ใช้ไฟล์ UPDATE_*.bat เพื่ออัปเดตโดยไม่ลบการตั้งค่า')+'</div></div><div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';renderCmdLog();return}
  const off=!x.online,fam=c.fam||0,famN=['ยังไม่รู้จัก','JK','ANT','JBD'][fam]||'?',isCyd=c.board==='cyd35';
- let h='<div class="card"><div class="row"><div><b>'+(off?'⛔ บอร์ดออฟไลน์ คำสั่งจะรอจนบอร์ดกลับมา (หมดอายุใน 5 นาที)':'🟢 พร้อมรับคำสั่ง')+'</b><div class="small muted">'+(isCyd?'ESP32 CYD 3.5"':'ESP32-S3')+' · ตอบสนองภายใน ~'+(isCyd?'5':'3')+' วินาทีขณะเปิดหน้านี้ · เฟิร์มแวร์ '+esc(d.fw||'')+'</div>'+(c.note?'<div class="small" style="color:var(--warn);margin-top:4px">'+esc(c.note)+'</div>':'')+'</div><button class="ghost nf" id="cPing" style="padding:8px 12px">ทดสอบ</button></div></div>';
+ let h=bleInfoHtml(c)+'<div class="card"><div class="row"><div><b>'+(off?'⛔ บอร์ดออฟไลน์ คำสั่งจะรอจนบอร์ดกลับมา (หมดอายุใน 5 นาที)':'🟢 พร้อมรับคำสั่ง')+'</b><div class="small muted">'+(isCyd?'ESP32 CYD 3.5"':'ESP32-S3')+(cur.ble?' · เชื่อมตรงผ่านบลูทูธ':' · ตอบสนองภายใน ~'+(isCyd?'5':'3')+' วินาทีขณะเปิดหน้านี้')+' · เฟิร์มแวร์ '+esc(d.fw||'')+'</div>'+(c.note?'<div class="small" style="color:var(--warn);margin-top:4px">'+esc(c.note)+'</div>':'')+'</div><button class="ghost nf" id="cPing" style="padding:8px 12px">ทดสอบ</button></div></div>';
  // MOS
  const sw=d.jk&&d.jk.sw,chg=sw?sw[0]:d.chg,dsg=sw?sw[1]:d.dsg,bal=sw?sw[2]:null,noBms=!fam||!x.live;
  h+='<div class="card"><h3>สวิตช์ MOS · BMS '+famN+'</h3>'+(noBms?'<div class="small muted" style="margin-bottom:6px">ต้องเชื่อม BMS ก่อน</div>':'')+
@@ -514,6 +600,8 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  $('tab_ctl').innerHTML=h;renderCmdLog();
  const on=id=>$(id)&&$(id).classList.contains('on'),bind=(id,f)=>{const e=$(id);if(e)e.onclick=f};
  bind('cPing',()=>sendCmd('ping',{},'pong'));
+ bind('bForget',()=>{if(confirm('ลบ Wi-Fi บ้านออกจากบอร์ด? บอร์ดจะหลุดจาก cloud จนกว่าจะตั้งใหม่'))sendCmd('forget_wifi')});
+ bind('bClaim',async()=>{const {data}=await sb.auth.getSession();if(!data.session){toast('เข้าสู่ระบบก่อน แล้วกดอีกครั้ง');return}const {error}=await sb.rpc('claim_device',{p_pair:c.pair,p_name:c.name});toast(error?(error.message.includes('not found')?'บอร์ดต้องต่อ Wi-Fi บ้านและขึ้น online ก่อน':error.message):'เพิ่มเข้าบัญชีแล้ว');if(!error)loadDevices()});
  bind('cChg',()=>{const t=!on('cChg');if(!t&&!confirm('ปิด MOS ชาร์จ? แบตจะไม่รับไฟชาร์จ'))return;sendCmd('bms_switch',{which:0,on:t})});
  bind('cDsg',()=>{const t=!on('cDsg');if(!t&&!confirm('ปิด MOS จ่ายไฟ? ไฟที่ออกไปยังโหลดจะดับทันที'))return;sendCmd('bms_switch',{which:1,on:t})});
  bind('cBal',()=>{const t=bal==null?confirm('เปิดบาลานซ์? (กด ยกเลิก = ปิด)'):!on('cBal');sendCmd('bms_switch',{which:2,on:t})});
@@ -540,6 +628,57 @@ function demoApply(cmd,a){const S=demoState();switch(cmd){case 'led':Object.assi
  case 'bms_scan':S.devs=[{name:'JK-B2A24S20P',mac:'c8:47:80:12:34:56',type:0,rssi:-61,candidate:true},{name:'Xiaoxiang BMS',mac:'a4:c1:38:aa:bb:cc',type:0,rssi:-78,candidate:true},{name:'Mi Band',mac:'d1:22:33:44:55:66',type:1,rssi:-88,candidate:false}];break;
  case 'wifi_scan':S.wscan=[{ssid:'MyHome_5G',rssi:-48,lock:true},{ssid:'MyHome_2.4G',rssi:-52,lock:true},{ssid:'Neighbor',rssi:-80,lock:true}];break;
  case 'home_wifi':S.ssid=a.ssid;S.note='Wi-Fi changed to '+a.ssid;break}}
+// ---------- install as an app (Android / iOS / desktop)
+let deferredPrompt=null;
+const isStandalone=()=>matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;updInstall()});
+window.addEventListener('appinstalled',()=>{deferredPrompt=null;toast('ติดตั้งแอป BattLab แล้ว');updInstall()});
+function updInstall(){const show=!isStandalone();$('btnInstall').classList.toggle('hide',!show);const l=$('btnInstallL');if(l)l.classList.toggle('hide',!show)}
+async function installApp(){
+ if(deferredPrompt){deferredPrompt.prompt();const r=await deferredPrompt.userChoice;deferredPrompt=null;if(r.outcome==='accepted')toast('กำลังติดตั้ง…');updInstall();return}
+ const ios=isIOS();
+ $('mSetBody').innerHTML='<div class="row"><div class="big">📲 ติดตั้ง BattLab เป็นแอป</div><button class="ghost icon nf" id="mClose">✕</button></div>'+
+  (ios?'<p class="muted small">iPhone / iPad (Safari)</p><ol class="steps2"><li>เปิดหน้านี้ใน <b>Safari</b></li><li>แตะปุ่ม <b>แชร์</b> <span style="font-size:20px">⎋</span> แถบล่างของจอ</li><li>เลื่อนลงแล้วเลือก <b>เพิ่มไปยังหน้าจอโฮม</b></li><li>กด <b>เพิ่ม</b> ไอคอน BattLab จะอยู่บนหน้าจอเหมือนแอปทั่วไป</li></ol>'
+     :'<p class="muted small">Android (Chrome) / คอมพิวเตอร์ (Chrome, Edge)</p><ol class="steps2"><li>เปิดหน้านี้ใน <b>Chrome</b></li><li>แตะเมนู <b>⋮</b> มุมขวาบน</li><li>เลือก <b>ติดตั้งแอป</b> หรือ <b>เพิ่มลงในหน้าจอหลัก</b></li><li>เปิดแอป BattLab จากหน้าจอได้เลย</li></ol>')+
+  '<div class="small muted">แอปเปิดเต็มจอ ไม่มีแถบเบราว์เซอร์ อัปเดตอัตโนมัติ และรับแจ้งเตือนได้</div>';
+ $('mSet').classList.remove('hide');$('mClose').onclick=()=>$('mSet').classList.add('hide')}
+$('btnInstall').onclick=installApp;
+// ---------- Bluetooth setup (Web Bluetooth)
+const BLE_SVC='7a1e0000-5b3c-4f6a-9d2e-b47710ba7700',BLE_CH=[1,2,3,4,5,6,7].map(i=>'7a1e000'+i+'-5b3c-4f6a-9d2e-b47710ba7700');
+let ble=null,bleSeq=1;
+const BLE_ID='ble';
+async function bleConnect(){
+ if(!navigator.bluetooth){
+  $('mSetBody').innerHTML='<div class="row"><div class="big">🔵 ตั้งค่าผ่านบลูทูธ</div><button class="ghost icon nf" id="mClose">✕</button></div><p>เบราว์เซอร์นี้ยังไม่รองรับ Web Bluetooth</p><ol class="steps2"><li><b>Android:</b> เปิดเว็บนี้ด้วย Chrome</li><li><b>คอมพิวเตอร์:</b> Chrome หรือ Edge</li><li><b>iPhone/iPad:</b> ติดตั้งแอป <b>Bluefy</b> (ฟรี) จาก App Store แล้วเปิดเว็บนี้ในแอปนั้น</li></ol>';
+  $('mSet').classList.remove('hide');$('mClose').onclick=()=>$('mSet').classList.add('hide');return}
+ try{
+  const dev=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'BATTLAB'},{services:[BLE_SVC]}],optionalServices:[BLE_SVC]});
+  toast('กำลังเชื่อมต่อ '+dev.name+' …');
+  const gatt=await dev.gatt.connect();const svc=await gatt.getPrimaryService(BLE_SVC);
+  const ch=[];for(const u of BLE_CH)ch.push(await svc.getCharacteristic(u));
+  ble={dev,gatt,ch,busy:false,last:{}};
+  dev.addEventListener('gattserverdisconnected',()=>{toast('บลูทูธหลุดการเชื่อมต่อ');if(ble&&ble.dev===dev){clearInterval(ble.t);ble=null}if(cur&&cur.ble){go('')}});
+  await ch[6].startNotifications();ch[6].addEventListener('characteristicvaluechanged',e=>bleResult(new TextDecoder().decode(e.target.value)));
+  let d=devs.find(x=>x.id===BLE_ID);if(!d){d={id:BLE_ID,ble:true,name:dev.name||'BATTLAB',pair_code:'',settings:{icon:'🔵'}};devs.push(d)}else d.name=dev.name||d.name;
+  await blePoll(true);ble.t=setInterval(()=>blePoll(false),1500);
+  go('d/'+BLE_ID+'/ctl')
+ }catch(e){if(!/cancel/i.test(e.message||''))toast('เชื่อมต่อไม่สำเร็จ: '+e.message)}}
+const bleRead=async i=>{try{return JSON.parse(new TextDecoder().decode(await ble.ch[i].readValue()))}catch(e){return null}};
+async function blePoll(all){if(!ble||ble.busy)return;ble.busy=true;try{
+ const live=await bleRead(0),cfg=await bleRead(1);ble.n=(ble.n||0)+1;
+ if(all||ble.n%2===0){ble.last.jk=await bleRead(2);ble.last.devs=await bleRead(3);ble.last.wscan=await bleRead(4)}
+ if(live&&cfg){const data={...live,cfg,jk:ble.last.jk&&ble.last.jk.v?ble.last.jk:undefined,devs:Array.isArray(ble.last.devs)?ble.last.devs:undefined,wscan:Array.isArray(ble.last.wscan)&&ble.last.wscan.length?ble.last.wscan:undefined};
+  latest[BLE_ID]={ts:new Date().toISOString(),data};const d=devs.find(x=>x.id===BLE_ID);if(d){d.pair_code=cfg.pair;d.name=cfg.name||d.name;d.blePaired=cfg.paired}
+  if(cur&&cur.ble){if(tab==='ctl')renderCtl();else if(tab!=='hist')renderDev();else renderHeader()}}
+}finally{if(ble)ble.busy=false}}
+async function bleSend(cmd,args,label){if(!ble){toast('ยังไม่ได้เชื่อมบลูทูธ');return}const id=bleSeq++;
+ const c={id,cmd,args,status:'sent',created_at:new Date().toISOString()};cmds.unshift(c);renderCmdLog();
+ try{await ble.ch[5].writeValueWithResponse(new TextEncoder().encode(JSON.stringify({id,cmd,args})))}catch(e){c.status='error';c.result=e.message;renderCmdLog();toast('ส่งไม่สำเร็จ: '+e.message)}}
+function bleResult(txt){let r;try{r=JSON.parse(txt)}catch(e){return}const c=cmds.find(x=>x.id===r.id);if(c){c.status=r.ok?'done':'error';c.result=r.msg}
+ toast((r.ok?'✓ ':'✗ ')+(c?(CMD_TH[c.cmd]||c.cmd)+': ':'')+(r.msg||''));renderCmdLog();setTimeout(()=>blePoll(true),400)}
+['btnBle','btnBleL'].forEach(id=>{const b=$(id);if(b)b.onclick=bleConnect});
+const bil=$('btnInstallL');if(bil)bil.onclick=installApp;
 // ---------- app settings (gear)
 $('btnSet').onclick=openSettings;$('mSet').onclick=e=>{if(e.target.id==='mSet')$('mSet').classList.add('hide')};
 async function openSettings(){let em='';if(!demo){const {data}=await sb.auth.getUser();em=data&&data.user?data.user.email:''}
