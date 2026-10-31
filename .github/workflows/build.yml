@@ -53,7 +53,6 @@ jobs:
           trap 'echo "::error::publish failed at: $BASH_COMMAND (exit $?)"' ERR
           git config user.name "battlab-ci"
           git config user.email "battlab-ci@users.noreply.github.com"
-          git stash -u -q || true          # drop regenerated previews etc. from the work tree
           git checkout --orphan firmware-build
           git rm -rq --cached . || true
           mkdir -p firmware/screens
