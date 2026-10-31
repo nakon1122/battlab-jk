@@ -19,7 +19,7 @@
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
 
-#define BATTLAB_FW "2.2.0-cloudscreen"
+#define BATTLAB_FW "2.3.0-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -103,7 +103,7 @@ static const char *const TAB_NAMES[TABS] = {"ALL", "HOME", "CELLS", "GRAPH", "CO
 // ----------------------------------------------------------- settings ----
 struct DispCfg {
   uint8_t bl = 4, sleep = 0, rot = 1, lowSoc = 15, hiTemp = 55;
-  bool beep = true, offAlarm = true;
+  bool beep = true, offAlarm = true, show = false;
 } dcfg;
 static const uint8_t SLEEP_MIN[4] = {0, 1, 5, 10};
 static const uint8_t BL_LEVEL[6] = {0, 40, 90, 140, 200, 255};
@@ -117,6 +117,7 @@ static void dcfgLoad() {
   dcfg.hiTemp = p.getUChar("hitemp", 55);
   dcfg.beep = p.getBool("beep", true);
   dcfg.offAlarm = p.getBool("offalarm", true);
+  dcfg.show = p.getBool("show", false);
   p.end();
   if (dcfg.bl < 1 || dcfg.bl > 5) dcfg.bl = 4;
   if (dcfg.sleep > 3) dcfg.sleep = 0;
@@ -131,6 +132,7 @@ static void dcfgSave() {
   p.putUChar("hitemp", dcfg.hiTemp);
   p.putBool("beep", dcfg.beep);
   p.putBool("offalarm", dcfg.offAlarm);
+  p.putBool("show", dcfg.show);
   p.end();
 }
 
@@ -177,6 +179,7 @@ struct Hist {
   bool loading = false;
 };
 struct Model {
+  float ein = 0, eout = 0; // kWh today of the focused battery
   bool paired = false, synced = false;
   String status = "starting", name;
   std::vector<DevSum> devs;
@@ -374,6 +377,8 @@ static void parseSync(JsonDocument &d) {
   M.name = d["name"] | "";
   M.devs.swap(devs);
   M.f = f;
+  M.ein = d["ein"] | 0.f;
+  M.eout = d["eout"] | 0.f;
   M.synced = true;
   M.okAt = millis();
   M.status = M.paired ? String("online") : String("waiting for pairing");
@@ -617,14 +622,17 @@ static void header(const Model &m, int page) {
   s.setTextDatum(textdatum_t::middle_left);
   bool nav = page != P_ALL && page != P_SETUP && m.devs.size() > 1;
   bool pager = page == P_ALL && m.devs.size() > 6;
-  int right = nav || pager ? 364 : 474;
+  int right = nav || pager ? 364 : 420;
   String txt;
   if (millis() < toastUntil) txt = toast;
   else if (!ok) txt = "Cloud: " + m.status;
   else if (page == P_ALL || page == P_SETUP) {
     int live = 0;
-    for (auto &d : m.devs) live += d.live();
+    float pw = 0;
+    for (auto &d : m.devs)
+      if (d.live()) { live++; pw += d.p; }
     txt = String(m.devs.size()) + " batteries  " + live + " live";
+    if (live) txt += std::fabs(pw) >= 1000 ? "  " + fmt(pw / 1000, 2) + "kW" : "  " + fmt(pw, 0) + "W";
   } else {
     for (auto &d : m.devs)
       if (d.id == m.f.id) txt = d.name + "  " + devState(d);
@@ -638,6 +646,18 @@ static void header(const Model &m, int page) {
     while (txt.length() && s.textWidth(txt) > right - 140) txt.remove(txt.length() - 1);
     s.setTextColor(C_TEXT, C_BG);
     s.drawString(txt, 138, 21);
+  }
+  time_t now = time(nullptr);
+  if (now > 1700000000) { // clock (Thailand time from NTP)
+    struct tm t;
+    localtime_r(&now, &t);
+    char hhmm[8];
+    snprintf(hhmm, sizeof hhmm, "%02d:%02d", t.tm_hour, t.tm_min);
+    s.setFont(&fonts::FreeSansBold9pt7b);
+    s.setTextDatum(textdatum_t::middle_right);
+    s.setTextColor(C_TEXT, C_BG);
+    if (!(nav || pager)) s.drawString(hhmm, 472, 21);
+    s.setFont(&fonts::FreeSans9pt7b);
   }
   if (nav || pager) {
     for (int k = 0; k < 2; k++) {
@@ -796,6 +816,56 @@ static void pill(LGFX_Sprite &s, int x, int y, const char *t, bool on) {
   s.drawString(t, x + 33, y + 14);
 }
 static String homeKey;
+static bool bigMode = false;
+static void bigHome(const DevSum &d) {
+  bool ok = d.live();
+  int soc = ok ? int(d.soc + .5f) : -1;
+  LGFX_Sprite b(&tft);
+  b.setColorDepth(8);
+  if (!b.createSprite(480, 236)) return;
+  b.fillSprite(C_BG);
+  b.setTextDatum(textdatum_t::middle_center);
+  b.setFont(&fonts::FreeSansBold24pt7b);
+  b.setTextSize(2.4f);
+  b.setTextColor(C_TEXT, C_BG);
+  b.drawString(soc < 0 ? String("--") : String(soc) + "%", 240, 74);
+  b.setTextSize(1);
+  b.fillRoundRect(40, 132, 400, 14, 7, C_LINE);
+  if (soc > 0) b.fillRoundRect(40, 132, 4 * std::min(soc, 100), 14, 7, socColor(d.soc));
+  b.setFont(&fonts::FreeSansBold18pt7b);
+  b.setTextColor(d.i < 0 ? C_WARN : C_GOOD, C_BG);
+  b.drawString(ok ? fmt(d.p, 0) + " W" : String("--"), 130, 186);
+  b.setTextColor(C_TEXT, C_BG);
+  b.drawString(ok ? fmt(d.v, 1) + " V" : String("--"), 350, 186);
+  b.setFont(&fonts::FreeSans9pt7b);
+  b.setTextColor(C_MUTED, C_BG);
+  b.drawString(ok ? d.name + "   " + fmt(d.i, 1) + " A   " + fmt(d.t1, 0) + " C" : d.name + "  " + devState(d), 240, 222);
+  b.pushSprite(0, 41);
+  b.deleteSprite();
+}
+// moving chevrons under the SOC number: up = charging, down = discharging
+static void flowAnim(const DevSum *d) {
+  static uint32_t last = 0;
+  if (bigMode || !d || millis() - last < 140) return;
+  last = millis();
+  int dir = !d->live() ? 0 : d->i > 0.3f ? 1 : d->i < -0.3f ? -1 : 0;
+  LGFX_Sprite s(&tft);
+  s.setColorDepth(8);
+  if (!s.createSprite(64, 18)) return;
+  s.fillSprite(C_BG);
+  int phase = (millis() / 140) % 3;
+  if (dir == 0) s.fillRoundRect(8, 7, 48, 4, 2, C_LINE);
+  else
+    for (int k = 0; k < 3; k++) {
+      int idx = dir > 0 ? 2 - k : k;
+      uint16_t c = idx == phase ? (dir > 0 ? C_GOOD : C_WARN) : C_LINE;
+      int x = 6 + k * 20;
+      if (dir > 0) s.fillTriangle(x, 14, x + 16, 14, x + 8, 3, c);
+      else s.fillTriangle(x, 3, x + 16, 3, x + 8, 14, c);
+    }
+  s.pushSprite(106 - 32, 150 + 24);
+  s.deleteSprite();
+}
 static void noFocus(const Model &m) {
   clearContent();
   label(16, 90, m.paired ? "Pick a battery on the ALL tab." : "Pair this screen first (ALL tab).", C_TEXT);
@@ -805,10 +875,16 @@ static void homePage(const Model &m, bool force) {
   String key = dp ? dp->id + dp->age / 10 + fmt(dp->soc, 0) + fmt(dp->v, 2) + fmt(dp->i, 1) + fmt(dp->t1, 0) + fmt(dp->mos, 0) +
                         fmt(dp->cap, 1) + B(dp->chg) + B(dp->dsg) + m.f.n + fmt(dp->cmin, 3) + fmt(dp->cmax, 3)
                   : String("none") + B(m.paired);
+  key += fmt(m.ein, 2) + fmt(m.eout, 2) + String(m.h.at) + B(bigMode);
   if (!force && key == homeKey) return;
   homeKey = key;
   if (!dp) { noFocus(m); return; }
   const DevSum &d = *dp;
+  if (bigMode) { bigHome(d); return; }
+  if ((m.h.id != d.id || millis() - m.h.at > 300000) && !m.h.loading) { // SOC sparkline data
+    Lock l;
+    if (!histWanted) { histWanted = true; histWantId = d.id; histWantHours = m.h.id == d.id && m.h.hours ? m.h.hours : 24; M.h.loading = true; }
+  }
   bool ok = d.live();
   // gauge
   const int cx = 106, cy = 150, r1 = 86, r0 = 71;
@@ -822,7 +898,7 @@ static void homePage(const Model &m, bool force) {
   tft.drawString(ok ? String(int(soc + .5f)) + "%" : String("--"), cx, cy - 4);
   tft.setFont(&fonts::FreeSans9pt7b);
   tft.setTextColor(ok ? C_MUTED : C_WARN, C_BG);
-  tft.drawString(ok ? String("SOC") : devState(d), cx, cy + 34);
+  tft.drawString(ok ? String("SOC") : devState(d), cx, cy + (ok ? 46 : 34));
   int x0 = 214, x1 = 346, w = 126, h = 56;
   tile(x0, 46, w, h, "VOLTAGE", ok ? fmt(d.v, 2) : "--", "V", C_ACCENT);
   tile(x1, 46, w, h, "CURRENT", ok ? fmt(d.i, 1) : "--", "A", d.i < 0 ? C_WARN : C_GOOD);
@@ -849,10 +925,33 @@ static void homePage(const Model &m, bool force) {
   } else {
     line = d.online() ? "Board online - connect a BMS (CONTROL > BOARD)" : "Offline - last data " + ageText(d.age) + " ago";
   }
-  b.drawString(line, 12, 23);
   if (ok) {
+    b.drawString(line, 12, 14);
+    b.setTextColor(C_MUTED, C_CARD);
+    b.drawString("today +" + fmt(m.ein, 2) + " / -" + fmt(m.eout, 2) + " kWh", 12, 33);
+    // SOC sparkline from the cloud history
+    if (m.h.id == d.id && m.h.soc.size() > 1) {
+      const int sx = 196, sw = 112, sy = 8, sh = 30;
+      int n = m.h.soc.size(), px = -1, py = 0;
+      b.drawRect(sx, sy, sw, sh + 1, C_LINE);
+      for (int k = 0; k < n; k++) {
+        float v = m.h.soc[k];
+        if (std::isnan(v)) { px = -1; continue; }
+        int x = sx + k * (sw - 1) / (n - 1), y = sy + sh - int(sh * std::max(0.f, std::min(100.f, v)) / 100);
+        if (px >= 0) b.drawLine(px, py, x, y, C_ACCENT);
+        px = x;
+        py = y;
+      }
+      b.setFont(&fonts::Font0);
+      b.setTextDatum(textdatum_t::top_left);
+      b.drawString(String("SOC ") + m.h.hours + "h", sx + 3, sy + 2);
+      b.setFont(&fonts::FreeSans9pt7b);
+      b.setTextDatum(textdatum_t::middle_left);
+    }
     pill(b, 316, 10, "CHG", d.chg);
     pill(b, 388, 10, "DSG", d.dsg);
+  } else {
+    b.drawString(line, 12, 23);
   }
   b.pushSprite(9, 228);
   b.deleteSprite();
@@ -1311,8 +1410,8 @@ static void ctlTouch(const Model &m, int x, int y) {
 static const Btn S_BL_MINUS = {150, 46, 52, 40}, S_BL_PLUS = {300, 46, 52, 40}, S_ROTATE = {370, 46, 104, 40},
                  S_SOC_MINUS = {150, 138, 52, 40}, S_SOC_PLUS = {270, 138, 52, 40}, S_BEEP = {340, 138, 134, 40},
                  S_T_MINUS = {150, 184, 52, 40}, S_T_PLUS = {270, 184, 52, 40}, S_OFF = {340, 184, 134, 40},
-                 S_WIFI = {8, 230, 112, 42}, S_PAIR = {126, 230, 112, 42}, S_CAL = {244, 230, 112, 42},
-                 S_RESTART = {362, 230, 112, 42};
+                 S_WIFI = {8, 230, 88, 42}, S_PAIR = {101, 230, 88, 42}, S_SHOW = {194, 230, 92, 42},
+                 S_CAL = {291, 230, 92, 42}, S_RESTART = {388, 230, 86, 42};
 static Btn sleepBtn(int i) { return {150 + i * 82, 92, 76, 40}; }
 static String setupKey;
 static void valueBox(int x, int y, const String &v) {
@@ -1325,7 +1424,7 @@ static void valueBox(int x, int y, const String &v) {
 static void applyBacklight() { tft.setBrightness(BL_LEVEL[dcfg.bl]); }
 static bool wantCalibrate = false, wantRotate = false;
 static void setupPage(bool force) {
-  String key = String(int(dcfg.bl)) + int(dcfg.sleep) + int(dcfg.rot) + int(dcfg.lowSoc) + "/" + int(dcfg.hiTemp) + B(dcfg.beep) + B(dcfg.offAlarm) +
+  String key = String(int(dcfg.bl)) + int(dcfg.sleep) + int(dcfg.rot) + int(dcfg.lowSoc) + "/" + int(dcfg.hiTemp) + B(dcfg.beep) + B(dcfg.offAlarm) + B(dcfg.show) +
                B(WiFi.status() == WL_CONNECTED);
   if (!force && key == setupKey) return;
   setupKey = key;
@@ -1353,7 +1452,8 @@ static void setupPage(bool force) {
   button(S_OFF, dcfg.offAlarm ? "OFFLINE ON" : "OFFLINE OFF", dcfg.offAlarm, C_GOOD);
   button(S_WIFI, "WI-FI", WiFi.status() == WL_CONNECTED, C_GOOD);
   button(S_PAIR, "PAIRING", false);
-  button(S_CAL, "CALIBRATE", false);
+  button(S_SHOW, dcfg.show ? "SHOW ON" : "SHOW OFF", dcfg.show, C_GOOD);
+  button(S_CAL, "CALIB", false);
   button(S_RESTART, "RESTART", false);
 }
 
@@ -1549,6 +1649,7 @@ static void setupTouch(int x, int y) {
   else if (hit(S_T_PLUS, x, y)) dcfg.hiTemp = dcfg.hiTemp == 0 ? 30 : dcfg.hiTemp < 90 ? dcfg.hiTemp + 5 : 90;
   else if (hit(S_BEEP, x, y)) { dcfg.beep = !dcfg.beep; if (dcfg.beep) beep(1); }
   else if (hit(S_OFF, x, y)) dcfg.offAlarm = !dcfg.offAlarm;
+  else if (hit(S_SHOW, x, y)) { dcfg.show = !dcfg.show; showToast(dcfg.show ? "Show mode: HOME rotates through all batteries" : "Show mode off"); }
   else if (hit(S_WIFI, x, y)) { overlay = OV_WIFI; ovKey = ""; if (!netScanJson().length() || nets.empty()) netScanStart(); changed = false; }
   else if (hit(S_PAIR, x, y)) { overlay = OV_PAIR; ovKey = ""; changed = false; }
   else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
@@ -1721,6 +1822,9 @@ static void uiTask(void *) {
               page = P_HOME;
             }
           }
+        } else if (page == P_HOME && (bigMode || (tp.x < 210 && tp.y < 228))) {
+          bigMode = !bigMode;
+          drawnPage = -1;
         } else if (page == P_GRAPH) {
           for (int i = 0; i < 5; i++)
             if (hit(gBtn(i), tp.x, tp.y)) gMetric = i;
@@ -1746,6 +1850,15 @@ static void uiTask(void *) {
         }
     }
     wasDown = down;
+    // show mode: HOME steps through every battery (wall display)
+    static uint32_t showAt = 0;
+    if (dcfg.show && page == P_HOME && !dlg.active && overlay == OV_NONE && m.devs.size() > 1 && now - lastTouch > 15000 &&
+        now - showAt > 8000) {
+      showAt = now;
+      moveFocus(m, 1);
+      drawnPage = -1;
+    }
+    if (page == P_HOME && drawnPage == P_HOME && !asleep && overlay == OV_NONE && !dlg.active) flowAnim(focusDev(m));
     if (wantCalibrate || wantRotate) {
       if (wantRotate) {
         dcfg.rot = dcfg.rot == 1 ? 3 : 1;
@@ -1820,6 +1933,7 @@ void setup() {
   tft.setBrightness(0);
   tft.fillScreen(TFT_BLACK);
   wifiApply();
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com");
   Serial.printf("\nBATTLAB " BATTLAB_FW "\nPair code %s\n", pairCode.c_str());
   xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, nullptr, 0);
   xTaskCreatePinnedToCore(uiTask, "ui", 12288, nullptr, 1, nullptr, 1);
