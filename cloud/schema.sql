@@ -167,3 +167,8 @@ revoke all on function public.history_buckets(uuid, timestamptz, timestamptz, in
 grant execute on function public.history_buckets(uuid, timestamptz, timestamptz, int) to authenticated;
 -- live updates on the website
 alter publication supabase_realtime add table public.latest;
+
+-- ---- v3: remote control (commands queue, ingest2) ----
+-- applied in Supabase: devices.remote_until, table commands (RLS: owner select only),
+-- send_command(device, cmd, args) [authenticated], remote_touch(device) [authenticated],
+-- ingest2(token, pair, data, acks) -> {status, fast, cmds} [anon]. See git history for full SQL.

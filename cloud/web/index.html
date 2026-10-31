@@ -98,6 +98,12 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 .modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center}
 .modal .card{width:100%;max-width:560px;max-height:88vh;overflow:auto;border-radius:20px 20px 0 0;margin:0;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
 @media(min-width:700px){.modal{align-items:center}.modal .card{border-radius:20px}}
+.tg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}.tg:last-child{border-bottom:0}.tg .l{flex:1}.tg .l small{display:block;color:var(--muted);font-size:12px}
+.sw2{position:relative;width:52px;height:30px;border-radius:15px;background:var(--line);border:0;padding:0;flex:none;transition:background .15s}.sw2:after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s}.sw2.on{background:var(--good)}.sw2.on:after{left:25px}
+.prm{display:grid;grid-template-columns:1fr 110px auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.prm input{margin:0;padding:8px 10px}.prm button{padding:8px 12px}.prm small{display:block;color:var(--muted);font-size:12px}
+.cl{display:flex;gap:8px;align-items:center;font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)}.cl b{flex:1;font-weight:600}.st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid var(--line);color:var(--muted)}.st.done{color:var(--good);border-color:var(--good)}.st.error,.st.expired{color:var(--bad);border-color:var(--bad)}.st.sent,.st.pending{color:var(--warn);border-color:var(--warn)}
+.ledc{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.ledc span{width:34px;height:34px;border-radius:50%;cursor:pointer;border:3px solid transparent}.ledc span.on{border-color:var(--text)}
+.devrow{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.devrow .l{flex:1;min-width:0}.devrow .l b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.devrow select{width:auto;margin:0;padding:7px}.devrow button{padding:8px 12px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--card);border:1px solid var(--line);padding:10px 16px;border-radius:12px;max-width:90vw;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.3)}
 .empty{text-align:center;padding:26px 10px}.empty .e{font-size:44px}
 @media(max-width:480px){header{gap:6px;padding-left:12px;padding-right:12px}header img{height:22px}header button{padding:7px 10px;font-size:14px}header .badge{font-size:11px;padding:2px 7px}}
@@ -141,7 +147,7 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 <section id="vDev" class="hide">
  <div class="row" style="margin-bottom:4px"><div><div class="big" id="dName">—</div><div class="small muted" id="dSub">—</div></div></div>
  <div class="dtabs"><div class="chips" id="dTabs">
-  <span class="chip" data-t="ov">ภาพรวม</span><span class="chip" data-t="cells">เซลล์</span><span class="chip" data-t="hist">กราฟ</span><span class="chip" data-t="alert">แจ้งเตือน</span><span class="chip" data-t="set">ตั้งค่าอุปกรณ์</span>
+  <span class="chip" data-t="ov">ภาพรวม</span><span class="chip" data-t="cells">เซลล์</span><span class="chip" data-t="hist">กราฟ</span><span class="chip" data-t="ctl">ควบคุม</span><span class="chip" data-t="alert">แจ้งเตือน</span><span class="chip" data-t="set">ตั้งค่าอุปกรณ์</span>
  </div></div>
  <div id="tab_ov"></div>
  <div id="tab_cells" class="hide"></div>
@@ -151,6 +157,7 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
   <div class="card" id="energyCard"></div>
   <div class="card"><div class="row wrap"><button class="soft" id="btnCsv">ส่งออก CSV</button><button class="soft" id="btnTable">ดูเป็นตาราง</button></div><div id="tbl" class="tblwrap hide" style="margin-top:12px"></div></div>
  </div>
+ <div id="tab_ctl" class="hide"></div>
  <div id="tab_alert" class="hide"></div>
  <div id="tab_set" class="hide"></div>
 </section>
@@ -207,7 +214,8 @@ function demoAt(t){// t seconds
  const ph=t/5400,soc=58+32*Math.sin(ph),cur=Math.round(42*Math.cos(ph)*10)/10,cells=[];
  for(let k=0;k<16;k++)cells.push(+(3.255+soc*0.0012+0.004*Math.sin(k*1.7)+(k===11?0.019:0)+(k===4?-0.012:0)+0.002*Math.sin(t/4000+k)).toFixed(3));
  const v=cells.reduce((a,b)=>a+b,0),t1=29+6*Math.max(0,Math.cos(ph))+Math.sin(t/900);
- return {fw:'2.0.3-cyd35',state:'LIVE',bms:'JK02_32S',model:'JK-B2A24S20P',rssi:-61,up:Math.round(t%200000),heap:61440,blk:31744,v:+v.toFixed(2),i:cur,p:+(v*cur).toFixed(0),soc:+soc.toFixed(0),cap:+(soc/100*280).toFixed(1),cyc:37,t1:+t1.toFixed(1),t2:+(t1-0.8).toFixed(1),mos:+(t1+7).toFixed(1),chg:true,dsg:true,cells,cmin:Math.min(...cells),cmax:Math.max(...cells)}}
+ return {fw:'2.1.0-cyd35',state:'LIVE',bms:'JK02_32S',model:'JK-B2A24S20P',rssi:-61,up:Math.round(t%200000),heap:61440,blk:31744,v:+v.toFixed(2),i:cur,p:+(v*cur).toFixed(0),soc:+soc.toFixed(0),cap:+(soc/100*280).toFixed(1),cyc:37,t1:+t1.toFixed(1),t2:+(t1-0.8).toFixed(1),mos:+(t1+7).toFixed(1),chg:true,dsg:true,cells,cmin:Math.min(...cells),cmax:Math.max(...cells),...demoExtra()}}
+function demoExtra(){const S=demoState();return {chg:S.chg,dsg:S.dsg,jk:{v:S.jk,sw:[S.chg,S.dsg,S.bal]},devs:S.devs||undefined,wscan:S.wscan||undefined,cfg:{board:'cyd35',remote:1,led:S.led,ap:S.ap,tx:S.tx,ssid:S.ssid,ip:'192.168.1.57',wrssi:-55,note:S.note||undefined,mac:'c8:47:80:12:34:56',proto:'AUTO',auto:true,atype:0,fam:1,scanning:false,lw:'',disp:S.disp}}}
 function demoHist(from,to,b){const out=[];for(let t=Math.ceil(from/1000/b)*b;t<to/1000;t+=b){const d=demoAt(t);out.push({t:new Date(t*1000).toISOString(),soc:d.soc,voltage:d.v,current:d.i,power:d.p,temp:d.t1,mos:d.mos,cell_min:d.cmin,cell_max:d.cmax,n:Math.max(1,Math.round(b/60))})}return out}
 async function fetchLatest(dev){if(dev.demo)return {ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};const {data}=await sb.from('latest').select('ts,data').eq('device_id',dev.id).maybeSingle();return data}
 async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);const {data,error}=await sb.rpc('history_buckets',{p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}
@@ -267,7 +275,7 @@ async function afterLogin(){demo=false;const {data}=await sb.auth.getUser();cons
 async function boot(){if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
 
 // ---------- routing
-function stopAll(){clearInterval(pollT);clearInterval(listT);pollT=listT=null;if(rt){sb.removeChannel(rt);rt=null}rtOn=false;cur=null;destroyCharts()}
+function stopAll(){clearTimeout(cmdT);cmdT=null;cmds=[];clearInterval(pollT);clearInterval(listT);pollT=listT=null;if(rt){sb.removeChannel(rt);rt=null}rtOn=false;cur=null;destroyCharts()}
 async function route(){const [a,id,t]=ROUTE();
  if(!demo){const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');return}}
  if(a==='d'&&id){const dev=devs.find(d=>d.id===id);if(!dev){go('');return}openDev(dev,t||'ov');return}
@@ -295,18 +303,18 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
 function openDev(dev,t){const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;energyAt=0;energyToday=null;hist=[]}tab=t;show('vDev');
- document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
- renderDev();if(t==='hist')loadHistory();else destroyCharts();
+ document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
+ ctlKey='';renderDev();if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
 function subRT(){if(cur.demo)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
 async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(dev).catch(()=>null);if(cur!==dev)return;if(l)latest[dev.id]=l;
  if(Date.now()-energyAt>300000){energyAt=Date.now();const m=new Date();m.setHours(0,0,0,0);fetchHist(dev,m.getTime(),Date.now(),dev.demo?600:3600).then(r=>{energyToday=energyOf(r);if(tab==='ov')renderDev()}).catch(()=>{})}
- if(tab!=='hist'&&tab!=='set'&&tab!=='alert')renderDev();else renderHeader();
+ if(tab!=='hist'&&tab!=='set'&&tab!=='alert')renderDev();else renderHeader();if(tab==='ctl')ctlTouch();
  trackAlerts(dev,evalAlerts(dev,latest[dev.id]))}
 function energyOf(rows){let i=0,o=0;for(const r of rows){if(!num(r.power))continue;const wh=r.power*(r.n||1)/60;if(wh>0)i+=wh;else o-=wh}return {in:i/1000,out:o/1000}}
 function renderHeader(){const l=latest[cur.id],s=dset(cur),[st,txt]=statusOf(l),d=l&&l.data||{};$('dName').textContent=s.icon+' '+cur.name;
  $('dSub').innerHTML='<span class="dot '+st+'"></span> '+esc(txt)+(l?' · อัปเดต '+ago(l.ts):'')+(rtOn?' · <b style="color:var(--good)">สด</b>':'')+(d.bms?' · '+esc(d.bms):'')}
-function renderDev(){if(!cur)return;renderHeader();if(tab==='ov')renderOv();else if(tab==='cells')renderCells();else if(tab==='alert')renderAlert();else if(tab==='set')renderSet()}
+function renderDev(){if(!cur)return;renderHeader();if(tab==='ov')renderOv();else if(tab==='cells')renderCells();else if(tab==='alert')renderAlert();else if(tab==='set')renderSet();else if(tab==='ctl')renderCtl()}
 
 function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
  switch(k){
@@ -442,6 +450,88 @@ function renderSet(){if(!editS||editS._id!==cur.id){editS=JSON.parse(JSON.string
  const rb=$('sRemove');if(rb)rb.onclick=async()=>{if(!confirm('ลบ "'+cur.name+'" ออกจากบัญชี? (เพิ่มกลับได้ด้วยรหัสจับคู่เดิม)'))return;const {error}=await sb.rpc('release_device',{p_id:cur.id});if(error)toast(error.message);else{toast('ลบแล้ว');await loadDevices();go('')}}}
 function keepForm(){if(!editS)return;editS.chem=$('sChem').value;const c=parseFloat($('sCap').value);editS.capAh=num(c)&&c>0?c:0}
 
+// ---------- remote control
+const LED_MODES=['รุ้ง (Rainbow)','สีเดียว','หายใจ (Breathe)','ตามสถานะแบต'];
+const LED_PAL=[['#FF0000','แดง'],['#FF5000','ส้ม'],['#FFBE00','เหลือง'],['#00FF28','เขียว'],['#00DCFF','ฟ้า'],['#0032FF','น้ำเงิน'],['#AA00FF','ม่วง'],['#FFFFFF','ขาว']];
+const JKP=[['Cell OVP','แรงดันเซลล์สูงสุด (OVP)','V',.01,2.8,4.3,3],['OVP recovery','คืนค่าจาก OVP','V',.01,2.7,4.25,3],['Cell UVP','แรงดันเซลล์ต่ำสุด (UVP)','V',.01,2.0,3.4,3],['UVP recovery','คืนค่าจาก UVP','V',.01,2.1,3.6,3],['Power off','แรงดันตัดระบบ','V',.01,2.0,3.3,3],['Balance start','เริ่มบาลานซ์ที่','V',.01,2.8,4.2,3],['Balance trigger','บาลานซ์เมื่อต่างกัน','V',.001,.003,.1,3],['Max balance I','กระแสบาลานซ์สูงสุด','A',.1,.3,4,1],['Max charge I','กระแสชาร์จสูงสุด','A',1,1,300,0],['Max discharge I','กระแสจ่ายสูงสุด','A',1,1,400,0],['Charge OTP','อุณหภูมิสูงสุดขณะชาร์จ','°C',1,30,70,0],['Discharge OTP','อุณหภูมิสูงสุดขณะจ่าย','°C',1,30,80,0],['Charge UTP','อุณหภูมิต่ำสุดขณะชาร์จ','°C',1,-30,15,0],['MOS OTP','อุณหภูมิ MOS สูงสุด','°C',1,50,100,0],['Capacity','ความจุแบต','Ah',1,1,2000,0]];
+const CMD_TH={led:'ไฟ RGB',bms_scan:'ค้นหา BMS',bms_connect:'เชื่อม BMS',bms_auto:'เชื่อม BMS อัตโนมัติ',bms_disconnect:'ตัดการเชื่อม BMS',bms_param:'ตั้งพารามิเตอร์',bms_switch:'สวิตช์ MOS',bms_read:'อ่านค่าจาก BMS',wifi_ap:'ฮอตสปอต BATTLAB',radio_max:'กำลังส่งวิทยุ',home_wifi:'เปลี่ยน Wi-Fi บ้าน',wifi_scan:'ค้นหา Wi-Fi',display:'ตั้งค่าหน้าจอ',restart:'รีสตาร์ทบอร์ด',ping:'ทดสอบการเชื่อมต่อ'};
+const ST_TH={pending:'รอบอร์ด',sent:'บอร์ดรับแล้ว',done:'สำเร็จ',error:'ไม่สำเร็จ',expired:'หมดเวลา'};
+let cmds=[],cmdT=null,touchAt=0,ctlKey='',DS=null;
+function ctlTouch(force){if(!cur||cur.demo)return;if(force||Date.now()-touchAt>60000){touchAt=Date.now();sb.rpc('remote_touch',{p_device:cur.id}).then(()=>{},()=>{})}}
+async function loadCmds(){clearTimeout(cmdT);if(!cur||tab!=='ctl')return;const dev=cur;
+ if(!dev.demo){const {data}=await sb.from('commands').select('id,cmd,args,status,result,created_at').eq('device_id',dev.id).order('id',{ascending:false}).limit(15);if(cur!==dev)return;const prev=new Map(cmds.map(c=>[c.id,c.status]));cmds=data||[];
+  for(const c of cmds){const was=prev.get(c.id);if(was&&was!==c.status&&(c.status==='done'||c.status==='error'||c.status==='expired')){toast((c.status==='done'?'✓ ':'✗ ')+(CMD_TH[c.cmd]||c.cmd)+(c.result?': '+c.result:''));refresh()}}}
+ renderCmdLog();const busy=cmds.some(c=>c.status==='pending'||c.status==='sent');cmdT=setTimeout(loadCmds,busy?1500:8000)}
+async function sendCmd(cmd,args,okMsg){if(!cur)return;args=args||{};
+ if(cur.demo){const c={id:Date.now(),cmd,args,status:'sent',result:null,created_at:new Date().toISOString()};cmds.unshift(c);renderCmdLog();setTimeout(()=>{demoApply(cmd,args);c.status='done';c.result=okMsg||'ok';toast('✓ '+(CMD_TH[cmd]||cmd));if(cur&&cur.demo)latest[cur.id]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};ctlKey='';renderDev();renderCmdLog()},1200);return}
+ const {data,error}=await sb.rpc('send_command',{p_device:cur.id,p_cmd:cmd,p_args:args});if(error){toast('ส่งไม่สำเร็จ: '+error.message);return}
+ touchAt=Date.now();cmds.unshift({id:data,cmd,args,status:'pending',created_at:new Date().toISOString()});renderCmdLog();toast('ส่งคำสั่งแล้ว รอบอร์ดรับ…');clearTimeout(cmdT);cmdT=setTimeout(loadCmds,1200)}
+function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length?cmds.map(c=>'<div class="cl"><b>'+esc(CMD_TH[c.cmd]||c.cmd)+(c.args&&Object.keys(c.args).length&&c.cmd!=='home_wifi'?' <span class="muted tiny">'+esc(JSON.stringify(c.args))+'</span>':'')+'</b><span class="muted tiny">'+new Date(c.created_at).toLocaleTimeString('th-TH')+'</span><span class="st '+c.status+'" title="'+esc(c.result||'')+'">'+(ST_TH[c.status]||c.status)+'</span></div>'+(c.result&&c.status!=='done'?'<div class="tiny muted" style="padding:0 0 6px">'+esc(c.result)+'</div>':'')).join(''):'<div class="small muted">ยังไม่มีคำสั่ง</div>'}
+function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
+function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
+ const key=JSON.stringify([c,d.jk,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit]);const ae=document.activeElement;
+ if(key===ctlKey&&$('cmdLog'))return;if(ae&&$('tab_ctl').contains(ae)&&/INPUT|SELECT/.test(ae.tagName)&&$('cmdLog'))return;ctlKey=key;
+ if(!l||!c){$('tab_ctl').innerHTML='<div class="card empty"><div class="e">🛰️</div><b>'+(!l?'บอร์ดยังไม่เคยส่งข้อมูลขึ้น cloud':'ต้องอัปเดตเฟิร์มแวร์เป็น 2.1.0 ขึ้นไปก่อน')+'</b><div class="small muted">'+(!l?'ตั้ง Wi-Fi บ้านบนบอร์ดก่อน':'เฟิร์มแวร์ตอนนี้: '+esc(d.fw||'--')+' · ใช้ไฟล์ UPDATE_*.bat เพื่ออัปเดตโดยไม่ลบการตั้งค่า')+'</div></div><div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';renderCmdLog();return}
+ const off=!x.online,fam=c.fam||0,famN=['ยังไม่รู้จัก','JK','ANT','JBD'][fam]||'?',isCyd=c.board==='cyd35';
+ let h='<div class="card"><div class="row"><div><b>'+(off?'⛔ บอร์ดออฟไลน์ คำสั่งจะรอจนบอร์ดกลับมา (หมดอายุใน 5 นาที)':'🟢 พร้อมรับคำสั่ง')+'</b><div class="small muted">'+(isCyd?'ESP32 CYD 3.5"':'ESP32-S3')+' · ตอบสนองภายใน ~'+(isCyd?'5':'3')+' วินาทีขณะเปิดหน้านี้ · เฟิร์มแวร์ '+esc(d.fw||'')+'</div>'+(c.note?'<div class="small" style="color:var(--warn);margin-top:4px">'+esc(c.note)+'</div>':'')+'</div><button class="ghost nf" id="cPing" style="padding:8px 12px">ทดสอบ</button></div></div>';
+ // MOS
+ const sw=d.jk&&d.jk.sw,chg=sw?sw[0]:d.chg,dsg=sw?sw[1]:d.dsg,bal=sw?sw[2]:null,noBms=!fam||!x.live;
+ h+='<div class="card"><h3>สวิตช์ MOS · BMS '+famN+'</h3>'+(noBms?'<div class="small muted" style="margin-bottom:6px">ต้องเชื่อม BMS ก่อน</div>':'')+
+  tgl('cChg','ชาร์จ (Charge)','ตัด/ต่อการชาร์จเข้าแบต',chg,noBms)+tgl('cDsg','จ่ายไฟ (Discharge)','ปิดแล้วไฟออกโหลดจะดับทันที',dsg,noBms)+(fam===3?'':tgl('cBal','บาลานซ์ (Balancer)',bal==null?'สถานะปัจจุบันไม่ทราบ (ANT)':'บาลานซ์เซลล์อัตโนมัติ',bal,noBms))+'</div>';
+ // JK params
+ h+='<div class="card"><div class="row"><h3 style="margin:0">พารามิเตอร์ BMS</h3><button class="ghost nf" id="cRead" style="padding:6px 12px;font-size:13px" '+(noBms?'disabled':'')+'>อ่านค่าใหม่</button></div>';
+ if(fam===1&&d.jk&&d.jk.v){h+=(c.lw?'<div class="small muted" style="margin-top:6px">เขียนล่าสุด: '+esc(c.lw)+'</div>':'')+JKP.map((p,i)=>{const v=d.jk.v[i];return '<div class="prm"><div>'+p[1]+'<small>'+p[0]+' · '+p[4]+'–'+p[5]+' '+p[2]+'</small></div><input type="number" id="pv'+i+'" step="'+p[3]+'" min="'+p[4]+'" max="'+p[5]+'" value="'+(num(v)?v.toFixed(p[6]):'')+'"><button class="soft" data-p="'+i+'">ตั้ง</button></div>'}).join('')}
+ else h+='<div class="small muted" style="margin-top:8px">'+(fam===1?'กำลังรออ่านค่าจาก BMS… กด "อ่านค่าใหม่"':'แก้พารามิเตอร์ได้กับ JK BMS (ANT/JBD ปรับได้แค่สวิตช์ MOS)')+'</div>';
+ h+='</div>';
+ // BMS connection
+ const devs=Array.isArray(d.devs)?d.devs:[];
+ h+='<div class="card"><h3>การเชื่อมต่อ BMS</h3><div class="info" style="margin-bottom:10px"><div><span>สถานะ</span><b>'+esc(d.state||'--')+'</b></div><div><span>MAC</span><b>'+esc(c.mac||'—')+'</b></div><div><span>โปรโตคอล</span><b>'+esc(c.auto?'อัตโนมัติ':c.proto||'—')+'</b></div><div><span>ตรวจพบ</span><b>'+esc(d.bms||'—')+'</b></div></div>'+
+  '<div class="row wrap"><button id="cScan">'+(c.scanning?'กำลังค้นหา…':'ค้นหา BMS')+'</button><button class="soft" id="cAuto">เชื่อมอัตโนมัติ</button><button class="danger" id="cDisc">ตัดการเชื่อม</button></div>'+
+  (devs.length?'<div style="margin-top:10px">'+devs.slice().sort((a,b)=>(b.candidate-a.candidate)||(b.rssi-a.rssi)).map((v,j)=>'<div class="devrow"><div class="l"><b>'+(v.candidate?'🔋 ':'')+esc(v.name||'(ไม่มีชื่อ)')+'</b><span class="tiny muted">'+esc(v.mac)+' · '+v.rssi+' dBm</span></div><select id="dp'+j+'"><option value="AUTO">AUTO</option><option value="JK02_32S">JK 32S</option><option value="JK02_24S">JK 24S</option><option value="ANT">ANT</option><option value="JBD">JBD</option></select><button data-mac="'+esc(v.mac)+'" data-type="'+(v.type|0)+'" data-j="'+j+'">เชื่อม</button></div>').join('')+'</div>':'<div class="small muted" style="margin-top:8px">กด "ค้นหา BMS" แล้วรายการจะขึ้นที่นี่ (~10 วินาที)</div>')+'</div>';
+ // LED
+ const L=c.led||{};h+='<div class="card"><h3>ไฟ RGB</h3>'+tgl('cLed','เปิดไฟ','',L.on)+'<div class="small muted" style="margin-top:10px">โหมด</div><div class="chips" style="margin:6px 0">'+LED_MODES.map((m,i)=>'<span class="chip'+(L.mode===i?' on':'')+'" data-lm="'+i+'">'+m+'</span>').join('')+'</div><div class="small muted" style="margin-top:8px">สี</div><div class="ledc">'+LED_PAL.map((p,i)=>'<span class="'+(L.color===i?'on':'')+'" data-lc="'+i+'" title="'+p[1]+'" style="background:'+p[0]+'"></span>').join('')+'</div><div class="small muted">ความสว่าง</div><div class="chips" style="margin:6px 0">'+[1,2,3,4].map(v=>'<span class="chip'+(L.level===v?' on':'')+'" data-ll="'+v+'">'+['ต่ำ','กลาง','สูง','สุด'][v-1]+'</span>').join('')+'</div></div>';
+ // display
+ if(c.disp){const D=c.disp;h+='<div class="card"><h3>หน้าจอ CYD</h3><div class="small muted">ความสว่าง</div><div class="chips" style="margin:6px 0 10px">'+[1,2,3,4,5].map(v=>'<span class="chip'+(D.bl===v?' on':'')+'" data-db="'+v+'">'+v+'</span>').join('')+'</div><div class="small muted">ปิดจออัตโนมัติ</div><div class="chips" style="margin:6px 0 10px">'+[[0,'ไม่ปิด'],[1,'1 นาที'],[5,'5 นาที'],[10,'10 นาที']].map(([v,n])=>'<span class="chip'+(D.sleep===v?' on':'')+'" data-ds="'+v+'">'+n+'</span>').join('')+'</div>'+
+  '<div class="th3"><label>เตือน SOC ต่ำ (%, 0 = ปิด)<input type="number" id="dLow" min="0" max="50" step="5" value="'+D.lowsoc+'"></label><label>เตือนอุณหภูมิสูง (°C, 0 = ปิด)<input type="number" id="dHi" min="0" max="90" step="1" value="'+D.hitemp+'"></label></div><button class="soft" id="dSave">บันทึกค่าเตือน</button>'+tgl('dBeep','เสียงเตือน (Beep)','',D.beep)+'</div>'}
+ // Wi-Fi & radio
+ const ws=Array.isArray(d.wscan)?d.wscan:[];
+ h+='<div class="card"><h3>Wi-Fi และวิทยุ</h3>'+tgl('cAp','ฮอตสปอต BATTLAB (192.168.4.1)',isCyd?'ใช้ตั้งค่าผ่านมือถือในพื้นที่':'บอร์ด S3 จะเปิดกลับเองเมื่อรีสตาร์ท',c.ap)+tgl('cTx','กำลังส่งสูงสุด (TX MAX)','Bluetooth + Wi-Fi แรงสุด กินไฟเพิ่มเล็กน้อย',c.tx)+
+  '<div class="info" style="margin:10px 0"><div><span>Wi-Fi บ้าน</span><b>'+esc(c.ssid||'—')+'</b></div><div><span>IP</span><b>'+esc(c.ip||'—')+'</b></div><div><span>สัญญาณ</span><b>'+(c.wrssi?c.wrssi+' dBm':'—')+'</b></div></div>'+
+  '<div class="row wrap"><button class="soft" id="cWscan">ค้นหา Wi-Fi</button></div>'+
+  '<label style="margin-top:10px">ชื่อ Wi-Fi ใหม่<input id="wSsid" list="wList" maxlength="32" placeholder="เลือกหรือพิมพ์ชื่อ"><datalist id="wList">'+ws.map(w=>'<option value="'+esc(w.ssid)+'">'+(w.rssi||'')+' dBm</option>').join('')+'</datalist></label>'+(ws.length?'<div class="small muted" style="margin:-6px 0 8px">พบ '+ws.length+' เครือข่าย: '+ws.slice(0,6).map(w=>esc(w.ssid)).join(', ')+'</div>':'')+
+  '<label>รหัสผ่าน<input id="wPass" type="password" maxlength="64"></label><button class="soft" id="cWifi">เปลี่ยน Wi-Fi บ้าน</button><div class="tiny muted" style="margin-top:6px">ถ้าต่อเครือข่ายใหม่ไม่ได้ภายใน 90 วินาที บอร์ดจะกลับไปใช้ Wi-Fi เดิมเอง</div></div>';
+ // system
+ h+='<div class="card"><h3>ระบบ</h3><button class="danger" id="cRestart">รีสตาร์ทบอร์ด</button></div>';
+ h+='<div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';
+ $('tab_ctl').innerHTML=h;renderCmdLog();
+ const on=id=>$(id)&&$(id).classList.contains('on'),bind=(id,f)=>{const e=$(id);if(e)e.onclick=f};
+ bind('cPing',()=>sendCmd('ping',{},'pong'));
+ bind('cChg',()=>{const t=!on('cChg');if(!t&&!confirm('ปิด MOS ชาร์จ? แบตจะไม่รับไฟชาร์จ'))return;sendCmd('bms_switch',{which:0,on:t})});
+ bind('cDsg',()=>{const t=!on('cDsg');if(!t&&!confirm('ปิด MOS จ่ายไฟ? ไฟที่ออกไปยังโหลดจะดับทันที'))return;sendCmd('bms_switch',{which:1,on:t})});
+ bind('cBal',()=>{const t=bal==null?confirm('เปิดบาลานซ์? (กด ยกเลิก = ปิด)'):!on('cBal');sendCmd('bms_switch',{which:2,on:t})});
+ bind('cRead',()=>sendCmd('bms_read'));
+ $('tab_ctl').querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{const i=+b.dataset.p,p=JKP[i],v=parseFloat($('pv'+i).value),old=d.jk.v[i];if(!num(v)||v<p[4]||v>p[5]){toast('ค่าต้องอยู่ระหว่าง '+p[4]+'–'+p[5]+' '+p[2]);return}if(!confirm(p[1]+'\n'+(num(old)?old.toFixed(p[6]):'?')+' → '+v.toFixed(p[6])+' '+p[2]+'\n\nตรวจให้แน่ใจว่าเหมาะกับเซลล์ของคุณ'))return;sendCmd('bms_param',{index:i,value:v})});
+ bind('cScan',()=>sendCmd('bms_scan'));bind('cAuto',()=>sendCmd('bms_auto'));bind('cDisc',()=>{if(confirm('ตัดการเชื่อม BMS?'))sendCmd('bms_disconnect')});
+ $('tab_ctl').querySelectorAll('[data-mac]').forEach(b=>b.onclick=()=>sendCmd('bms_connect',{mac:b.dataset.mac,type:+b.dataset.type,protocol:$('dp'+b.dataset.j).value}));
+ bind('cLed',()=>sendCmd('led',{on:!on('cLed')}));
+ $('tab_ctl').querySelectorAll('[data-lm]').forEach(e=>e.onclick=()=>sendCmd('led',{mode:+e.dataset.lm,on:true}));
+ $('tab_ctl').querySelectorAll('[data-lc]').forEach(e=>e.onclick=()=>sendCmd('led',{color:+e.dataset.lc,on:true}));
+ $('tab_ctl').querySelectorAll('[data-ll]').forEach(e=>e.onclick=()=>sendCmd('led',{level:+e.dataset.ll,on:true}));
+ $('tab_ctl').querySelectorAll('[data-db]').forEach(e=>e.onclick=()=>sendCmd('display',{bl:+e.dataset.db}));
+ $('tab_ctl').querySelectorAll('[data-ds]').forEach(e=>e.onclick=()=>sendCmd('display',{sleep:+e.dataset.ds}));
+ bind('dSave',()=>{const lo=parseInt($('dLow').value),hi=parseInt($('dHi').value);if(!(lo>=0&&lo<=50)||!(hi===0||hi>=30&&hi<=90)){toast('SOC 0–50, อุณหภูมิ 0 หรือ 30–90');return}sendCmd('display',{lowsoc:lo,hitemp:hi})});
+ bind('dBeep',()=>sendCmd('display',{beep:!on('dBeep')}));
+ bind('cAp',()=>{const t=!on('cAp');if(!t&&!confirm('ปิดฮอตสปอต BATTLAB? (ยังควบคุมผ่านเว็บนี้ได้)'))return;sendCmd('wifi_ap',{on:t})});
+ bind('cTx',()=>sendCmd('radio_max',{on:!on('cTx')}));
+ bind('cWscan',()=>sendCmd('wifi_scan'));
+ bind('cWifi',()=>{const ss=$('wSsid').value.trim(),pw=$('wPass').value;if(!ss){toast('ใส่ชื่อ Wi-Fi');return}if(!confirm('เปลี่ยนบอร์ดไปใช้ Wi-Fi "'+ss+'"?\nถ้าต่อไม่ได้ภายใน 90 วินาทีจะกลับไปใช้ "'+(c.ssid||'')+'"'))return;sendCmd('home_wifi',{ssid:ss,pass:pw})});
+ bind('cRestart',()=>{if(confirm('รีสตาร์ทบอร์ด? (ใช้เวลาประมาณ 20 วินาทีจึงกลับมาออนไลน์)'))sendCmd('restart')})}
+// demo: commands change the simulated board
+function demoState(){if(!DS)DS={led:{on:true,mode:0,color:3,level:2},ap:true,tx:true,ssid:'MyHome_5G',chg:true,dsg:true,bal:true,jk:[3.65,3.4,2.8,3.0,2.6,3.4,0.005,1.0,150,200,55,60,0,80,280],disp:{bl:4,sleep:0,lowsoc:15,hitemp:55,beep:true,rot:1},devs:null,wscan:null,note:''};return DS}
+function demoApply(cmd,a){const S=demoState();switch(cmd){case 'led':Object.assign(S.led,a);break;case 'wifi_ap':S.ap=a.on;break;case 'radio_max':S.tx=a.on;break;case 'bms_switch':S[['chg','dsg','bal'][a.which]]=a.on;break;case 'bms_param':S.jk[a.index]=a.value;break;case 'display':Object.assign(S.disp,a);break;
+ case 'bms_scan':S.devs=[{name:'JK-B2A24S20P',mac:'c8:47:80:12:34:56',type:0,rssi:-61,candidate:true},{name:'Xiaoxiang BMS',mac:'a4:c1:38:aa:bb:cc',type:0,rssi:-78,candidate:true},{name:'Mi Band',mac:'d1:22:33:44:55:66',type:1,rssi:-88,candidate:false}];break;
+ case 'wifi_scan':S.wscan=[{ssid:'MyHome_5G',rssi:-48,lock:true},{ssid:'MyHome_2.4G',rssi:-52,lock:true},{ssid:'Neighbor',rssi:-80,lock:true}];break;
+ case 'home_wifi':S.ssid=a.ssid;S.note='Wi-Fi changed to '+a.ssid;break}}
 // ---------- app settings (gear)
 $('btnSet').onclick=openSettings;$('mSet').onclick=e=>{if(e.target.id==='mSet')$('mSet').classList.add('hide')};
 async function openSettings(){let em='';if(!demo){const {data}=await sb.auth.getUser();em=data&&data.user?data.user.email:''}
