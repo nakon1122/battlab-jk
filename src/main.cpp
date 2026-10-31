@@ -33,7 +33,8 @@ struct Shared {
   int bleError=0;
   uint32_t rxBytes=0, rxChunks=0, txOk=0, txFail=0;
   bool writeWithResponse=false;
-  String lastRxHex, gatt, probe = "idle", lastRxChar;
+  String lastRxHex, gatt, probe = "idle", lastRxChar, probeLog;
+  bool probeLogFrozen = false;
   String state = "UNCONFIGURED", devices = "[]";
 } shared;
 bool scanWanted = false, configChanged = false, readWanted = false;
@@ -147,7 +148,7 @@ void stateApi() {
   }
   d["heap"] = ESP.getFreeHeap();
   d["uptime_ms"] = millis();
-  d["firmware"] = "1.3.2-ble-probe";
+  d["firmware"] = "1.3.3-ble-probe-log";
   json(200, d);
 }
 bool validMac(String m) {
@@ -273,6 +274,10 @@ void bleWorker(void *) {
   static volatile size_t lastRxLen = 0;
   bool withResp = false;
   static NimBLERemoteCharacteristic *volatile lastRxFrom = nullptr;
+  static volatile uint8_t winBuf[160];
+  static volatile size_t winLen = 0, winChunks = 0;
+  uint32_t goodBefore = 0;
+  int jkStep = -1;
   // Probe table: which bytes to send to which characteristic until the BMS
   // answers. Covers JK (0x97/0x96), JBD/Xiaoxiang, ANT and Daly requests.
   struct Probe { const char *name; uint8_t len; uint8_t data[20]; };
@@ -291,6 +296,9 @@ void bleWorker(void *) {
   uint32_t probeAt = 0;
   auto notify = [](NimBLERemoteCharacteristic *from, uint8_t *p, size_t n, bool) {
     lastRxFrom = from;
+    for (size_t i = 0; i < n && winLen < sizeof(winBuf); i++)
+      winBuf[winLen++] = p[i];
+    winChunks++;
     if (n > 512)
       return;
     static Chunk q;
@@ -509,7 +517,18 @@ void bleWorker(void *) {
                 }
               }
             }
+          {
+            size_t n1 = steps.size();
+            for (size_t i = 0; i < n1; i++)
+              if (steps[i].probe <= 1 &&
+                  steps[i].target->getUUID() == NimBLEUUID(uint16_t(0xffe1)))
+                steps.push_back(steps[i]);
+          }
           Serial.printf("[BLE] probe plan: %u steps\n", (unsigned)steps.size());
+          {
+            Guard g;
+            if (!shared.probeLogFrozen) shared.probeLog = "";
+          }
           if (ch) withResp = !ch->canWriteNoResponse();
           {
             Guard g;
@@ -522,6 +541,10 @@ void bleWorker(void *) {
             notifyChunks = 0;
             lastRxLen = 0;
             lastRxFrom = nullptr;
+            winLen = 0;
+            winChunks = 0;
+            jkStep = -1;
+            goodBefore = parser.good;
             gotInfo = gotCellFrame = false;
             linkedAt = millis();
             lastCellFrame = lastCellRequest = 0;
@@ -566,44 +589,69 @@ void bleWorker(void *) {
       }
       if (probeStep >= 0) {
         uint32_t t = millis();
-        if (notifyBytes) {
-          // Something answered: report which request on which channel.
-          const Step &st = steps[probeStep > 0 ? probeStep - 1 : 0];
-          String r = String("ANSWER after ") + probes[st.probe].name + " on " +
-                     st.target->getUUID().toString().c_str() +
-                     (st.resp ? " (with response)" : " (no response)") +
-                     ", data from " +
-                     (lastRxFrom ? lastRxFrom->getUUID().toString().c_str() : "?");
-          Serial.printf("[BLE] %s\n", r.c_str());
-          {
+        static const char hx[] = "0123456789ABCDEF";
+        if (!probeAt || t - probeAt > 1800) {
+          // Close out the previous step: record what came back during it.
+          if (probeAt && probeStep > 0) {
+            String line;
+            size_t got = winLen, ck = winChunks;
+            line += String(" <- ") + got + " B / " + ck + " chunks";
+            if (got)
+              line += String(" from ") +
+                      (lastRxFrom ? lastRxFrom->getUUID().toString().c_str() : "?") + ": ";
+            for (size_t i = 0; i < got && i < 64; i++) {
+              line += hx[winBuf[i] >> 4];
+              line += hx[winBuf[i] & 15];
+              line += ' ';
+            }
+            if (got > 64) line += "...";
+            if (parser.good > goodBefore) {
+              line += " [JK FRAME OK]";
+              if (jkStep < 0) jkStep = probeStep - 1;
+            }
+            line += "\n";
+            Serial.print(line);
+            Guard g;
+            if (!shared.probeLogFrozen && shared.probeLog.length() < 7000) shared.probeLog += line;
+          }
+          winLen = 0;
+          winChunks = 0;
+          goodBefore = parser.good;
+          if (probeStep >= (int)steps.size()) {
+            String r = jkStep >= 0
+                ? String("JK_FOUND step ") + (jkStep + 1) + " on " +
+                      steps[jkStep].target->getUUID().toString().c_str() +
+                      (steps[jkStep].resp ? " resp" : " noresp")
+                : String("DONE_NO_JK_FRAME");
+            Serial.printf("[BLE] probe finished: %s\n", r.c_str());
+            if (jkStep >= 0) {
+              ch = steps[jkStep].target;
+              withResp = steps[jkStep].resp;
+              lastCellRequest = 0;
+              lastInfo = 0;
+            }
             Guard g;
             shared.probe = r;
-          }
-          if (st.probe <= 1) {
-            ch = st.target;
-            withResp = st.resp;
-            lastCellRequest = 0;
-            lastInfo = 0;
-          }
-          probeStep = -1;
-        } else if (!probeAt || t - probeAt > 1500) {
-          if (probeStep >= (int)steps.size()) {
-            Serial.println("[BLE] probe finished: no answer on any channel");
-            Guard g;
-            shared.probe = "NO_ANSWER_ANY_CHANNEL";
-            probeStep = -2; // exhausted; keep link for diagnostics
+            if (!shared.probeLogFrozen) {
+              shared.probeLog += String("FINISHED: ") + r + "\n";
+              shared.probeLogFrozen = true; // keep the first full run
+            }
+            probeStep = -2;
           } else {
             const Step &st = steps[probeStep];
             bool ok = st.target->writeValue(probes[st.probe].data,
                                             probes[st.probe].len, st.resp);
-            Serial.printf("[BLE] probe %d/%u %s -> %s %s %s\n", probeStep + 1,
-                          (unsigned)steps.size(), probes[st.probe].name,
-                          st.target->getUUID().toString().c_str(),
-                          st.resp ? "resp" : "noresp", ok ? "ok" : "FAILED");
+            String line = String("#") + (probeStep + 1) + " " +
+                          probes[st.probe].name + " -> " +
+                          st.target->getUUID().toString().c_str() +
+                          (st.resp ? " resp " : " noresp ") +
+                          (ok ? "ok" : "WRITE_FAILED");
+            Serial.print(line);
             {
               Guard g;
               if (ok) shared.txOk++; else shared.txFail++;
               shared.probe = String("probing ") + (probeStep + 1) + "/" + steps.size();
+              if (!shared.probeLogFrozen && shared.probeLog.length() < 7000) shared.probeLog += line;
             }
             probeStep++;
             probeAt = t;
@@ -721,12 +769,22 @@ void setup() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("BATTLAB-JK");
-  Serial.printf("\nBATTLAB 1.3.2-ble-probe\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB 1.3.3-ble-probe-log\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
          []() { web.send_P(200, "text/html; charset=utf-8", UI_HTML); });
   web.on("/api/state", HTTP_GET, stateApi);
+  web.on("/api/probe", HTTP_GET, []() {
+    String s;
+    {
+      Guard g;
+      s = String("BATTLAB 1.3.3 probe log\nstate: ") + shared.probe +
+          "\ngatt: " + shared.gatt + "\n\n" + shared.probeLog;
+    }
+    web.sendHeader("Cache-Control", "no-store");
+    web.send(200, "text/plain; charset=utf-8", s);
+  });
   web.on("/api/scan", HTTP_POST, []() {
     if (!localRequest())
       return;
