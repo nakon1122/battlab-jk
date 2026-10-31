@@ -1183,11 +1183,39 @@ static void calibrate() {
 // JK protection settings with -/+ and SET, plus MOSFET switches for every
 // BMS family. Every write goes through a confirmation dialog.
 static const int PARAM_ROWS = 5;
-static const int PARAM_PAGES = (bmsw::JK_PARAM_COUNT + PARAM_ROWS - 1) / PARAM_ROWS;
 static int paramPage = 0;
-static float pending[bmsw::JK_PARAM_COUNT];
-static bool pendingSet[bmsw::JK_PARAM_COUNT];
+static float pending[bset::MAX_N];
+static bool pendingSet[bset::MAX_N];
+static uint8_t pendingFam = 0;
 static String paramKey, lastWriteShown;
+// One parameter view for every BMS: JK (bms_params.h) or ANT / JBD (bms_settings.h)
+struct PInfo {
+  const char *name, *unit;
+  float step, min, max;
+  uint8_t dec;
+};
+static int pCount(const DisplaySnap &d) {
+  if (d.family == 1) return bmsw::JK_PARAM_COUNT;
+  int n;
+  bset::table(d.family, n);
+  return n;
+}
+static int pPages(const DisplaySnap &d) { return std::max(1, (pCount(d) + PARAM_ROWS - 1) / PARAM_ROWS); }
+static PInfo pInfo(const DisplaySnap &d, int i) {
+  if (d.family == 1) {
+    const auto &p = bmsw::JK_PARAMS[i];
+    return {p.name, p.unit, p.step, p.min, p.max, p.decimals};
+  }
+  int n;
+  const bset::Def &p = bset::table(d.family, n)[i];
+  return {p.name, p.unit, p.step, p.min, p.max, p.dec};
+}
+static bool pReady(const DisplaySnap &d) { return d.family == 1 ? d.jkFresh : (d.family == 2 || d.family == 3) && d.pvHave; }
+static bool pHas(const DisplaySnap &d, int i) { return d.family == 1 || (d.pvHave >> i & 1); }
+static float pVal(const DisplaySnap &d, int i) { return d.family == 1 ? d.jk.v[i] : d.pv[i]; }
+static const char *pCheck(const DisplaySnap &d, int i, float v) {
+  return d.family == 1 ? bmsw::checkJkValue(d.jk, i, v) : bset::check(d.family, d.pv, d.pvHave, i, v);
+}
 static Btn rowMinus(int i) { return {292, 46 + i * 39, 50, 35}; }
 static Btn rowPlus(int i) { return {348, 46 + i * 39, 50, 35}; }
 static Btn rowSet(int i) { return {404, 46 + i * 39, 70, 35}; }
@@ -1229,51 +1257,56 @@ static bool switchAvailable(const DisplaySnap &d, int i) {
   if (d.family == 1) return d.jkFresh;
   return i < 2 && d.live; // ANT / JBD: charge + discharge from live data
 }
-static String fmtParam(int i, float v) {
-  const auto &p = bmsw::JK_PARAMS[i];
-  return fmt(v, p.decimals) + " " + p.unit;
+static String fmtParam(const DisplaySnap &d, int i, float v) {
+  PInfo p = pInfo(d, i);
+  return fmt(v, p.dec) + " " + p.unit;
 }
 static void paramPageDraw(const DisplaySnap &d, bool force) {
   if (d.lastWrite.length() && d.lastWrite != lastWriteShown) {
     lastWriteShown = d.lastWrite;
-    showToast(d.lastWrite, 4000);
+    showToast(d.lastWrite, 5000);
   }
-  bool jk = d.family == 1 && d.jkFresh;
-  String key = String(d.family) + (jk ? "J" : "-") + paramPage + (d.linked ? "L" : "-") +
-               (d.live ? "V" : "-");
+  if (pendingFam != d.family) { // another BMS: forget edits
+    pendingFam = d.family;
+    for (auto &p : pendingSet) p = false;
+    paramPage = 0;
+  }
+  bool ready = pReady(d);
+  int n = pCount(d), pages = pPages(d);
+  if (paramPage >= pages) paramPage = 0;
+  String key = String(d.family) + (ready ? "J" : "-") + paramPage + (d.linked ? "L" : "-") + (d.live ? "V" : "-");
   for (int i = 0; i < bmsw::SW_COUNT; i++) key += switchState(d, i) ? '1' : '0';
-  if (jk)
-    for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++)
-      key += fmt(d.jk.v[i], 3) + (pendingSet[i] ? fmt(pending[i], 3) : String("-"));
+  if (ready)
+    for (int i = 0; i < n; i++) key += (pHas(d, i) ? fmt(pVal(d, i), 3) : String("?")) + (pendingSet[i] ? fmt(pending[i], 3) : String("-"));
   if (!force && key == paramKey) return;
   paramKey = key;
   tft.fillRect(0, 41, 480, TAB_Y - 41, C_BG);
-  if (!jk) {
+  if (!ready) {
     label(16, 70, !d.linked ? "Connect a BMS on the BMS tab first."
-                : d.family == 1 ? "Reading settings from the JK BMS..."
-                : d.family ? "Settings editing is available for JK BMS."
+                : d.family ? "Reading settings from the BMS..."
                 : "Identifying the BMS type...");
-    if (d.family == 2 || d.family == 3) {
-      label(16, 98, d.family == 2 ? "ANT: charge / discharge / balance switches below"
-                                  : "JBD: charge / discharge switches below");
-    }
+    label(16, 98, d.family == 2 ? "ANT: settings are read one by one (~8 s)"
+                : d.family == 3 ? "JBD: settings are read one by one (~4 s)" : "");
     label(16, 140, "All writes ask for confirmation first.");
   } else {
     for (int r = 0; r < PARAM_ROWS; r++) {
       int i = paramPage * PARAM_ROWS + r;
-      if (i >= bmsw::JK_PARAM_COUNT) break;
-      const auto &p = bmsw::JK_PARAMS[i];
+      if (i >= n) break;
+      PInfo p = pInfo(d, i);
       int y = 46 + r * 39;
       tft.fillRoundRect(12, y, 274, 35, 8, C_CARD);
       tft.setFont(&fonts::FreeSans9pt7b);
       tft.setTextDatum(textdatum_t::middle_left);
       tft.setTextColor(C_MUTED, C_CARD);
-      tft.drawString(p.name, 22, y + 18);
-      bool edited = pendingSet[i] && std::fabs(pending[i] - d.jk.v[i]) > p.step / 2;
+      String nm = p.name;
+      while (nm.length() && tft.textWidth(nm) > 150) nm.remove(nm.length() - 1);
+      tft.drawString(nm, 22, y + 18);
+      bool have = pHas(d, i);
+      bool edited = have && pendingSet[i] && std::fabs(pending[i] - pVal(d, i)) > p.step / 2;
       tft.setFont(&fonts::FreeSansBold9pt7b);
       tft.setTextDatum(textdatum_t::middle_right);
-      tft.setTextColor(edited ? C_WARN : C_TEXT, C_CARD);
-      tft.drawString(fmtParam(i, edited ? pending[i] : d.jk.v[i]), 278, y + 18);
+      tft.setTextColor(edited ? C_WARN : have ? C_TEXT : C_MUTED, C_CARD);
+      tft.drawString(have ? fmtParam(d, i, edited ? pending[i] : pVal(d, i)) : String("not read"), 278, y + 18);
       button(rowMinus(r), "-", false, 0, &fonts::FreeSansBold12pt7b);
       button(rowPlus(r), "+", false, 0, &fonts::FreeSansBold12pt7b);
       button(rowSet(r), "SET", edited, C_WARN);
@@ -1283,7 +1316,7 @@ static void paramPageDraw(const DisplaySnap &d, bool force) {
     tft.setFont(&fonts::FreeSans9pt7b);
     tft.setTextDatum(textdatum_t::middle_center);
     tft.setTextColor(C_MUTED, C_BG);
-    tft.drawString(String(paramPage + 1) + "/" + PARAM_PAGES, 398, 260);
+    tft.drawString(String(paramPage + 1) + "/" + pages, 398, 260);
   }
   for (int i = 0; i < bmsw::SW_COUNT; i++) {
     if (!switchAvailable(d, i)) continue;
@@ -1297,9 +1330,10 @@ static bool paramRepeatable(int x, int y) {
   return false;
 }
 static void paramTouch(const DisplaySnap &d, int x, int y) {
-  bool jk = d.family == 1 && d.jkFresh;
-  if (jk && hit(P_PREV, x, y)) { paramPage = (paramPage + PARAM_PAGES - 1) % PARAM_PAGES; return; }
-  if (jk && hit(P_NEXT, x, y)) { paramPage = (paramPage + 1) % PARAM_PAGES; return; }
+  bool ready = pReady(d);
+  int n = pCount(d), pages = pPages(d);
+  if (ready && hit(P_PREV, x, y)) { paramPage = (paramPage + pages - 1) % pages; return; }
+  if (ready && hit(P_NEXT, x, y)) { paramPage = (paramPage + 1) % pages; return; }
   for (int i = 0; i < bmsw::SW_COUNT; i++)
     if (switchAvailable(d, i) && hit(swBtn(i), x, y)) {
       bool on = !switchState(d, i);
@@ -1315,12 +1349,12 @@ static void paramTouch(const DisplaySnap &d, int x, int y) {
       drawConfirm();
       return;
     }
-  if (!jk) return;
+  if (!ready) return;
   for (int r = 0; r < PARAM_ROWS; r++) {
     int i = paramPage * PARAM_ROWS + r;
-    if (i >= bmsw::JK_PARAM_COUNT) break;
-    const auto &p = bmsw::JK_PARAMS[i];
-    float cur = pendingSet[i] ? pending[i] : d.jk.v[i];
+    if (i >= n || !pHas(d, i)) continue;
+    PInfo p = pInfo(d, i);
+    float cur = pendingSet[i] ? pending[i] : pVal(d, i);
     if (hit(rowMinus(r), x, y) || hit(rowPlus(r), x, y)) {
       float v = cur + (hit(rowPlus(r), x, y) ? p.step : -p.step);
       v = std::round(v / p.step) * p.step;
@@ -1330,8 +1364,8 @@ static void paramTouch(const DisplaySnap &d, int x, int y) {
       pendingSet[i] = true;
       return;
     }
-    if (hit(rowSet(r), x, y) && pendingSet[i] && std::fabs(pending[i] - d.jk.v[i]) > p.step / 2) {
-      if (const char *e = bmsw::checkJkValue(d.jk, i, pending[i])) {
+    if (hit(rowSet(r), x, y) && pendingSet[i] && std::fabs(pending[i] - pVal(d, i)) > p.step / 2) {
+      if (const char *e = pCheck(d, i, pending[i])) {
         showToast(String("Not allowed: ") + e, 4000);
         return;
       }
@@ -1339,8 +1373,8 @@ static void paramTouch(const DisplaySnap &d, int x, int y) {
       confirmDlg.active = true;
       confirmDlg.idx = i;
       confirmDlg.value = pending[i];
-      confirmDlg.line1 = String(p.name) + ":  " + fmtParam(i, d.jk.v[i]) + "  ->  " + fmtParam(i, pending[i]);
-      confirmDlg.line2 = "Check the value is right for your cells";
+      confirmDlg.line1 = String(p.name) + ":  " + fmtParam(d, i, pVal(d, i)) + "  ->  " + fmtParam(d, i, pending[i]);
+      confirmDlg.line2 = d.family == 2 ? "ANT write is experimental - it is read back" : "Check the value is right for your cells";
       drawConfirm();
       return;
     }

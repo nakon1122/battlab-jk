@@ -18,10 +18,11 @@
 #include <vector>
 #include "logo.h"
 #include "bms_params.h"
+#include "bms_settings.h"
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
 
-#define BATTLAB_FW "2.4.0-cloudscreen"
+#define BATTLAB_FW "2.5.0-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -165,6 +166,8 @@ struct Focus {
   int n = 0;
   bool jkValid = false;
   float jk[bmsw::JK_PARAM_COUNT];
+  float pv[bset::MAX_N]; // ANT / JBD settings ("pa")
+  uint64_t pvHave = 0;
   bool sw[3] = {false, false, false};
   bool remote = false, autoc = false, ledOn = false, ap = false, tx = false, scanning = false;
   uint8_t fam = 0, ledMode = 0, ledColor = 0, ledLevel = 2;
@@ -336,6 +339,15 @@ static void parseSync(JsonDocument &d) {
     k = 0;
     for (bool b : jk["sw"].as<JsonArrayConst>())
       if (k < 3) f.sw[k++] = b;
+  }
+  JsonObjectConst pa = x["pa"].as<JsonObjectConst>();
+  if (!pa.isNull()) {
+    int k = 0;
+    for (JsonVariantConst v : pa["v"].as<JsonArrayConst>()) {
+      if (k >= bset::MAX_N) break;
+      if (!v.isNull()) { f.pv[k] = v.as<float>(); f.pvHave |= uint64_t(1) << k; }
+      k++;
+    }
   }
   JsonObjectConst c = x["cfg"].as<JsonObjectConst>();
   if (!c.isNull()) {
@@ -1167,10 +1179,28 @@ static Btn subBtn(int i) { return {8 + i * 117, 46, 113, 34}; }
 static const Btn STATUS_AREA = {196, 240, 276, 34};
 static String ctlKey;
 // parameters
-static const int PROWS = 4, PPAGES = (bmsw::JK_PARAM_COUNT + PROWS - 1) / PROWS;
+static const int PROWS = 4;
 static int pPage = 0;
-static float pend[bmsw::JK_PARAM_COUNT];
-static bool pendSet[bmsw::JK_PARAM_COUNT];
+static float pend[bset::MAX_N];
+static bool pendSet[bset::MAX_N];
+// one parameter view for JK (bms_params.h) and ANT / JBD (bms_settings.h)
+struct PInfo { const char *name, *unit; float step, min, max; uint8_t dec; };
+static int pCount(const Focus &f) {
+  if (f.fam == 1) return bmsw::JK_PARAM_COUNT;
+  int n;
+  bset::table(f.fam, n);
+  return n;
+}
+static int pPages(const Focus &f) { return std::max(1, (pCount(f) + PROWS - 1) / PROWS); }
+static PInfo pInfo(const Focus &f, int i) {
+  if (f.fam == 1) { const auto &p = bmsw::JK_PARAMS[i]; return {p.name, p.unit, p.step, p.min, p.max, p.decimals}; }
+  int n;
+  const bset::Def &p = bset::table(f.fam, n)[i];
+  return {p.name, p.unit, p.step, p.min, p.max, p.dec};
+}
+static bool pReady(const Focus &f) { return f.fam == 1 ? f.jkValid : (f.fam == 2 || f.fam == 3) && f.pvHave; }
+static bool pHas(const Focus &f, int i) { return f.fam == 1 || (f.pvHave >> i & 1); }
+static float pVal(const Focus &f, int i) { return f.fam == 1 ? f.jk[i] : f.pv[i]; }
 static Btn pMinus(int r) { return {282, 88 + r * 38, 52, 34}; }
 static Btn pPlus(int r) { return {338, 88 + r * 38, 52, 34}; }
 static Btn pSet(int r) { return {394, 88 + r * 38, 78, 34}; }
@@ -1256,15 +1286,15 @@ static void statusLine(const Model &m) {
   while (t.length() && tft.textWidth(t) > STATUS_AREA.w) t.remove(t.length() - 1);
   tft.drawString(t, STATUS_AREA.x + STATUS_AREA.w, STATUS_AREA.y + STATUS_AREA.h / 2);
 }
-static String fmtParam(int i, float v) { return fmt(v, bmsw::JK_PARAMS[i].decimals) + " " + bmsw::JK_PARAMS[i].unit; }
+static String fmtParam(const Focus &f, int i, float v) { PInfo p = pInfo(f, i); return fmt(v, p.dec) + " " + p.unit; }
 static void ctlPage(const Model &m, bool force) {
   const DevSum *dp = focusDev(m);
   const Focus &f = m.f;
   String key = String(dp ? dp->id : "") + ctlSub + pPage + devPage + B(f.remote) + int(f.fam) + B(f.jkValid) + B(f.sw[0]) + B(f.sw[1]) + B(f.sw[2]) +
                B(f.ledOn) + int(f.ledMode) + int(f.ledColor) + int(f.ledLevel) + B(f.ap) + B(f.tx) + B(f.scanning) + int(f.devs.size()) + f.mac +
                B(dp && dp->live()) + B(dp && dp->online());
-  if (f.jkValid)
-    for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) key += fmt(f.jk[i], 3) + (pendSet[i] ? fmt(pend[i], 3) : String("-"));
+  if (pReady(f))
+    for (int i = 0; i < pCount(f); i++) key += (pHas(f, i) ? fmt(pVal(f, i), 3) : String("?")) + (pendSet[i] ? fmt(pend[i], 3) : String("-"));
   for (auto &c : f.cmds) key += String(c.id) + c.s;
   if (!force && key == ctlKey) return;
   ctlKey = key;
@@ -1304,25 +1334,29 @@ static void ctlPage(const Model &m, bool force) {
     tft.drawString(String(fam[f.fam < 4 ? f.fam : 0]) + (f.mac.length() ? "  " + f.mac : String("")), 168, 194);
     tft.drawString(live ? "Tap a switch to change it" : "Battery is not live", 168, 214);
   } else if (ctlSub == 1) {
-    if (f.fam != 1 || !f.jkValid) {
-      label(16, 110, f.fam == 1 ? "Reading JK settings... (MOSFET > READ BMS)" : "Parameters can be edited on JK BMS.", C_TEXT);
-      label(16, 136, f.fam == 2 || f.fam == 3 ? "ANT / JBD: use the MOSFET tab." : "Connect a JK BMS on the board first.");
+    if (!pReady(f)) {
+      label(16, 110, f.fam ? "Reading the BMS settings... (MOSFET > READ BMS)" : "Connect a BMS on the board first.", C_TEXT);
+      label(16, 136, f.fam == 2 ? "ANT: all settings are read; writing is experimental" : "Board firmware 2.5.0+ reads ANT / JBD settings.");
     } else {
+      if (pPage >= pPages(f)) pPage = 0;
       for (int r = 0; r < PROWS; r++) {
         int i = pPage * PROWS + r;
-        if (i >= bmsw::JK_PARAM_COUNT) break;
-        const auto &p = bmsw::JK_PARAMS[i];
+        if (i >= pCount(f)) break;
+        PInfo p = pInfo(f, i);
         int y = 88 + r * 38;
         tft.fillRoundRect(8, y, 270, 34, 8, C_CARD);
         tft.setFont(&fonts::FreeSans9pt7b);
         tft.setTextDatum(textdatum_t::middle_left);
         tft.setTextColor(C_MUTED, C_CARD);
-        tft.drawString(p.name, 18, y + 17);
-        bool edited = pendSet[i] && std::fabs(pend[i] - f.jk[i]) > p.step / 2;
+        String nm = p.name;
+        while (nm.length() && tft.textWidth(nm) > 140) nm.remove(nm.length() - 1);
+        tft.drawString(nm, 18, y + 17);
+        bool have = pHas(f, i);
+        bool edited = have && pendSet[i] && std::fabs(pend[i] - pVal(f, i)) > p.step / 2;
         tft.setFont(&fonts::FreeSansBold9pt7b);
         tft.setTextDatum(textdatum_t::middle_right);
-        tft.setTextColor(edited ? C_WARN : C_TEXT, C_CARD);
-        tft.drawString(fmtParam(i, edited ? pend[i] : f.jk[i]), 270, y + 17);
+        tft.setTextColor(edited ? C_WARN : have ? C_TEXT : C_MUTED, C_CARD);
+        tft.drawString(have ? fmtParam(f, i, edited ? pend[i] : pVal(f, i)) : String("not read"), 270, y + 17);
         button(pMinus(r), "-", false, 0, &fonts::FreeSansBold12pt7b);
         button(pPlus(r), "+", false, 0, &fonts::FreeSansBold12pt7b);
         button(pSet(r), "SET", edited, C_WARN);
@@ -1332,7 +1366,7 @@ static void ctlPage(const Model &m, bool force) {
       tft.setFont(&fonts::FreeSans9pt7b);
       tft.setTextDatum(textdatum_t::middle_center);
       tft.setTextColor(C_MUTED, C_BG);
-      tft.drawString(String(pPage + 1) + "/" + PPAGES, 96, 258);
+      tft.drawString(String(pPage + 1) + "/" + pPages(f), 96, 258);
     }
   } else if (ctlSub == 2) {
     button(L_ON, f.ledOn ? "LED ON" : "LED OFF", f.ledOn, C_GOOD);
@@ -1406,14 +1440,16 @@ static void ctlTouch(const Model &m, int x, int y) {
         return;
       }
     if (hit(M_READ, x, y) && live) { sendCmd("bms_read", "{}", "Read BMS"); showToast("Reading settings..."); }
-  } else if (ctlSub == 1 && f.fam == 1 && f.jkValid) {
-    if (hit(PP_PREV, x, y)) { pPage = (pPage + PPAGES - 1) % PPAGES; return; }
-    if (hit(PP_NEXT, x, y)) { pPage = (pPage + 1) % PPAGES; return; }
+  } else if (ctlSub == 1 && pReady(f)) {
+    int pages = pPages(f);
+    if (hit(PP_PREV, x, y)) { pPage = (pPage + pages - 1) % pages; return; }
+    if (hit(PP_NEXT, x, y)) { pPage = (pPage + 1) % pages; return; }
     for (int r = 0; r < PROWS; r++) {
       int i = pPage * PROWS + r;
-      if (i >= bmsw::JK_PARAM_COUNT) break;
-      const auto &p = bmsw::JK_PARAMS[i];
-      float cur = pendSet[i] ? pend[i] : f.jk[i];
+      if (i >= pCount(f)) break;
+      if (!pHas(f, i)) continue;
+      PInfo p = pInfo(f, i);
+      float cur = pendSet[i] ? pend[i] : pVal(f, i);
       if (hit(pMinus(r), x, y) || hit(pPlus(r), x, y)) {
         float v = cur + (hit(pPlus(r), x, y) ? p.step : -p.step);
         v = std::round(v / p.step) * p.step;
@@ -1421,15 +1457,20 @@ static void ctlTouch(const Model &m, int x, int y) {
         pendSet[i] = true;
         return;
       }
-      if (hit(pSet(r), x, y) && pendSet[i] && std::fabs(pend[i] - f.jk[i]) > p.step / 2) {
-        bmsw::JkSettings js;
-        js.valid = true;
-        for (int k = 0; k < bmsw::JK_PARAM_COUNT; k++) js.v[k] = f.jk[k];
-        if (const char *e = bmsw::checkJkValue(js, i, pend[i])) { showToast(String("Not allowed: ") + e, 4000); return; }
+      if (hit(pSet(r), x, y) && pendSet[i] && std::fabs(pend[i] - pVal(f, i)) > p.step / 2) {
+        const char *e;
+        if (f.fam == 1) {
+          bmsw::JkSettings js;
+          js.valid = true;
+          for (int k = 0; k < bmsw::JK_PARAM_COUNT; k++) js.v[k] = f.jk[k];
+          e = bmsw::checkJkValue(js, i, pend[i]);
+        } else e = bset::check(f.fam, f.pv, f.pvHave, i, pend[i]);
+        if (e) { showToast(String("Not allowed: ") + e, 4000); return; }
         char a[64];
         snprintf(a, sizeof a, "{\"index\":%d,\"value\":%.4f}", i, pend[i]);
-        ask(String(p.name) + ":  " + fmtParam(i, f.jk[i]) + "  ->  " + fmtParam(i, pend[i]),
-            "Check the value is right for your cells", "bms_param", a, String(p.name));
+        ask(String(p.name) + ":  " + fmtParam(f, i, pVal(f, i)) + "  ->  " + fmtParam(f, i, pend[i]),
+            f.fam == 2 ? "ANT write is experimental - it is read back" : "Check the value is right for your cells",
+            "bms_param", a, String(p.name));
         return;
       }
     }

@@ -1,6 +1,7 @@
 #pragma once
 #include "jk_protocol.h"
 #include "bms_params.h"
+#include "bms_settings.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
@@ -20,6 +21,8 @@ struct DisplaySnap {
   uint32_t freeHeap = 0, minHeap = 0, maxBlock = 0;
   bmsw::JkSettings jk;
   bool jkFresh = false;
+  float pv[bset::MAX_N] = {}; // ANT / JBD settings
+  uint64_t pvHave = 0;
   uint8_t family = 0; // 0 unknown, 1 JK, 2 ANT, 3 JBD
   String lastWrite;
   bool radioMax = true;

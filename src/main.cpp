@@ -1,6 +1,7 @@
 #include "jk_protocol.h"
 #include "bms_other.h"
 #include "bms_params.h"
+#include "bms_settings.h"
 #include "jk_auth.h"
 #include "ble_channels.h"
 #include "ui.h"
@@ -23,9 +24,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.4.0-cyd35"
+#define BATTLAB_FW "2.5.0-cyd35"
 #else
-#define BATTLAB_FW "2.4.0-s3"
+#define BATTLAB_FW "2.5.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -75,7 +76,9 @@ struct Shared {
   String lastWrite;         // result of the last BMS write, for the UI
   bool probeLogFrozen = false;
   String state = "UNCONFIGURED", devices = "[]";
-  uint32_t devStamp = 0;    // when the last BLE scan finished
+  uint32_t devStamp = 0;
+  float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
+  uint64_t pvHave = 0;          // bit i = pv[i] was read from the BMS    // when the last BLE scan finished
 } shared;
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
@@ -276,10 +279,18 @@ static const char *queueCmd(const BmsCmd &c) {
 const char *bmsWriteParam(int idx, float value) {
   {
     Guard g;
-    if (shared.family != 1) return "parameter editing is JK only";
-    if (uint32_t(millis() - shared.jkStamp) > 600000 || !shared.jk.valid)
-      return "settings not read yet";
-    if (const char *e = bmsw::checkJkValue(shared.jk, idx, value)) return e;
+    if (shared.family == 2 || shared.family == 3) {
+      int n;
+      bset::table(shared.family, n);
+      if (idx < 0 || idx >= n) return "unknown setting";
+      if (!(shared.pvHave >> idx & 1)) return "setting not read yet - read the BMS first";
+      if (const char *e = bset::check(shared.family, shared.pv, shared.pvHave, idx, value)) return e;
+    } else {
+      if (shared.family != 1) return "BMS type not identified yet";
+      if (uint32_t(millis() - shared.jkStamp) > 600000 || !shared.jk.valid)
+        return "settings not read yet";
+      if (const char *e = bmsw::checkJkValue(shared.jk, idx, value)) return e;
+    }
   }
   return queueCmd({false, uint8_t(idx), value, false});
 }
@@ -317,6 +328,11 @@ void bleWorker(void *) {
   NimBLERemoteCharacteristic *ch = nullptr;
   bool gotInfo = false, gotCellFrame = false;
   uint32_t linkedAt = 0, lastCellFrame = 0, lastCellRequest = 0;
+  // ANT / JBD settings: read one register every 150 ms; verify writes by reading back
+  int prStep = -1, vIdx = -1;
+  bool prDone = false;
+  float vVal = 0;
+  uint32_t prAt = 0, vAt = 0;
   uint8_t cellRequests = 0;
   // BMS family: 0 = not identified yet, 1 = JK, 2 = ANT, 3 = JBD/Xiaoxiang
   uint8_t fam = 0;
@@ -601,10 +617,14 @@ void bleWorker(void *) {
       {
         Guard g;
         shared.family = 0;
+        shared.pvHave = 0;
         cmdN = 0; // never replay a queued write onto a new connection
       }
       steps.clear();
       probeStep = -1;
+      prStep = -1;
+      prDone = false;
+      vIdx = -1;
       if (ch)
         Serial.printf("[BLE] link lost after %lu ms (frames ok=%lu)\n",
                       (unsigned long)(millis() - linkedAt),
@@ -804,10 +824,35 @@ void bleWorker(void *) {
         shared.connectionAuth = "NOT_SET";
         shared.good = antF.good + jbdF.good + parser.good;
       };
+      auto storeSetting = [&](uint8_t f, int i, float v) {
+        int n;
+        const bset::Def *tb = bset::table(f, n);
+        if (!tb || i < 0 || i >= n) return;
+        Guard g;
+        shared.pv[i] = v;
+        shared.pvHave |= uint64_t(1) << i;
+        if (vIdx == i) {
+          const bset::Def &d = tb[i];
+          bool same = std::fabs(v - vVal) <= d.step / 2 + 1e-4f;
+          shared.lastWrite = (same ? "Verified: " : "Not changed: ") + String(d.name) + " = " +
+                             String(v, int(d.dec)) + " " + d.unit + (same ? "" : " (BMS kept the old value)");
+          vIdx = -1;
+        }
+      };
       Chunk chunk;
       while (xQueueReceive(queue, &chunk, 0) == pdTRUE) {
         parser.feed(chunk.data, chunk.n, receive);
         antF.feed(chunk.data, chunk.n, [&](const uint8_t *f, size_t n) {
+          if (n >= 10 && f[2] == 0x12) { // settings register read back
+            uint16_t addr = f[3] | uint16_t(f[4]) << 8;
+            uint8_t len = f[5];
+            if (len == 2 || len == 4) {
+              int32_t raw = len == 4 ? int32_t(f[6] | f[7] << 8 | f[8] << 16 | uint32_t(f[9]) << 24) : int32_t(f[6] | f[7] << 8);
+              for (int i = 0; i < bset::ANT_N; i++)
+                if (bset::ANT[i].reg == addr) storeSetting(2, i, bset::decode(bset::ANT[i], raw));
+            }
+            return;
+          }
           jk::Sample smp;
           if (bms::decodeAnt(f, n, smp)) {
             if (!fam) fam = 2;
@@ -818,6 +863,15 @@ void bleWorker(void *) {
           }
         });
         jbdF.feed(chunk.data, chunk.n, [&](uint8_t cmd, const uint8_t *d, size_t n) {
+          if (fam == 3 && cmd >= 0x10 && cmd <= 0x2F && n == 2) { // settings register read back
+            for (int i = 0; i < bset::JBD_N; i++)
+              if (bset::JBD[i].reg == cmd) {
+                const bset::Def &df = bset::JBD[i];
+                int32_t raw = df.sgn ? int32_t(int16_t(d[0] << 8 | d[1])) : int32_t(d[0] << 8 | d[1]);
+                storeSetting(3, i, bset::decode(df, raw));
+              }
+            return;
+          }
           bool ok = cmd == 3 ? bms::decodeJbdBasic(d, n, jbdSample)
                   : cmd == 4 ? bms::decodeJbdCells(d, n, jbdSample) : false;
           if (!ok) return;
@@ -897,6 +951,35 @@ void bleWorker(void *) {
             NimBLERemoteCharacteristic *w = jbdCh ? jbdCh : ch;
             if (w) ok = w->writeValue(f.data(), f.size(), !w->canWriteNoResponse());
             result = String(cmd.idx == 0 ? "Charge" : "Discharge") + (cmd.on ? " ON" : " OFF");
+          } else if ((fam == 2 || fam == 3) && !cmd.isSwitch) {
+            int n;
+            const bset::Def *tb = bset::table(fam, n);
+            if (cmd.idx < n) {
+              const bset::Def &p = tb[cmd.idx];
+              uint8_t fr[20];
+              int k;
+              int32_t raw = bset::encode(p, cmd.value);
+              if (fam == 3) { // JBD: factory mode -> write -> save + exit, then read everything back
+                NimBLERemoteCharacteristic *w = jbdCh ? jbdCh : ch;
+                if (w) {
+                  bool r = !w->canWriteNoResponse();
+                  k = bset::jbdFactory(fr); w->writeValue(fr, k, r); delay(300);
+                  k = bset::jbdWrite(fr, p.reg, raw); ok = w->writeValue(fr, k, r); delay(300);
+                  k = bset::jbdExit(fr, true); w->writeValue(fr, k, r); delay(500);
+                }
+                prStep = 0;
+              } else if (antCh) { // ANT (experimental): auth -> write -> read the register back
+                bool r = !antCh->canWriteNoResponse();
+                auto a = bmsw::antAuthFrame();
+                antCh->writeValue(a.data(), a.size(), r); delay(150);
+                k = bset::antWrite(fr, p, raw); ok = antCh->writeValue(fr, k, r); delay(400);
+                k = bset::antRead(fr, p); antCh->writeValue(fr, k, r);
+              }
+              vIdx = cmd.idx;
+              vVal = cmd.value;
+              vAt = millis();
+              result = String(p.name) + " = " + String(cmd.value, int(p.dec)) + " " + p.unit + " - checking...";
+            }
           } else {
             result = "not supported for this BMS";
           }
@@ -904,7 +987,32 @@ void bleWorker(void *) {
           Guard g;
           shared.lastWrite = (ok ? "Sent: " : "Failed: ") + result;
         }
-        if (fam == 2 && t - lastOtherPoll > 2000) {
+        if (wantRead && (fam == 2 || fam == 3)) prStep = 0;
+        if (!prDone && prStep < 0 && (fam == 2 || fam == 3) && t - linkedAt > 4000) prStep = 0;
+        if (vIdx >= 0 && millis() - vAt > 10000) {
+          Guard g;
+          shared.lastWrite = "No answer to the check read - press READ to see the value";
+          vIdx = -1;
+        }
+        if (prStep >= 0 && (fam == 2 || fam == 3) && t - prAt > 150) {
+          prAt = t;
+          uint8_t fr[20];
+          int k = 0, n;
+          const bset::Def *tb = bset::table(fam, n);
+          if (fam == 3) {
+            NimBLERemoteCharacteristic *w = jbdCh ? jbdCh : ch;
+            if (prStep == 0) k = bset::jbdFactory(fr);
+            else if (prStep <= n) k = bset::jbdRead(fr, tb[prStep - 1].reg);
+            else k = bset::jbdExit(fr, false);
+            if (w) w->writeValue(fr, k, !w->canWriteNoResponse());
+            if (++prStep > n + 1) { prStep = -1; prDone = true; }
+          } else {
+            k = bset::antRead(fr, tb[prStep]);
+            if (antCh) antCh->writeValue(fr, k, !antCh->canWriteNoResponse());
+            if (++prStep >= n) { prStep = -1; prDone = true; }
+          }
+          lastOtherPoll = t; // no live-data poll in between
+        } else if (fam == 2 && t - lastOtherPoll > 2000) {
           writeRaw(antCh, bms::ANT_STATUS_REQUEST, sizeof(bms::ANT_STATUS_REQUEST), "ANT status");
           lastOtherPoll = t;
         } else if (fam == 3 && t - lastOtherPoll > 1000) {
@@ -1615,6 +1723,16 @@ static void cloudTask(void *) {
         devs = shared.devices;
         d["devs"] = serialized(devs);
       }
+      if (shared.linked && shared.pvHave && (shared.family == 2 || shared.family == 3)) {
+        int n;
+        bset::table(shared.family, n);
+        auto po = d.createNestedObject("pa");
+        po["f"] = shared.family;
+        auto v = po.createNestedArray("v");
+        for (int i = 0; i < n; i++)
+          if (shared.pvHave >> i & 1) v.add(serialized(String(shared.pv[i], 3)));
+          else v.add(nullptr);
+      }
       if (shared.linked && shared.jk.valid && shared.family == 1) {
         auto jo = d.createNestedObject("jk");
         auto v = jo.createNestedArray("v");
@@ -1879,6 +1997,16 @@ static void bleRefresh(bool slow) {
         auto sw = j.createNestedArray("sw");
         for (int i = 0; i < bmsw::SW_COUNT; i++) sw.add(shared.jk.sw[i]);
         serializeJson(j, jk);
+      } else if (shared.linked && shared.pvHave && (shared.family == 2 || shared.family == 3)) {
+        int n;
+        bset::table(shared.family, n);
+        DynamicJsonDocument j(1536);
+        j["f"] = shared.family;
+        auto v = j.createNestedArray("v");
+        for (int i = 0; i < n; i++)
+          if (shared.pvHave >> i & 1) v.add(serialized(String(shared.pv[i], shared.pv[i] == int(shared.pv[i]) ? 0 : 3)));
+          else v.add(nullptr);
+        serializeJson(j, jk);
       } else jk = "{}";
       devs = shared.devices;
     }
@@ -2071,6 +2199,8 @@ void takeDisplaySnapshot(DisplaySnap &o) {
     o.jk = shared.jk;
     o.jkFresh = shared.jk.valid && uint32_t(millis() - shared.jkStamp) < 600000;
     o.family = shared.family;
+    o.pvHave = shared.pvHave;
+    memcpy(o.pv, shared.pv, sizeof o.pv);
     o.lastWrite = shared.lastWrite;
   }
   o.resetReason = resetReasonText;
@@ -2136,14 +2266,30 @@ void setup() {
          []() { web.send_P(200, "text/html; charset=utf-8", UI_HTML); });
   web.on("/api/state", HTTP_GET, stateApi);
   web.on("/api/bms/params", HTTP_GET, []() {
-    DynamicJsonDocument d(4096);
+    DynamicJsonDocument d(12288);
     {
       Guard g;
       d["family"] = shared.family;
       d["valid"] = shared.jk.valid;
       d["last_write"] = shared.lastWrite;
       auto a = d.createNestedArray("params");
-      for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) {
+      if (shared.family == 2 || shared.family == 3) { // ANT / JBD table
+        int n;
+        const bset::Def *tb = bset::table(shared.family, n);
+        d["valid"] = shared.pvHave != 0;
+        d["experimental"] = shared.family == 2;
+        for (int i = 0; i < n; i++) {
+          auto o = a.createNestedObject();
+          o["index"] = i;
+          o["name"] = tb[i].name;
+          o["unit"] = tb[i].unit;
+          o["min"] = tb[i].min;
+          o["max"] = tb[i].max;
+          o["step"] = tb[i].step;
+          if (shared.pvHave >> i & 1) o["value"] = shared.pv[i];
+        }
+      }
+      for (int i = 0; shared.family == 1 && i < bmsw::JK_PARAM_COUNT; i++) {
         const auto &p = bmsw::JK_PARAMS[i];
         auto o = a.createNestedObject();
         o["index"] = i;
