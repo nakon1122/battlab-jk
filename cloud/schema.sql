@@ -169,6 +169,82 @@ grant execute on function public.history_buckets(uuid, timestamptz, timestamptz,
 alter publication supabase_realtime add table public.latest;
 
 -- ---- v3: remote control (commands queue, ingest2) ----
--- applied in Supabase: devices.remote_until, table commands (RLS: owner select only),
--- send_command(device, cmd, args) [authenticated], remote_touch(device) [authenticated],
--- ingest2(token, pair, data, acks) -> {status, fast, cmds} [anon]. See git history for full SQL.
+alter table public.devices add column if not exists remote_until timestamptz;
+create table if not exists public.commands (
+  id bigint generated always as identity primary key,
+  device_id uuid not null references public.devices(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  cmd text not null, args jsonb not null default '{}'::jsonb,
+  status text not null default 'pending',   -- pending, sent, done, error, expired
+  result text, sent_at timestamptz, done_at timestamptz);
+create index if not exists commands_device_status on public.commands (device_id, status, id);
+alter table public.commands enable row level security;
+create policy commands_owner_select on public.commands for select to authenticated using (exists (
+  select 1 from public.devices d where d.id = device_id and d.owner = (select auth.uid())));
+revoke insert, update, delete, truncate, references, trigger on public.commands from anon, authenticated;
+revoke select on public.commands from anon;
+grant select on public.commands to authenticated;
+alter publication supabase_realtime add table public.commands;
+
+create or replace function public.send_command(p_device uuid, p_cmd text, p_args jsonb default '{}'::jsonb)
+returns bigint language plpgsql security definer set search_path = public as $$
+declare cid bigint;
+begin
+  if (select auth.uid()) is null then raise exception 'sign in first'; end if;
+  if not exists (select 1 from public.devices where id = p_device and owner = (select auth.uid())) then
+    raise exception 'not your device'; end if;
+  if p_cmd not in ('led','bms_scan','bms_connect','bms_auto','bms_disconnect','bms_param','bms_switch','bms_read',
+                   'wifi_ap','radio_max','home_wifi','wifi_scan','display','restart','ping') then
+    raise exception 'unknown command'; end if;
+  if p_args is null or jsonb_typeof(p_args) <> 'object' or length(p_args::text) > 400 then raise exception 'bad args'; end if;
+  if (select count(*) from public.commands where device_id = p_device and status in ('pending','sent')) >= 20 then
+    raise exception 'too many queued commands'; end if;
+  insert into public.commands (device_id, created_by, cmd, args) values (p_device, (select auth.uid()), p_cmd, p_args)
+    returning id into cid;
+  update public.devices set remote_until = now() + interval '3 minutes' where id = p_device;
+  return cid;
+end $$;
+
+create or replace function public.remote_touch(p_device uuid)
+returns void language sql security definer set search_path = public as $$
+  update public.devices set remote_until = now() + interval '3 minutes'
+   where id = p_device and owner = (select auth.uid());
+$$;
+
+create or replace function public.ingest2(p_token text, p_pair text, p_data jsonb, p_acks jsonb default '[]'::jsonb)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare st text; did uuid; fast boolean; out_cmds jsonb; a jsonb;
+begin
+  if p_data is not null and length(p_data::text) > 12000 then raise exception 'bad data'; end if;
+  st := public.ingest(p_token, p_pair, p_data - 'devs' - 'wscan' - 'jk' - 'cfg');
+  select id, coalesce(remote_until > now(), false) into did, fast
+    from public.devices where token_hash = encode(digest(p_token, 'sha256'), 'hex');
+  update public.latest set data = p_data where device_id = did;
+  if p_acks is not null and jsonb_typeof(p_acks) = 'array' then
+    for a in select * from jsonb_array_elements(p_acks) loop
+      update public.commands
+         set status = case when coalesce((a->>'ok')::boolean, false) then 'done' else 'error' end,
+             result = left(a->>'msg', 200), done_at = now()
+       where id = (a->>'id')::bigint and device_id = did and status in ('pending','sent');
+    end loop;
+  end if;
+  update public.commands set status = 'expired'
+   where device_id = did and status = 'pending' and created_at < now() - interval '5 minutes';
+  update public.commands set status = 'error', result = 'no reply from board'
+   where device_id = did and status = 'sent' and sent_at < now() - interval '2 minutes';
+  if st = 'unpaired' then return jsonb_build_object('status', st, 'fast', false, 'cmds', '[]'::jsonb); end if;
+  with picked as (
+    update public.commands c set status = 'sent', sent_at = now()
+     where c.id in (select id from public.commands where device_id = did and status = 'pending' order by id limit 6)
+     returning c.id, c.cmd, c.args)
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'cmd', cmd, 'args', args) order by id), '[]'::jsonb)
+    into out_cmds from picked;
+  return jsonb_build_object('status', st, 'fast', fast, 'cmds', out_cmds);
+end $$;
+revoke all on function public.send_command(uuid, text, jsonb) from public;
+grant execute on function public.send_command(uuid, text, jsonb) to authenticated;
+revoke all on function public.remote_touch(uuid) from public;
+grant execute on function public.remote_touch(uuid) to authenticated;
+revoke all on function public.ingest2(text, text, jsonb, jsonb) from public;
+grant execute on function public.ingest2(text, text, jsonb, jsonb) to anon, authenticated;
