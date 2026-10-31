@@ -14,11 +14,28 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.8.1-cyd35"
+#define BATTLAB_FW "1.8.2-cyd35"
 #else
-#define BATTLAB_FW "1.8.1-s3"
+#define BATTLAB_FW "1.8.2-s3"
 #endif
 WebServer web(80);
+// Why the chip restarted last time (shown on screen / API to diagnose resets).
+static const char *resetReasonText = "unknown";
+static bool resetAbnormal = false;
+static void readResetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: resetReasonText = "power on"; break;
+    case ESP_RST_SW: resetReasonText = "software restart"; break;
+    case ESP_RST_PANIC: resetReasonText = "CRASH (panic)"; resetAbnormal = true; break;
+    case ESP_RST_INT_WDT: resetReasonText = "CRASH (interrupt watchdog)"; resetAbnormal = true; break;
+    case ESP_RST_TASK_WDT: resetReasonText = "CRASH (task watchdog)"; resetAbnormal = true; break;
+    case ESP_RST_WDT: resetReasonText = "CRASH (watchdog)"; resetAbnormal = true; break;
+    case ESP_RST_BROWNOUT: resetReasonText = "BROWNOUT (power too weak)"; resetAbnormal = true; break;
+    case ESP_RST_EXT: resetReasonText = "reset button"; break;
+    case ESP_RST_DEEPSLEEP: resetReasonText = "wake from sleep"; break;
+    default: resetReasonText = "other"; break;
+  }
+}
 Preferences prefs;
 SemaphoreHandle_t lock;
 struct Config {
@@ -154,6 +171,9 @@ void stateApi() {
     }
   }
   d["heap"] = ESP.getFreeHeap();
+  d["heap_min"] = ESP.getMinFreeHeap();
+  d["heap_max_block"] = ESP.getMaxAllocHeap();
+  d["reset_reason"] = resetReasonText;
   d["uptime_ms"] = millis();
   d["firmware"] = BATTLAB_FW;
   json(200, d);
@@ -173,6 +193,11 @@ String asciiField(const uint8_t *b, size_t n) {
   return s;
 }
 void bleWorker(void *) {
+#ifdef BATTLAB_CYD35
+  // Start the Bluetooth radio after Wi-Fi and the boot splash have settled,
+  // so both radios never ramp up at the same moment (current spike).
+  vTaskDelay(pdMS_TO_TICKS(5500));
+#endif
   NimBLEDevice::init("BATTLAB-JK");
   NimBLEDevice::setMTU(247);
   auto scan = NimBLEDevice::getScan();
@@ -1052,6 +1077,9 @@ static void wifiStartAp() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   WiFi.softAP("BATTLAB-JK");
+#ifdef BATTLAB_CYD35
+  WiFi.setTxPower(WIFI_POWER_8_5dBm); // lower peak current, still fine nearby
+#endif
 }
 bool wifiEnabled() { return wifiOn; }
 void wifiSetEnabled(bool on) {
@@ -1167,12 +1195,18 @@ void takeDisplaySnapshot(DisplaySnap &o) {
     o.connAuth = shared.connectionAuth;
   }
   o.wifiOn = wifiOn;
+  o.resetReason = resetReasonText;
+  o.resetAbnormal = resetAbnormal;
+  o.freeHeap = ESP.getFreeHeap();
+  o.minHeap = ESP.getMinFreeHeap();
+  o.maxBlock = ESP.getMaxAllocHeap();
   o.firmware = BATTLAB_FW;
   o.uptimeMs = millis();
   o.stations = WiFi.softAPgetStationNum();
 }
 void setup() {
   Serial.begin(115200);
+  readResetReason();
   lock = xSemaphoreCreateMutex();
   prefs.begin("battlab-jk", false);
   cfg.mac = prefs.getString("mac", "");
@@ -1188,6 +1222,7 @@ void setup() {
     apStarted = true;
   } else
     WiFi.mode(WIFI_OFF);
+  Serial.printf("\nLast reset: %s\n", resetReasonText);
   Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);

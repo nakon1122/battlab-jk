@@ -217,7 +217,7 @@ static void beep(int times) {
 // ------------------------------------------------------- header + tabs ----
 static void header(const DisplaySnap &d) {
   LGFX_Sprite s(&tft);
-  s.setColorDepth(16);
+  s.setColorDepth(8);
   if (!s.createSprite(480, 40)) return;
   s.fillSprite(C_BG);
   s.setFont(&fonts::FreeSansBold12pt7b);
@@ -344,7 +344,7 @@ static void home(const DisplaySnap &d, bool force) {
   tile(x0, 166, w, h, "TEMP", ok ? fmt(s.temp1, 0) : "--", "C", C_WARN);
   tile(x1, 166, w, h, "MOS", ok ? fmt(s.mos, 0) : "--", "C", C_WARN);
   LGFX_Sprite b(&tft);
-  b.setColorDepth(16);
+  b.setColorDepth(8);
   if (!b.createSprite(462, 46)) return;
   b.fillSprite(C_BG);
   b.fillRoundRect(0, 0, 462, 46, 10, C_CARD);
@@ -425,7 +425,7 @@ static void cells(const DisplaySnap &d, bool) {
   }
   c.deleteSprite();
   LGFX_Sprite b(&tft);
-  b.setColorDepth(16);
+  b.setColorDepth(8);
   int sh = dense ? 24 : 42, sy = dense ? 252 : 230;
   if (!b.createSprite(462, sh)) return;
   b.fillSprite(C_BG);
@@ -728,7 +728,7 @@ static void setupTouch(const DisplaySnap &d, int x, int y) {
 // --------------------------------------------------------------- INFO ----
 static void infoRow(int y, const char *k, const String &v) {
   LGFX_Sprite s(&tft);
-  s.setColorDepth(16);
+  s.setColorDepth(8);
   if (!s.createSprite(462, 27)) return;
   s.fillSprite(C_BG);
   s.setFont(&fonts::FreeSans9pt7b);
@@ -747,9 +747,10 @@ static void info(const DisplaySnap &d, bool) {
   infoRow(y, "Model", d.model.length() ? d.model : String("-")); y += 29;
   infoRow(y, "Bluetooth", (d.mac.length() ? d.mac : String(d.automatic ? "auto find" : "none")) +
                               "  " + d.protocol); y += 29;
-  infoRow(y, "State", d.state); y += 29;
+  infoRow(y, "State", d.state + "   rx " + d.rxBytes + " B, " + d.good + " frames"); y += 29;
   infoRow(y, "Probe", d.probe); y += 29;
-  infoRow(y, "Received", String(d.rxBytes) + " B, " + d.good + " frames"); y += 29;
+  infoRow(y, "Last reset", String(d.resetReason) + "   RAM " + (d.freeHeap / 1024) +
+                               "k free, min " + (d.minHeap / 1024) + "k"); y += 29;
   infoRow(y, "Wi-Fi", d.wifiOn ? String("BATTLAB-JK  192.168.4.1  (") + d.stations + ")"
                                : String("off")); y += 29;
   infoRow(y, "Firmware", d.firmware + "   up " + String(d.uptimeMs / 60000) + " min");
@@ -798,6 +799,10 @@ static void splash() {
   DisplaySnap d;
   takeDisplaySnapshot(d);
   tft.drawString(String("Battery Studio  v") + d.firmware, 240, 290);
+  if (d.resetAbnormal) {
+    tft.setTextColor(C_BAD, TFT_BLACK);
+    tft.drawString(String("Last restart: ") + d.resetReason, 240, 242);
+  }
   uint32_t t0 = millis();
   int drawn = 0;
   for (;;) {

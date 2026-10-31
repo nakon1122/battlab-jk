@@ -13,6 +13,9 @@ struct DisplaySnap {
   int stations = 0;
   String devices = "[]", protocol, connAuth; // last scan result (JSON)
   bool automatic = false, wifiOn = true;
+  const char *resetReason = "";
+  bool resetAbnormal = false;
+  uint32_t freeHeap = 0, minHeap = 0, maxBlock = 0;
 };
 
 // Actions shared by the web API and the on-screen UI (main.cpp).
