@@ -7,19 +7,25 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
-src = Path(sys.argv[1] if len(sys.argv) > 1 else '/etc/ssl/certs/ca-certificates.crt').read_bytes()
-certs = x509.load_pem_x509_certificates(src)
+root = Path(__file__).resolve().parents[1]
+# current Mozilla roots + legacy roots still used for cross-signing (see
+# assets/legacy_roots.pem): Arduino's bundle verifier needs the issuer of the
+# top certificate the server sends, which may be an old cross-signing root.
+sources = [Path(sys.argv[1] if len(sys.argv) > 1 else '/etc/ssl/certs/ca-certificates.crt'),
+           root / 'assets/legacy_roots.pem']
+certs = []
+for src in sources:
+    certs += x509.load_pem_x509_certificates(src.read_bytes())
 entries = {}
 for c in certs:
     name = c.subject.public_bytes()
     key = c.public_key().public_bytes(serialization.Encoding.DER,
                                       serialization.PublicFormat.SubjectPublicKeyInfo)
-    entries[name] = key  # de-duplicate by subject
+    entries.setdefault(name, key)  # first (current store) wins
 items = sorted(entries.items(), key=lambda kv: kv[0])
 out = bytearray(struct.pack('>H', len(items)))
 for name, key in items:
     out += struct.pack('>HH', len(name), len(key)) + name + key
-root = Path(__file__).resolve().parents[1]
 lines = [', '.join(f'0x{b:02x}' for b in out[i:i + 20]) + ',' for i in range(0, len(out), 20)]
 (root / 'include/cloud_ca_bundle.h').write_text(
     '#pragma once\n#include <stdint.h>\n'

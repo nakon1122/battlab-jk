@@ -44,7 +44,9 @@ jobs:
           python -m esptool --chip esp32 merge_bin -o out/BATTLAB_CYD35_INSTALL.bin \
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 $CY/bootloader.bin 0x8000 $CY/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $CY/firmware.bin
-          tail -c 0 out/build.log
+          # app-only images: update without erasing settings (Wi-Fi, pair code, calibration)
+          cp $S3/firmware.bin out/BATTLAB_S3_APP_UPDATE.bin
+          cp $CY/firmware.bin out/BATTLAB_CYD35_APP_UPDATE.bin
           grep -E "RAM:|Flash:" out/build.log > out/SIZES.txt || true
           (cd out && sha256sum *.bin > SHA256SUMS.txt)
       - name: Publish binaries to firmware-build branch

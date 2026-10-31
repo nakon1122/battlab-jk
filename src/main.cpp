@@ -20,9 +20,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.0.1-cyd35"
+#define BATTLAB_FW "2.0.2-cyd35"
 #else
-#define BATTLAB_FW "2.0.1-s3"
+#define BATTLAB_FW "2.0.2-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
