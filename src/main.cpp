@@ -14,15 +14,16 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <vector>
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.0.3-cyd35"
+#define BATTLAB_FW "2.1.0-cyd35"
 #else
-#define BATTLAB_FW "2.0.3-s3"
+#define BATTLAB_FW "2.1.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -72,6 +73,7 @@ struct Shared {
   String lastWrite;         // result of the last BMS write, for the UI
   bool probeLogFrozen = false;
   String state = "UNCONFIGURED", devices = "[]";
+  uint32_t devStamp = 0;    // when the last BLE scan finished
 } shared;
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
@@ -553,6 +555,7 @@ void bleWorker(void *) {
       {
         Guard g;
         shared.devices = s;
+        shared.devStamp = millis() | 1;
         shared.scanning = false;
         if (generation == seen && autoScan) {
           if (candidates == 1) {
@@ -1382,6 +1385,69 @@ NetInfo netInfo() {
   return n;
 }
 
+// ---- Remote control from the BattLab Cloud website ---------------------
+// The website queues commands in the database; ingest2() hands them to the
+// board in the reply to its regular upload, and the board reports results
+// (acks) with the next upload. While someone has the control page open the
+// server sets "fast" and the board uploads every few seconds.
+struct CloudAck { long id; bool ok; String msg; };
+static std::vector<CloudAck> cloudAcks;
+static bool wscanWanted = false, restartAfterSend = false;
+static bool apChangeWanted = false, apChangeTo = true;
+static String wifiNewSsid, wifiNewPass, wifiOldSsid, wifiOldPass, cloudNote;
+static bool wifiChangeWanted = false;
+static uint32_t wifiRevertAt = 0;
+
+static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
+  ok = true;
+  if (c == "ping") return "pong";
+  if (c == "led") {
+    LedCfg l = ledGet();
+    if (a.containsKey("on")) l.on = a["on"].as<bool>();
+    if (a.containsKey("mode")) { int m = a["mode"]; if (m < 0 || m >= LED_MODES) { ok = false; return "bad mode"; } l.mode = m; }
+    if (a.containsKey("color")) { int k = a["color"]; if (k < 0 || k >= LED_COLORS) { ok = false; return "bad color"; } l.color = k; }
+    if (a.containsKey("level")) { int v = a["level"]; if (v < 1 || v > 4) { ok = false; return "bad level"; } l.level = v; }
+    ledSet(l);
+    return "ok";
+  }
+  if (c == "bms_scan") { bmsScan(); return "scanning"; }
+  if (c == "bms_auto") { bmsAuto(); return "auto connect"; }
+  if (c == "bms_disconnect") { bmsDisconnect(); return "disconnected"; }
+  if (c == "bms_connect") {
+    String mac = a["mac"] | "", p = a["protocol"] | "AUTO";
+    int t = a["type"] | 0;
+    if (t < 0 || t > 1 || !bmsConnect(mac, uint8_t(t), p)) { ok = false; return "invalid MAC or protocol"; }
+    return "connecting";
+  }
+  if (c == "bms_param") {
+    if (!a["index"].is<int>() || !(a["value"].is<float>() || a["value"].is<int>())) { ok = false; return "index and value required"; }
+    if (const char *e = bmsWriteParam(a["index"].as<int>(), a["value"].as<float>())) { ok = false; return e; }
+    return "sent to BMS";
+  }
+  if (c == "bms_switch") {
+    if (!a["which"].is<int>() || !a["on"].is<bool>()) { ok = false; return "which and on required"; }
+    if (const char *e = bmsSetSwitch(a["which"].as<int>(), a["on"].as<bool>())) { ok = false; return e; }
+    return "sent to BMS";
+  }
+  if (c == "bms_read") { Guard g; readWanted = true; return "reading"; }
+  if (c == "radio_max") { radioSetMaxPower(a["on"] | true); return radioMax ? "TX max" : "TX low"; }
+  if (c == "wifi_scan") { netScanStart(); wscanWanted = true; return "scanning Wi-Fi"; }
+  if (c == "wifi_ap") { apChangeWanted = true; apChangeTo = a["on"] | true; return apChangeTo ? "hotspot on" : "hotspot off"; }
+  if (c == "home_wifi") {
+    String ss = a["ssid"] | "", pw = a["pass"] | "";
+    if (!ss.length() || ss.length() > 32 || pw.length() > 64) { ok = false; return "SSID 1-32, password up to 64"; }
+    wifiNewSsid = ss; wifiNewPass = pw; wifiChangeWanted = true;
+    return "switching Wi-Fi (goes back to the old one if it fails)";
+  }
+  if (c == "display") {
+    if (const char *e = displayCfgSet(a)) { ok = false; return e; }
+    return "ok";
+  }
+  if (c == "restart") { restartAfterSend = true; return "restarting"; }
+  ok = false;
+  return "unknown command";
+}
+
 static void cloudTask(void *) {
   WiFiClientSecure tls;
   // Full Mozilla root store, looked up by issuer: works whichever CA the
@@ -1389,46 +1455,87 @@ static void cloudTask(void *) {
   tls.setCACertBundle(CLOUD_CA_BUNDLE);
   tls.setTimeout(10);
   HTTPClient http;
-  // A new TLS session per upload: its ~40 KB are returned to the heap between
-  // uploads instead of being held (and re-allocated into a fragmented heap
-  // whenever the server drops an idle keep-alive connection).
+#ifdef BATTLAB_DISPLAY
+  // CYD: a new TLS session per upload, so its ~40 KB go back to the heap
+  // between uploads (the screen needs them).
   http.setReuse(false);
-  uint32_t lastSend = 0, retryAt = 0;
+  const uint32_t FAST_MS = 5000;
+  const size_t DOC = 6144;
+#else
+  http.setReuse(true); // S3 has RAM to keep the connection open
+  const uint32_t FAST_MS = 2500;
+  const size_t DOC = 8192;
+#endif
+  uint32_t nextAt = 0;
+  bool fast = false;
   auto setStatus = [](const String &s) { Guard g; cloudStatus = s; };
   auto ram = []() {
     return String((unsigned)(ESP.getFreeHeap() / 1024)) + "/" +
            (unsigned)(ESP.getMaxAllocHeap() / 1024) + "k";
   };
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(250));
+    // a home Wi-Fi change made from the website: keep it only if it connects
+    if (wifiRevertAt) {
+      if (WiFi.status() == WL_CONNECTED) {
+        wifiRevertAt = 0;
+        cloudNote = String("Wi-Fi changed to ") + staSsid;
+      } else if (int32_t(millis() - wifiRevertAt) > 0) {
+        wifiRevertAt = 0;
+        cloudNote = String("could not join ") + staSsid + ", back to " + wifiOldSsid;
+        netSetHomeWifi(wifiOldSsid, wifiOldPass);
+      }
+    }
     if (!strlen(CLOUD_URL)) { setStatus("not set up"); continue; }
     if (!staSsid.length()) { setStatus("no home Wi-Fi"); continue; }
     if (WiFi.status() != WL_CONNECTED) { setStatus("Wi-Fi connecting"); continue; }
-    bool live;
+    if (nextAt && int32_t(millis() - nextAt) < 0) continue;
+    bool live, paired;
     {
       Guard g;
       live = shared.linked && shared.have && uint32_t(millis() - shared.stamp) < 15000;
-    }
-    bool paired;
-    {
-      Guard g;
       paired = cloudPaired;
     }
-    // heartbeat when no BMS data; a bit faster until the device is added
-    uint32_t every = live ? 10000 : (paired ? 60000 : 20000);
-    if (retryAt) {
-      if (int32_t(millis() - retryAt) < 0) continue;
-    } else if (lastSend && millis() - lastSend < every) {
-      continue;
-    }
-    lastSend = millis();
-    retryAt = 0;
+    uint32_t every = fast && paired ? FAST_MS : live ? 10000 : (paired ? 60000 : 20000);
     String json;
+    bool sentWscan = false;
     {
-      DynamicJsonDocument body(3072);
+      DynamicJsonDocument body(DOC);
       body["p_token"] = devToken;
       body["p_pair"] = pairCode;
+      auto acks = body.createNestedArray("p_acks");
+      for (auto &k : cloudAcks) {
+        auto o = acks.createNestedObject();
+        o["id"] = k.id;
+        o["ok"] = k.ok;
+        o["msg"] = k.msg;
+      }
       auto d = body.createNestedObject("p_data");
+      LedCfg led = ledGet();
+      String devs, wscan;
+      if (wscanWanted) {
+        wscan = netScanJson();
+        if (wscan.length()) { d["wscan"] = serialized(wscan); sentWscan = true; }
+      }
+      auto c = d.createNestedObject("cfg");
+#ifdef BATTLAB_DISPLAY
+      c["board"] = "cyd35";
+      displayCfgGet(c.createNestedObject("disp"));
+#else
+      c["board"] = "s3";
+#endif
+      c["remote"] = 1;
+      auto lo = c.createNestedObject("led");
+      lo["on"] = led.on;
+      lo["mode"] = led.mode;
+      lo["color"] = led.color;
+      lo["level"] = led.level;
+      c["ap"] = wifiOn;
+      c["tx"] = radioMax;
+      c["ssid"] = staSsid;
+      c["ip"] = WiFi.localIP().toString();
+      c["wrssi"] = WiFi.RSSI();
+      if (cloudNote.length()) c["note"] = cloudNote;
       Guard g;
       d["fw"] = BATTLAB_FW;
       d["state"] = shared.state;
@@ -1438,6 +1545,24 @@ static void cloudTask(void *) {
       d["up"] = millis() / 1000;
       d["heap"] = ESP.getFreeHeap();
       d["blk"] = ESP.getMaxAllocHeap();
+      c["mac"] = cfg.mac;
+      c["proto"] = cfg.protocol;
+      c["auto"] = cfg.automatic;
+      c["atype"] = cfg.type;
+      c["fam"] = shared.family;
+      c["scanning"] = shared.scanning;
+      c["lw"] = shared.lastWrite;
+      if (shared.devStamp && uint32_t(millis() - shared.devStamp) < 120000) {
+        devs = shared.devices;
+        d["devs"] = serialized(devs);
+      }
+      if (shared.linked && shared.jk.valid && shared.family == 1) {
+        auto jo = d.createNestedObject("jk");
+        auto v = jo.createNestedArray("v");
+        for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) v.add(shared.jk.v[i]);
+        auto sw = jo.createNestedArray("sw");
+        for (int i = 0; i < bmsw::SW_COUNT; i++) sw.add(shared.jk.sw[i]);
+      }
       if (live) {
         const auto &s = shared.sample;
         d["v"] = s.voltage;
@@ -1452,10 +1577,10 @@ static void cloudTask(void *) {
         d["chg"] = s.charge;
         d["dsg"] = s.discharge;
         float mn = 9, mx = 0;
-        auto c = d.createNestedArray("cells");
+        auto cl = d.createNestedArray("cells");
         for (int k = 0; k < 32; k++)
           if (s.cells[k] > 0) {
-            c.add(roundf(s.cells[k] * 1000) / 1000);
+            cl.add(roundf(s.cells[k] * 1000) / 1000);
             mn = min(mn, s.cells[k]);
             mx = max(mx, s.cells[k]);
           }
@@ -1464,19 +1589,19 @@ static void cloudTask(void *) {
       serializeJson(body, json);
     }
     // Screen pauses its sprite drawing while the TLS session is open.
-    if (!gfxHold(3000)) { retryAt = millis() + 2000; continue; }
+    if (!gfxHold(3000)) { nextAt = millis() + 2000; continue; }
     if (ESP.getMaxAllocHeap() < 20000) {
       gfxRelease();
       setStatus(String("low RAM ") + ram() + " - retry");
       Serial.printf("[CLOUD] low RAM free %u block %u\n", (unsigned)ESP.getFreeHeap(),
                     (unsigned)ESP.getMaxAllocHeap());
-      retryAt = millis() + 15000;
+      nextAt = millis() + 15000;
       continue;
     }
-    setStatus(String("sending (RAM ") + ram() + ")");
+    if (!fast) setStatus(String("sending (RAM ") + ram() + ")");
     int code = -1;
     String resp;
-    if (http.begin(tls, String(CLOUD_URL) + "/rest/v1/rpc/ingest")) {
+    if (http.begin(tls, String(CLOUD_URL) + "/rest/v1/rpc/ingest2")) {
       http.addHeader("Content-Type", "application/json");
       http.addHeader("apikey", CLOUD_ANON_KEY);
       http.addHeader("Authorization", String("Bearer ") + CLOUD_ANON_KEY);
@@ -1484,25 +1609,71 @@ static void cloudTask(void *) {
       if (code > 0) resp = http.getString();
       http.end();
     }
+    json = String();
     char why[96] = {0};
     int e = code < 0 ? tls.lastError(why, sizeof why) : 0;
+#ifdef BATTLAB_DISPLAY
     tls.stop(); // free the TLS buffers before the screen draws again
+#else
+    if (code < 0) tls.stop();
+#endif
     gfxRelease();
-    Guard g;
-    if (code == 200) {
-      cloudSent++;
-      cloudOkAt = millis();
-      cloudPaired = resp.indexOf("unpaired") < 0;
-      cloudStatus = cloudPaired ? "online" : "online - add on website";
-    } else if (code < 0) {
-      cloudStatus = e ? String("TLS: ") + why : String("no connection (") + code + ")";
-      cloudStatus += String("  RAM ") + ram();
-      Serial.printf("[CLOUD] POST failed %d, tls %d %s, heap %u block %u\n", code, e, why,
-                    (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-      retryAt = millis() + 15000;
-    } else {
-      cloudStatus = String("server error ") + code;
-      Serial.printf("[CLOUD] %d %s\n", code, resp.c_str());
+    if (code != 200) {
+      Guard g;
+      if (code < 0) {
+        cloudStatus = e ? String("TLS: ") + why : String("no connection (") + code + ")";
+        cloudStatus += String("  RAM ") + ram();
+        Serial.printf("[CLOUD] POST failed %d, tls %d %s, heap %u block %u\n", code, e, why,
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+      } else {
+        cloudStatus = String("server error ") + code;
+        Serial.printf("[CLOUD] %d %s\n", code, resp.c_str());
+      }
+      nextAt = millis() + (fast ? 5000 : 15000);
+      continue;
+    }
+    // success: the acks we sent are delivered
+    cloudAcks.clear();
+    cloudNote = "";
+    if (sentWscan) wscanWanted = false;
+    DynamicJsonDocument r(4096);
+    bool gotCmds = false;
+    if (!deserializeJson(r, resp)) {
+      String st = r["status"] | "ok";
+      fast = r["fast"] | false;
+      {
+        Guard g;
+        cloudSent++;
+        cloudOkAt = millis();
+        cloudPaired = st != "unpaired";
+        cloudStatus = !cloudPaired ? "online - add on website" : fast ? "online - remote control" : "online";
+      }
+      for (JsonObjectConst cmd : r["cmds"].as<JsonArrayConst>()) {
+        bool ok;
+        String m = runCloudCmd(String((const char *)(cmd["cmd"] | "")), cmd["args"].as<JsonObjectConst>(), ok);
+        Serial.printf("[CLOUD] cmd %ld %s -> %s\n", (long)(cmd["id"] | 0L), (const char *)(cmd["cmd"] | ""), m.c_str());
+        cloudAcks.push_back({(long)(cmd["id"] | 0L), ok, m});
+        gotCmds = true;
+      }
+    }
+    nextAt = millis() + (gotCmds ? 700 : every);
+    // actions that cut the connection run after their ack is queued; the
+    // ack goes out with the next upload once the network is back
+    if (gotCmds) continue;
+    if (restartAfterSend) {
+      delay(300);
+      ESP.restart();
+    }
+    if (apChangeWanted) {
+      apChangeWanted = false;
+      wifiSetEnabled(apChangeTo);
+    }
+    if (wifiChangeWanted) {
+      wifiChangeWanted = false;
+      wifiOldSsid = staSsid;
+      wifiOldPass = staPass;
+      netSetHomeWifi(wifiNewSsid, wifiNewPass);
+      wifiRevertAt = millis() + 90000;
     }
   }
 }
@@ -1636,8 +1807,8 @@ void setup() {
   cfg.type = prefs.getUChar("type", 0);
 #ifdef BATTLAB_DISPLAY
   wifiOn = prefs.getBool("wifi", true); // can be switched off on the screen
-  radioMax = prefs.getBool("txmax", true);
 #endif
+  radioMax = prefs.getBool("txmax", true);
   netLoad();
   wifiApply();
   bool apStarted = wifiOn;

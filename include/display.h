@@ -2,6 +2,7 @@
 #include "jk_protocol.h"
 #include "bms_params.h"
 #include <Arduino.h>
+#include <ArduinoJson.h>
 
 // Snapshot of everything the on-board display shows. Filled by main.cpp
 // under its lock so the display task never touches shared state directly.
@@ -57,6 +58,9 @@ void takeDisplaySnapshot(DisplaySnap &out); // implemented in main.cpp
 void displayStart();                        // no-op on boards without display
 // Pause screen drawing (and its big sprite buffers) while TLS runs.
 bool gfxHold(uint32_t waitMs);
+// Screen settings for the cloud control page (no-op / error without a screen)
+void displayCfgGet(JsonObject o);
+const char *displayCfgSet(JsonObjectConst a);
 void gfxRelease();
 
 // RGB LED settings, shared by the web API, the on-screen controls and the

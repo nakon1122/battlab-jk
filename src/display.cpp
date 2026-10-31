@@ -8,6 +8,8 @@
 void displayStart() {}
 bool gfxHold(uint32_t) { return true; }
 void gfxRelease() {}
+void displayCfgGet(JsonObject) {}
+const char *displayCfgSet(JsonObjectConst) { return "this board has no screen"; }
 #else
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -135,6 +137,34 @@ static void dcfgSave() {
   p.putUChar("hitemp", dcfg.hiTemp);
   p.putBool("beep", dcfg.beep);
   p.end();
+}
+
+// Remote (cloud) access to the screen settings. Values are applied by the
+// display task (wantDispApply) so only that task touches the panel.
+static volatile bool wantDispApply = false;
+void displayCfgGet(JsonObject o) {
+  o["bl"] = dcfg.bl;
+  o["sleep"] = SLEEP_MIN[dcfg.sleep < 4 ? dcfg.sleep : 0];
+  o["lowsoc"] = dcfg.lowSoc;
+  o["hitemp"] = dcfg.hiTemp;
+  o["beep"] = dcfg.beep;
+  o["rot"] = dcfg.rot;
+}
+const char *displayCfgSet(JsonObjectConst a) {
+  DispCfg n = dcfg;
+  if (a.containsKey("bl")) { int v = a["bl"]; if (v < 1 || v > 5) return "brightness 1-5"; n.bl = v; }
+  if (a.containsKey("sleep")) {
+    int v = a["sleep"], k = -1;
+    for (int i = 0; i < 4; i++) if (SLEEP_MIN[i] == v) k = i;
+    if (k < 0) return "sleep 0/1/5/10 min";
+    n.sleep = k;
+  }
+  if (a.containsKey("lowsoc")) { int v = a["lowsoc"]; if (v < 0 || v > 50) return "low SOC 0-50"; n.lowSoc = v; }
+  if (a.containsKey("hitemp")) { int v = a["hitemp"]; if (v != 0 && (v < 30 || v > 90)) return "high temp 0 or 30-90"; n.hiTemp = v; }
+  if (a.containsKey("beep")) n.beep = a["beep"].as<bool>();
+  dcfg = n;
+  wantDispApply = true;
+  return nullptr;
 }
 
 // ------------------------------------------------------------ helpers ----
@@ -1332,6 +1362,12 @@ static void displayTask(void *) {
       }
       calibrate(); // touch mapping changes with rotation
       wantCalibrate = wantRotate = false;
+      drawnPage = -1;
+    }
+    if (wantDispApply) {
+      wantDispApply = false;
+      dcfgSave();
+      if (!asleep) applyBacklight();
       drawnPage = -1;
     }
     // screen sleep
