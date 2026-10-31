@@ -3,6 +3,7 @@
 #include "jk_auth.h"
 #include "ble_channels.h"
 #include "ui.h"
+#include "display.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
@@ -12,6 +13,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
+#ifdef BATTLAB_CYD35
+#define BATTLAB_FW "1.5.0-cyd35"
+#else
+#define BATTLAB_FW "1.5.0-s3"
+#endif
 WebServer web(80);
 Preferences prefs;
 SemaphoreHandle_t lock;
@@ -149,7 +155,7 @@ void stateApi() {
   }
   d["heap"] = ESP.getFreeHeap();
   d["uptime_ms"] = millis();
-  d["firmware"] = "1.4.0-multi-bms";
+  d["firmware"] = BATTLAB_FW;
   json(200, d);
 }
 bool validMac(String m) {
@@ -887,12 +893,32 @@ void bleWorker(void *) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
-// Onboard RGB LED (WS2812). DevKitC-1 v1.0 uses GPIO48, v1.1 uses GPIO38.
+// Onboard RGB LED. S3 DevKitC-1: WS2812 on GPIO48 (v1.1: GPIO38).
+// ESP32-3248S035: discrete RGB on GPIO4/16/17, active low.
 #ifndef BATTLAB_LED_PIN
 #define BATTLAB_LED_PIN 48
 #endif
+static void ledOut(uint8_t r, uint8_t g, uint8_t b) {
+#ifdef BATTLAB_CYD35
+  ledcWrite(0, 255 - r);
+  ledcWrite(1, 255 - g);
+  ledcWrite(2, 255 - b);
+#else
+  neopixelWrite(BATTLAB_LED_PIN, r, g, b);
+#endif
+}
 void ledTask(void *) {
-  const uint8_t maxLevel = 40; // keep it soft, the LED is very bright
+#ifdef BATTLAB_CYD35
+  const uint8_t pins[3] = {4, 16, 17};
+  for (int i = 0; i < 3; i++) {
+    ledcSetup(i, 5000, 8);
+    ledcAttachPin(pins[i], i);
+    ledcWrite(i, 255);
+  }
+  const uint8_t maxLevel = 90;
+#else
+  const uint8_t maxLevel = 40; // the WS2812 is very bright
+#endif
   float hue = 0;
   for (;;) {
     float h = hue / 60.f, x = 1.f - fabsf(fmodf(h, 2.f) - 1.f);
@@ -905,12 +931,33 @@ void ledTask(void *) {
       case 4: r = x; b = 1; break;
       default: r = 1; b = x; break;
     }
-    neopixelWrite(BATTLAB_LED_PIN, uint8_t(r * maxLevel),
-                  uint8_t(g * maxLevel), uint8_t(b * maxLevel));
+    ledOut(uint8_t(r * maxLevel), uint8_t(g * maxLevel), uint8_t(b * maxLevel));
     hue += 0.6f; // full colour circle in about 12 s
     if (hue >= 360.f) hue -= 360.f;
     vTaskDelay(pdMS_TO_TICKS(20));
   }
+}
+void takeDisplaySnapshot(DisplaySnap &o) {
+  {
+    Guard g;
+    o.state = shared.state;
+    o.detected = shared.detected;
+    o.model = shared.model;
+    o.mac = cfg.mac;
+    o.probe = shared.probe;
+    o.linked = shared.linked;
+    o.scanning = shared.scanning;
+    o.live = shared.linked && shared.have &&
+             uint32_t(millis() - shared.stamp) < 15000;
+    o.sample = shared.sample;
+    o.rssi = shared.rssi;
+    o.rxBytes = shared.rxBytes;
+    o.good = shared.good;
+    o.ageMs = shared.have ? uint32_t(millis() - shared.stamp) : 0;
+  }
+  o.firmware = BATTLAB_FW;
+  o.uptimeMs = millis();
+  o.stations = WiFi.softAPgetStationNum();
 }
 void setup() {
   Serial.begin(115200);
@@ -924,17 +971,38 @@ void setup() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("BATTLAB-JK");
-  Serial.printf("\nBATTLAB 1.4.0-multi-bms\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
          []() { web.send_P(200, "text/html; charset=utf-8", UI_HTML); });
   web.on("/api/state", HTTP_GET, stateApi);
+  web.on("/api/display", HTTP_GET, []() {
+    // Screen orientation / colour fixes for the on-board display, e.g.
+    // /api/display?rotation=3  or  ?invert=1  or  ?rgb=1 (reboots to apply)
+    if (web.args() && !localRequest()) return;
+    Preferences p;
+    p.begin("battlab-disp", false);
+    bool changed = false;
+    if (web.hasArg("rotation")) { p.putUChar("rot", web.arg("rotation").toInt() & 7); changed = true; }
+    if (web.hasArg("invert")) { p.putBool("inv", web.arg("invert").toInt() != 0); changed = true; }
+    if (web.hasArg("rgb")) { p.putBool("rgb", web.arg("rgb").toInt() != 0); changed = true; }
+    String out = String("{\"rotation\":") + p.getUChar("rot", 1) +
+                 ",\"invert\":" + (p.getBool("inv", false) ? "true" : "false") +
+                 ",\"rgb\":" + (p.getBool("rgb", false) ? "true" : "false") +
+                 ",\"rebooting\":" + (changed ? "true" : "false") + "}";
+    p.end();
+    web.send(200, "application/json", out);
+    if (changed) {
+      delay(300);
+      ESP.restart();
+    }
+  });
   web.on("/api/probe", HTTP_GET, []() {
     String s;
     {
       Guard g;
-      s = String("BATTLAB 1.4.0 probe log\nstate: ") + shared.probe +
+      s = String("BATTLAB " BATTLAB_FW " probe log\nstate: ") + shared.probe +
           "\ngatt: " + shared.gatt + "\n\n" + shared.probeLog;
     }
     web.sendHeader("Cache-Control", "no-store");
@@ -1079,6 +1147,7 @@ void setup() {
   web.begin();
   xTaskCreatePinnedToCore(bleWorker, "ble", 12288, nullptr, 1, nullptr, 0);
   xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
+  displayStart();
 }
 void loop() {
   web.handleClient();
