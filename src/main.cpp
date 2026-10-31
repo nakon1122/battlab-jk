@@ -22,6 +22,8 @@
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
+const char *bleTxText();
+static bool radioMax = true;
 static const char *resetReasonText = "unknown";
 static bool resetAbnormal = false;
 static void readResetReason() {
@@ -182,6 +184,8 @@ void stateApi() {
   d["heap_min"] = ESP.getMinFreeHeap();
   d["heap_max_block"] = ESP.getMaxAllocHeap();
   d["reset_reason"] = resetReasonText;
+  d["ble_tx"] = bleTxText();
+  d["radio_max"] = radioMax;
   d["uptime_ms"] = millis();
   d["firmware"] = BATTLAB_FW;
   json(200, d);
@@ -210,7 +214,7 @@ static const char *BLE_MAX_TEXT = "+20 dBm";
 static const esp_power_level_t BLE_MAX_LEVEL = ESP_PWR_LVL_P9;  // ESP32: +9 dBm
 static const char *BLE_MAX_TEXT = "+9 dBm";
 #endif
-static bool radioMax = true;
+// radioMax is declared near the top of the file (default: true)
 static volatile bool bleTxApplyWanted = false;
 bool radioMaxPower() { return radioMax; }
 const char *bleTxText() { return radioMax ? BLE_MAX_TEXT : "+3 dBm"; }
