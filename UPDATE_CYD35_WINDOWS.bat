@@ -11,7 +11,7 @@ if errorlevel 1 (
 )
 set /p BATT_COM=Enter display board COM port (e.g. COM6): 
 if not defined BATT_COM exit /b 1
-py -3.11 -m esptool --chip esp32 --port "%BATT_COM%" --baud 460800 write_flash 0x10000 firmware\BATTLAB_CYD35_APP_UPDATE.bin
+py -3.11 -m esptool --chip esp32 --port "%BATT_COM%" --baud 460800 write_flash 0x1000 firmware\CYD_BOOTLOADER.bin 0x8000 firmware\CYD_PARTITIONS.bin 0xe000 firmware\BOOT_APP0.bin 0x10000 firmware\BATTLAB_CYD35_APP_UPDATE.bin
 if errorlevel 1 goto failed
 echo SUCCESS. Settings were kept.
 pause

@@ -8,6 +8,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <esp_ota_ops.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -19,7 +21,7 @@
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
 
-#define BATTLAB_FW "2.3.0-cloudscreen"
+#define BATTLAB_FW "2.4.0-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -201,6 +203,13 @@ static std::vector<OutCmd> outQ;
 static String focusId, histWantId, netToast;
 static int histWantHours = 24;
 static bool fastWanted = false, histWanted = false, syncNow = false;
+static volatile int otaPct = -1;
+static bool checkUpdate = false;
+static int verNum(const char *v) { // "2.4.0-..." -> 20400
+  int a = 0, b = 0, c = 0;
+  sscanf(v, "%d.%d.%d", &a, &b, &c);
+  return a * 10000 + b * 100 + c;
+}
 
 // ------------------------------------------------------------ network ----
 static String staSsid, staPass, token, pairCode;
@@ -403,6 +412,30 @@ static void parseHist(JsonDocument &d, const String &id, int hours) {
   M.h = h;
 }
 
+static void runOta(WiFiClientSecure &tls, const String &url) {
+  if (!url.startsWith(String("https://") + CLOUD_SITE + "/fw/") || !url.endsWith(".bin")) {
+    Lock l;
+    netToast = "Update URL not allowed";
+    return;
+  }
+  otaPct = 0;
+  tls.stop();
+  httpUpdate.rebootOnUpdate(false);
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.onProgress([](int cur, int total) {
+    if (total > 0) otaPct = int(int64_t(cur) * 100 / total);
+  });
+  t_httpUpdate_return r = httpUpdate.update(tls, url);
+  if (r == HTTP_UPDATE_OK) {
+    otaPct = 100;
+    delay(800);
+    ESP.restart();
+  }
+  otaPct = -1;
+  Lock l;
+  netToast = "Update failed: " + httpUpdate.getLastErrorString();
+}
+
 static void netTask(void *) {
   WiFiClientSecure tls;
   tls.setCACertBundle(CLOUD_CA_BUNDLE);
@@ -432,6 +465,34 @@ static void netTask(void *) {
     vTaskDelay(pdMS_TO_TICKS(100));
     if (!staSsid.length()) { setStatus("set up Wi-Fi in SETUP"); continue; }
     if (WiFi.status() != WL_CONNECTED) { setStatus("Wi-Fi connecting"); continue; }
+    // 0. firmware update check (SETUP > PAIRING > CHECK UPDATE)
+    bool chk;
+    {
+      Lock l;
+      chk = checkUpdate;
+      checkUpdate = false;
+    }
+    if (chk) {
+      HTTPClient g;
+      String url, ver;
+      if (g.begin(tls, String("https://") + CLOUD_SITE + "/fw/manifest.json")) {
+        int code = g.GET();
+        if (code == 200) {
+          DynamicJsonDocument d(4096);
+          if (!deserializeJson(d, g.getString())) {
+            ver = d["boards"]["cloudscreen"]["version"] | "";
+            String rel = d["boards"]["cloudscreen"]["url"] | "";
+            if (rel.length()) url = String("https://") + CLOUD_SITE + "/" + rel;
+          }
+        }
+        g.end();
+      }
+      tls.stop();
+      if (!ver.length()) { Lock l; netToast = "Could not read the update list"; }
+      else if (verNum(ver.c_str()) <= verNum(BATTLAB_FW)) { Lock l; netToast = "Up to date (" + ver + ")"; }
+      else runOta(tls, url);
+      continue;
+    }
     // 1. commands typed on the screen
     OutCmd o;
     bool haveCmd = false;
@@ -492,8 +553,11 @@ static void netTask(void *) {
     String r = post("viewer_sync", body, code);
     if (code == 200) {
       DynamicJsonDocument d(32768);
-      if (!deserializeJson(d, r)) parseSync(d);
-      else setStatus("bad reply");
+      if (!deserializeJson(d, r)) {
+        parseSync(d);
+        String ota = d["ota"] | "";
+        if (ota.length()) { runOta(tls, ota); continue; } // started from the website
+      } else setStatus("bad reply");
       next = millis() + (fast ? 2500 : 5000);
     } else {
       if (code > 0) setStatus(errText(r, code));
@@ -1563,6 +1627,7 @@ static void pairOverlayDraw(const Model &m, bool force) {
   ovKey = key;
   clearContent();
   button(W_BACK, "BACK", false);
+  button(U_CHECK, "UPDATE", false);
   tft.setFont(&fonts::FreeSans9pt7b);
   tft.setTextDatum(textdatum_t::top_left);
   tft.setTextColor(C_MUTED, C_BG);
@@ -1582,9 +1647,11 @@ static void pairOverlayDraw(const Model &m, bool force) {
                      (ESP.getFreeHeap() / 1024) + "k",
                  12, 232);
 }
+static const Btn U_CHECK = {302, 46, 84, 40};
 static bool overlayTouch(int x, int y) {
   if (overlay == OV_PAIR) {
     if (hit(W_BACK, x, y)) { overlay = OV_NONE; return true; }
+    if (hit(U_CHECK, x, y)) { Lock l; checkUpdate = true; netToast = "Checking for a new firmware..."; }
     return false;
   }
   if (overlay == OV_WIFI) {
@@ -1753,7 +1820,34 @@ static void uiTask(void *) {
     overlay = OV_WIFI;
     netScanStart();
   }
+  int otaShown = -2;
   for (;;) {
+    if (otaPct >= 0) {
+      int pct = otaPct;
+      if (otaShown == -2) {
+        tft.setBrightness(BL_LEVEL[dcfg.bl]);
+        tft.fillScreen(C_BG);
+        tft.setFont(&fonts::FreeSansBold12pt7b);
+        tft.setTextDatum(textdatum_t::middle_center);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString("Updating firmware", 240, 120);
+        tft.setFont(&fonts::FreeSans9pt7b);
+        tft.setTextColor(C_MUTED, C_BG);
+        tft.drawString("Do not switch off - restarts by itself", 240, 210);
+        tft.fillRoundRect(60, 156, 360, 18, 9, C_LINE);
+      }
+      if (pct != otaShown) {
+        otaShown = pct;
+        if (pct > 0) tft.fillRoundRect(60, 156, 360 * pct / 100, 18, 9, C_ACCENT);
+        tft.fillRect(200, 178, 80, 22, C_BG);
+        tft.setFont(&fonts::FreeSansBold9pt7b);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString(String(pct) + "%", 240, 189);
+      }
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+    if (otaShown != -2) { otaShown = -2; drawnPage = -1; }
     uint32_t now = millis();
     if (now - lastCopy > 250) {
       lastCopy = now;
@@ -1910,6 +2004,25 @@ static void uiTask(void *) {
 
 void setup() {
   Serial.begin(115200);
+  {
+    esp_reset_reason_t rr = esp_reset_reason();
+    bool crash = rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT;
+    Preferences b;
+    b.begin("battlab-boot", false);
+    uint8_t fails = crash ? b.getUChar("fails", 0) + 1 : 0;
+    b.putUChar("fails", fails);
+    b.end();
+    const esp_partition_t *other = esp_ota_get_next_update_partition(nullptr);
+    esp_app_desc_t desc;
+    if (fails >= 3 && other && esp_ota_get_partition_description(other, &desc) == ESP_OK &&
+        esp_ota_set_boot_partition(other) == ESP_OK) {
+      Preferences c;
+      c.begin("battlab-boot", false);
+      c.putUChar("fails", 0);
+      c.end();
+      ESP.restart();
+    }
+  }
   mx = xSemaphoreCreateMutex();
   dcfgLoad();
   netLoad();
@@ -1938,4 +2051,14 @@ void setup() {
   xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, nullptr, 0);
   xTaskCreatePinnedToCore(uiTask, "ui", 12288, nullptr, 1, nullptr, 1);
 }
-void loop() { vTaskDelay(pdMS_TO_TICKS(1000)); }
+void loop() {
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  static bool bootOk = false;
+  if (!bootOk && millis() > 60000) {
+    bootOk = true;
+    Preferences b;
+    b.begin("battlab-boot", false);
+    b.putUChar("fails", 0);
+    b.end();
+  }
+}

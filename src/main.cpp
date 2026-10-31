@@ -14,6 +14,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <esp_ota_ops.h>
 #include <vector>
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
@@ -21,9 +23,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.3.0-cyd35"
+#define BATTLAB_FW "2.4.0-cyd35"
 #else
-#define BATTLAB_FW "2.3.0-s3"
+#define BATTLAB_FW "2.4.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -78,6 +80,9 @@ struct Shared {
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
 bool persistWanted = false;
+static volatile bool otaBusy = false; // firmware update running: Bluetooth stays idle
+static volatile int otaPct = -1;
+int otaProgress() { return otaPct; }
 static String devName = "BATTLAB"; // BATTLAB-XXXX: hotspot + Bluetooth name, unique per board
 void bleSetupStart();               // Bluetooth setup service (defined below)
 class Guard {
@@ -466,6 +471,11 @@ void bleWorker(void *) {
       dropped++;
   };
   for (;;) {
+    if (otaBusy) { // free the radio and RAM for the firmware download
+      if (client->isConnected()) client->disconnect();
+      vTaskDelay(pdMS_TO_TICKS(300));
+      continue;
+    }
     if (bleTxApplyWanted) {
       bleTxApplyWanted = false;
       applyBleTxPower();
@@ -1400,6 +1410,8 @@ static bool wscanWanted = false, restartAfterSend = false;
 static bool apChangeWanted = false, apChangeTo = true;
 static String wifiNewSsid, wifiNewPass, wifiOldSsid, wifiOldPass, cloudNote;
 static bool wifiChangeWanted = false;
+static String otaUrl;
+static bool otaWanted = false;
 static uint32_t wifiRevertAt = 0;
 
 static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
@@ -1448,8 +1460,49 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     return "ok";
   }
   if (c == "restart") { restartAfterSend = true; return "restarting"; }
+  if (c == "ota") {
+    String url = a["url"] | "";
+    if (!url.startsWith(String("https://") + CLOUD_SITE + "/fw/") || !url.endsWith(".bin") || url.length() > 200) {
+      ok = false;
+      return "update URL not allowed";
+    }
+    otaUrl = url;
+    otaWanted = true;
+    return "update starting - board restarts when done";
+  }
   ok = false;
   return "unknown command";
+}
+
+// Download a new app image from the BattLab Cloud site into the other OTA
+// slot, then restart into it. Settings (NVS) are kept.
+static void runOta(WiFiClientSecure &tls) {
+  otaWanted = false;
+  otaBusy = true;
+  otaPct = 0;
+  { Guard g; cloudStatus = "updating firmware..."; }
+  Serial.printf("[OTA] %s\n", otaUrl.c_str());
+  vTaskDelay(pdMS_TO_TICKS(1500)); // Bluetooth link closes, RAM comes back
+  tls.stop();
+  httpUpdate.rebootOnUpdate(false);
+  httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  httpUpdate.onProgress([](int cur, int total) {
+    if (total > 0) otaPct = int(int64_t(cur) * 100 / total);
+  });
+  gfxHold(5000); // the screen draws only the progress bar meanwhile
+  t_httpUpdate_return r = httpUpdate.update(tls, otaUrl);
+  gfxRelease();
+  if (r == HTTP_UPDATE_OK) {
+    otaPct = 100;
+    Serial.println("[OTA] done, restarting");
+    delay(800);
+    ESP.restart();
+  }
+  cloudNote = "update failed: " + httpUpdate.getLastErrorString();
+  Serial.printf("[OTA] %s\n", cloudNote.c_str());
+  { Guard g; cloudStatus = cloudNote; }
+  otaPct = -1;
+  otaBusy = false;
 }
 
 static void cloudTask(void *) {
@@ -1493,6 +1546,7 @@ static void cloudTask(void *) {
     if (!strlen(CLOUD_URL)) { setStatus("not set up"); continue; }
     if (!staSsid.length()) { setStatus("no home Wi-Fi"); continue; }
     if (WiFi.status() != WL_CONNECTED) { setStatus("Wi-Fi connecting"); continue; }
+    if (otaWanted && cloudAcks.empty()) { runOta(tls); nextAt = 0; continue; }
     if (nextAt && int32_t(millis() - nextAt) < 0) continue;
     bool live, paired;
     {
@@ -1529,6 +1583,7 @@ static void cloudTask(void *) {
       c["board"] = "s3";
 #endif
       c["remote"] = 1;
+      c["ota"] = 1;
       auto lo = c.createNestedObject("led");
       lo["on"] = led.on;
       lo["mode"] = led.mode;
@@ -1769,6 +1824,7 @@ static void bleRefresh(bool slow) {
     c["board"] = "s3";
 #endif
     c["remote"] = 1;
+    c["ota"] = 1;
     auto lo = c.createNestedObject("led");
     lo["on"] = led.on;
     lo["mode"] = led.mode;
@@ -2030,6 +2086,29 @@ void setup() {
   Serial.begin(115200);
   readResetReason();
   {
+    // Safety net for cloud updates: three crash restarts in a row right
+    // after boot -> start the previous firmware from the other OTA slot.
+    Preferences b;
+    b.begin("battlab-boot", false);
+    uint8_t fails = resetAbnormal ? b.getUChar("fails", 0) + 1 : 0;
+    b.putUChar("fails", fails);
+    b.end();
+    if (fails >= 3) {
+      const esp_partition_t *other = esp_ota_get_next_update_partition(nullptr);
+      esp_app_desc_t desc;
+      if (other && esp_ota_get_partition_description(other, &desc) == ESP_OK &&
+          esp_ota_set_boot_partition(other) == ESP_OK) {
+        Preferences c;
+        c.begin("battlab-boot", false);
+        c.putUChar("fails", 0);
+        c.end();
+        Serial.println("Repeated crashes - starting the previous firmware");
+        delay(200);
+        ESP.restart();
+      }
+    }
+  }
+  {
     uint64_t mac = ESP.getEfuseMac();
     char nm[16];
     snprintf(nm, sizeof nm, "BATTLAB-%02X%02X", unsigned((mac >> 32) & 0xff), unsigned((mac >> 40) & 0xff));
@@ -2277,6 +2356,14 @@ void loop() {
   }
   ledPersist();
   bleSetupTick();
+  static bool bootOk = false;
+  if (!bootOk && millis() > 60000) {
+    bootOk = true;
+    Preferences b;
+    b.begin("battlab-boot", false);
+    b.putUChar("fails", 0);
+    b.end();
+  }
   if (persist) {
     prefs.putString("mac", saved.mac);
     prefs.putString("protocol", saved.protocol);

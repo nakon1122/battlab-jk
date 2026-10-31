@@ -57,6 +57,7 @@ void wifiSetEnabled(bool on);
 void takeDisplaySnapshot(DisplaySnap &out); // implemented in main.cpp
 void displayStart();                        // no-op on boards without display
 // Pause screen drawing (and its big sprite buffers) while TLS runs.
+int otaProgress(); // firmware update progress 0-100, -1 when idle
 bool gfxHold(uint32_t waitMs);
 // Screen settings for the cloud control page (no-op / error without a screen)
 void displayCfgGet(JsonObject o);

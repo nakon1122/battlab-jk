@@ -1442,7 +1442,35 @@ static void displayTask(void *) {
   uint32_t lastDraw = 0, lastTouch = 0, lastActivity = millis();
   bool wasDown = false, asleep = false, alarmWas = false;
   DisplaySnap d;
+  int otaShown = -2;
   for (;;) {
+    if (otaProgress() >= 0) { // firmware update: simple progress screen, no sprites
+      int &shown = otaShown;
+      int pct = otaProgress();
+      if (shown == -2) {
+        tft.setBrightness(BL_LEVEL[dcfg.bl]);
+        tft.fillScreen(C_BG);
+        tft.setFont(&fonts::FreeSansBold12pt7b);
+        tft.setTextDatum(textdatum_t::middle_center);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString("Updating firmware", 240, 120);
+        tft.setFont(&fonts::FreeSans9pt7b);
+        tft.setTextColor(C_MUTED, C_BG);
+        tft.drawString("Do not switch off - restarts by itself", 240, 210);
+        tft.fillRoundRect(60, 156, 360, 18, 9, C_LINE);
+      }
+      if (pct != shown) {
+        shown = pct;
+        if (pct > 0) tft.fillRoundRect(60, 156, 360 * pct / 100, 18, 9, C_ACCENT);
+        tft.fillRect(200, 178, 80, 22, C_BG);
+        tft.setFont(&fonts::FreeSansBold9pt7b);
+        tft.setTextColor(C_TEXT, C_BG);
+        tft.drawString(String(pct) + "%", 240, 189);
+      }
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+    if (otaShown != -2) { otaShown = -2; drawnPage = -1; } // update failed: back to the dashboard
     xSemaphoreTake(gfxMutex, portMAX_DELAY);
     uint32_t now = millis();
     lgfx::touch_point_t tp;

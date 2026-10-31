@@ -50,6 +50,12 @@ jobs:
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 $CL/bootloader.bin 0x8000 $CL/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $CL/firmware.bin
           cp $CL/firmware.bin out/BATTLAB_CLOUDSCREEN_APP_UPDATE.bin
+          # pieces for the UPDATE_*.bat scripts (keep settings, switch to the OTA partition table)
+          cp $S3/bootloader.bin out/S3_BOOTLOADER.bin
+          cp $S3/partitions.bin out/S3_PARTITIONS.bin
+          cp .pio/build/esp32-035/bootloader.bin out/CYD_BOOTLOADER.bin
+          cp .pio/build/esp32-035/partitions.bin out/CYD_PARTITIONS.bin
+          cp "$BOOT_APP0" out/BOOT_APP0.bin
           # app-only images: update without erasing settings (Wi-Fi, pair code, calibration)
           cp $S3/firmware.bin out/BATTLAB_S3_APP_UPDATE.bin
           cp $CY/firmware.bin out/BATTLAB_CYD35_APP_UPDATE.bin
