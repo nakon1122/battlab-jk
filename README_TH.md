@@ -1,7 +1,7 @@
 # BATTLAB 1.2 AUTH DEV • ESP32-S3
 
 รุ่นสำหรับบอร์ด S3-N16R8 ใช้ Flash 8MB แรก ไม่พึ่ง PSRAM
-Wi-Fi BATTLAB-JK ไม่มีรหัส เข้า http://192.168.4.1
+Wi-Fi BATTLAB ไม่มีรหัส เข้า http://192.168.4.1
 
 ## วิธีใช้รหัส
 เปิดเมนูเชื่อมต่อ JK ใส่รหัส Bluetooth ที่ใช้ในแอป JK ของ BMS ตัวนั้น

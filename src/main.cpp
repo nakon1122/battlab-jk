@@ -1,5 +1,6 @@
 #include "jk_protocol.h"
 #include "bms_other.h"
+#include "bms_params.h"
 #include "jk_auth.h"
 #include "ble_channels.h"
 #include "ui.h"
@@ -14,9 +15,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.8.3-cyd35"
+#define BATTLAB_FW "1.9.0-cyd35"
 #else
-#define BATTLAB_FW "1.8.3-s3"
+#define BATTLAB_FW "1.9.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -58,6 +59,10 @@ struct Shared {
   uint32_t rxBytes=0, rxChunks=0, txOk=0, txFail=0;
   bool writeWithResponse=false;
   String lastRxHex, gatt, probe = "idle", lastRxChar, probeLog;
+  bmsw::JkSettings jk;      // last JK settings frame (0x01)
+  uint32_t jkStamp = 0;
+  uint8_t family = 0;       // 0 unknown, 1 JK, 2 ANT, 3 JBD
+  String lastWrite;         // result of the last BMS write, for the UI
   bool probeLogFrozen = false;
   String state = "UNCONFIGURED", devices = "[]";
 } shared;
@@ -101,7 +106,9 @@ void stateApi() {
     d["ble_connected"] = shared.linked;
     d["connection_auth"] = shared.connectionAuth;
     d["parameter_auth"] = shared.parameterAuth;
-    d["parameter_write_supported"] = false;
+    d["parameter_write_supported"] = shared.family == 1 && shared.jk.valid;
+    d["bms_family"] = shared.family;
+    d["last_write"] = shared.lastWrite;
     d["write_handle"] = shared.writeHandle;
     d["notify_handle"] = shared.notifyHandle;
     d["ble_error"] = shared.bleError;
@@ -192,13 +199,50 @@ String asciiField(const uint8_t *b, size_t n) {
     s += b[i] >= 32 && b[i] < 127 ? char(b[i]) : '?';
   return s;
 }
+// ---- BMS write commands (queued by web/screen, executed by the BLE task) --
+struct BmsCmd {
+  bool isSwitch;
+  uint8_t idx;   // parameter index or switch index
+  float value;   // parameter value
+  bool on;       // switch state
+};
+static BmsCmd cmdQ[4];
+static uint8_t cmdN = 0;
+static const char *queueCmd(const BmsCmd &c) {
+  Guard g;
+  if (!shared.linked) return "BMS not connected";
+  if (cmdN >= 4) return "busy, try again";
+  cmdQ[cmdN++] = c;
+  return nullptr;
+}
+// Returns nullptr when queued, otherwise the reason it was refused.
+const char *bmsWriteParam(int idx, float value) {
+  {
+    Guard g;
+    if (shared.family != 1) return "parameter editing is JK only";
+    if (uint32_t(millis() - shared.jkStamp) > 600000 || !shared.jk.valid)
+      return "settings not read yet";
+    if (const char *e = bmsw::checkJkValue(shared.jk, idx, value)) return e;
+  }
+  return queueCmd({false, uint8_t(idx), value, false});
+}
+const char *bmsSetSwitch(int which, bool on) {
+  if (which < 0 || which >= bmsw::SW_COUNT) return "unknown switch";
+  {
+    Guard g;
+    if (!shared.family) return "BMS type not identified yet";
+    if (shared.family == 3 && which == bmsw::SW_BALANCER) return "not available on JBD";
+  }
+  return queueCmd({true, uint8_t(which), 0, on});
+}
+
 void bleWorker(void *) {
 #ifdef BATTLAB_CYD35
   // Start the Bluetooth radio after Wi-Fi and the boot splash have settled,
   // so both radios never ramp up at the same moment (current spike).
   vTaskDelay(pdMS_TO_TICKS(5500));
 #endif
-  NimBLEDevice::init("BATTLAB-JK");
+  NimBLEDevice::init("BATTLAB");
   NimBLEDevice::setMTU(247);
   auto scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
@@ -303,8 +347,14 @@ void bleWorker(void *) {
           shared.parameterAuth = "UNSUPPORTED_INFO";
         else shared.parameterAuth = jk::sameCode(c.parameterCode.c_str(), expectedParameter) ? "VERIFIED_READ_ONLY" : "WRONG_CODE";
       }
-    } else if (b[4] == 1 &&
-               (c.protocol != "AUTO" || shared.detected.length())) {
+    } else if (b[4] == 1) {
+      bmsw::JkSettings js;
+      if (bmsw::parseJkSettings(b, js)) {
+        shared.jk = js;
+        shared.jkStamp = millis();
+      }
+    }
+    if (b[4] == 1 && (c.protocol != "AUTO" || shared.detected.length())) {
       jk::Parameters p;
       if (jk::parameters(b, p)) {
         shared.params = p;
@@ -479,6 +529,11 @@ void bleWorker(void *) {
       // pointer we hold to them.
       lastRxFrom = nullptr;
       antCh = jbdCh = nullptr;
+      {
+        Guard g;
+        shared.family = 0;
+        cmdN = 0; // never replay a queued write onto a new connection
+      }
       steps.clear();
       probeStep = -1;
       if (ch)
@@ -718,6 +773,67 @@ void bleWorker(void *) {
           if (ok) shared.txOk++; else shared.txFail++;
           return ok;
         };
+        {
+          Guard g;
+          shared.family = fam;
+        }
+        BmsCmd cmd;
+        bool haveCmd = false;
+        {
+          Guard g;
+          if (cmdN) {
+            cmd = cmdQ[0];
+            memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1));
+            cmdN--;
+            haveCmd = true;
+          }
+        }
+        if (haveCmd) {
+          String result;
+          bool ok = false;
+          bool is32;
+          {
+            Guard g;
+            is32 = shared.detected == "JK02_32S" || c.protocol == "JK02_32S";
+          }
+          if (fam == 1 && ch) {
+            std::array<uint8_t, 20> f;
+            if (cmd.isSwitch) {
+              f = bmsw::jkWriteFrame(bmsw::JK_SW_REG[cmd.idx], cmd.on ? 1 : 0);
+              result = String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") +
+                       (cmd.on ? " ON" : " OFF");
+            } else {
+              const auto &p = bmsw::JK_PARAMS[cmd.idx];
+              f = bmsw::jkWriteFrame(is32 ? p.reg32 : p.reg24, bmsw::jkRaw(cmd.idx, cmd.value));
+              result = String(p.name) + " = " + String(cmd.value, int(p.decimals)) + " " + p.unit;
+            }
+            ok = ch->writeValue(f.data(), f.size(), withResp);
+            delay(250);
+            Guard g;
+            readWanted = true; // 0x96 makes the BMS resend its settings
+          } else if (fam == 2 && antCh && cmd.isSwitch) {
+            auto a = bmsw::antAuthFrame();
+            antCh->writeValue(a.data(), a.size(), !antCh->canWriteNoResponse());
+            delay(150);
+            auto f = bmsw::antWriteFrame(cmd.on ? bmsw::ANT_SW_ON[cmd.idx] : bmsw::ANT_SW_OFF[cmd.idx], 0);
+            ok = antCh->writeValue(f.data(), f.size(), !antCh->canWriteNoResponse());
+            result = String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") +
+                     (cmd.on ? " ON" : " OFF");
+          } else if (fam == 3 && cmd.isSwitch) {
+            bool chg = jbdSample.charge, dsg = jbdSample.discharge;
+            if (cmd.idx == 0) chg = cmd.on;
+            if (cmd.idx == 1) dsg = cmd.on;
+            auto f = bmsw::jbdMosFrame(chg, dsg);
+            NimBLERemoteCharacteristic *w = jbdCh ? jbdCh : ch;
+            if (w) ok = w->writeValue(f.data(), f.size(), !w->canWriteNoResponse());
+            result = String(cmd.idx == 0 ? "Charge" : "Discharge") + (cmd.on ? " ON" : " OFF");
+          } else {
+            result = "not supported for this BMS";
+          }
+          Serial.printf("[BMS] write %s -> %s\n", result.c_str(), ok ? "sent" : "FAILED");
+          Guard g;
+          shared.lastWrite = (ok ? "Sent: " : "Failed: ") + result;
+        }
         if (fam == 2 && t - lastOtherPoll > 2000) {
           writeRaw(antCh, bms::ANT_STATUS_REQUEST, sizeof(bms::ANT_STATUS_REQUEST), "ANT status");
           lastOtherPoll = t;
@@ -1093,7 +1209,7 @@ static void wifiStartAp() {
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
-  WiFi.softAP("BATTLAB-JK");
+  WiFi.softAP("BATTLAB");
 #ifdef BATTLAB_CYD35
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // lower peak current, still fine nearby
 #endif
@@ -1212,6 +1328,13 @@ void takeDisplaySnapshot(DisplaySnap &o) {
     o.connAuth = shared.connectionAuth;
   }
   o.wifiOn = wifiOn;
+  {
+    Guard g;
+    o.jk = shared.jk;
+    o.jkFresh = shared.jk.valid && uint32_t(millis() - shared.jkStamp) < 600000;
+    o.family = shared.family;
+    o.lastWrite = shared.lastWrite;
+  }
   o.resetReason = resetReasonText;
   o.resetAbnormal = resetAbnormal;
   o.freeHeap = ESP.getFreeHeap();
@@ -1240,12 +1363,52 @@ void setup() {
   } else
     WiFi.mode(WIFI_OFF);
   Serial.printf("\nLast reset: %s\n", resetReasonText);
-  Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
          []() { web.send_P(200, "text/html; charset=utf-8", UI_HTML); });
   web.on("/api/state", HTTP_GET, stateApi);
+  web.on("/api/bms/params", HTTP_GET, []() {
+    DynamicJsonDocument d(4096);
+    {
+      Guard g;
+      d["family"] = shared.family;
+      d["valid"] = shared.jk.valid;
+      d["last_write"] = shared.lastWrite;
+      auto a = d.createNestedArray("params");
+      for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) {
+        const auto &p = bmsw::JK_PARAMS[i];
+        auto o = a.createNestedObject();
+        o["index"] = i;
+        o["name"] = p.name;
+        o["unit"] = p.unit;
+        o["min"] = p.min;
+        o["max"] = p.max;
+        o["step"] = p.step;
+        if (shared.jk.valid) o["value"] = shared.jk.v[i];
+      }
+      auto sw = d.createNestedArray("switches");
+      for (int i = 0; i < bmsw::SW_COUNT; i++) sw.add(shared.jk.sw[i]);
+    }
+    json(200, d);
+  });
+  web.on("/api/bms/param", HTTP_POST, []() {
+    if (!localRequest()) return;
+    StaticJsonDocument<128> in;
+    if (web.arg("plain").length() > 128 || deserializeJson(in, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
+    if (!in["index"].is<int>() || !in["value"].is<float>()) { error(400, "index and value required"); return; }
+    if (const char *e = bmsWriteParam(in["index"].as<int>(), in["value"].as<float>())) { error(409, e); return; }
+    web.send(202, "application/json", "{\"queued\":true}");
+  });
+  web.on("/api/bms/switch", HTTP_POST, []() {
+    if (!localRequest()) return;
+    StaticJsonDocument<128> in;
+    if (web.arg("plain").length() > 128 || deserializeJson(in, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
+    if (!in["which"].is<int>() || !in["on"].is<bool>()) { error(400, "which and on required"); return; }
+    if (const char *e = bmsSetSwitch(in["which"].as<int>(), in["on"].as<bool>())) { error(409, e); return; }
+    web.send(202, "application/json", "{\"queued\":true}");
+  });
   web.on("/api/led", HTTP_GET, []() {
     DynamicJsonDocument d(1024);
     ledJson(d);

@@ -1,5 +1,6 @@
 #pragma once
 #include "jk_protocol.h"
+#include "bms_params.h"
 #include <Arduino.h>
 
 // Snapshot of everything the on-board display shows. Filled by main.cpp
@@ -16,7 +17,16 @@ struct DisplaySnap {
   const char *resetReason = "";
   bool resetAbnormal = false;
   uint32_t freeHeap = 0, minHeap = 0, maxBlock = 0;
+  bmsw::JkSettings jk;
+  bool jkFresh = false;
+  uint8_t family = 0; // 0 unknown, 1 JK, 2 ANT, 3 JBD
+  String lastWrite;
 };
+
+// BMS writes (validated, then queued to the Bluetooth task). Return nullptr
+// when accepted, otherwise a short reason.
+const char *bmsWriteParam(int idx, float value);
+const char *bmsSetSwitch(int which, bool on);
 
 // Actions shared by the web API and the on-screen UI (main.cpp).
 void bmsScan();

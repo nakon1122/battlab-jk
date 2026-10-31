@@ -14,7 +14,7 @@ if not defined BATT_COM exit /b 1
 py -3.11 -m esptool --chip esp32 --port "%BATT_COM%" --baud 460800 write_flash 0x0 firmware\BATTLAB_CYD35_INSTALL.bin
 if errorlevel 1 goto failed
 echo SUCCESS. The screen shows the dashboard after reset.
-echo Tap the screen to switch pages. Web: connect to Wi-Fi BATTLAB-JK, open http://192.168.4.1
+echo Use the tab bar at the bottom of the screen. Web: connect to Wi-Fi BATTLAB, open http://192.168.4.1
 pause
 exit /b 0
 :failed

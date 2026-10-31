@@ -93,9 +93,9 @@ static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_MUTED, C_ACCENT, C_GOOD, C_WARN,
     C_BAD, C_BLUE;
 
 // Screen layout: header 0..40, content 44..276, tab bar 278..320.
-static const int TAB_Y = 278, TAB_H = 42, TABS = 6;
-enum Page { P_HOME, P_CELLS, P_BMS, P_LED, P_SETUP, P_INFO };
-static const char *const TAB_NAMES[TABS] = {"HOME", "CELLS", "BMS",
+static const int TAB_Y = 278, TAB_H = 42, TABS = 7, TAB_W = 68;
+enum Page { P_HOME, P_CELLS, P_BMS, P_PARAM, P_LED, P_SETUP, P_INFO };
+static const char *const TAB_NAMES[TABS] = {"HOME", "CELLS", "BMS", "PARAM",
                                             "LED",  "SETUP", "INFO"};
 
 // --------------------------------------------------------- settings ----
@@ -220,22 +220,33 @@ static void header(const DisplaySnap &d) {
   s.setColorDepth(8);
   if (!s.createSprite(480, 40)) return;
   s.fillSprite(C_BG);
-  s.setFont(&fonts::FreeSansBold12pt7b);
-  s.setTextColor(C_ACCENT, C_BG);
+  // BattLab logo (same artwork as the boot splash), white on the header bg
+  {
+    static lgfx::rgb565_t line[LOGO_S_W];
+    uint8_t br = 11, bgc = 17, bb = 23; // C_BG components
+    for (int y = 0; y < LOGO_S_H; y++) {
+      const uint8_t *row = LOGO_S_GRAY + size_t(y) * LOGO_S_W;
+      for (int x = 0; x < LOGO_S_W; x++) {
+        uint8_t v = row[x];
+        line[x] = lgfx::rgb565_t(br + (255 - br) * v / 255, bgc + (255 - bgc) * v / 255,
+                                 bb + (255 - bb) * v / 255);
+      }
+      s.pushImage(8, 5 + y, LOGO_S_W, 1, line);
+    }
+  }
   s.setTextDatum(textdatum_t::middle_left);
-  s.drawString("BATTLAB", 12, 20);
   uint16_t dot = d.live ? C_GOOD : d.linked ? C_WARN : C_BAD;
-  s.fillCircle(150, 20, 6, dot);
+  s.fillCircle(124, 20, 6, dot);
   s.setFont(&fonts::FreeSans9pt7b);
   bool toastOn = millis() < toastUntil;
   if (toastOn) {
     s.setTextColor(C_TEXT, C_BG);
-    s.drawString(toast, 164, 21);
+    s.drawString(toast, 138, 21);
   } else {
     String st = stateLabel(d.state);
     if (d.detected.length() && d.live) st = d.detected + "  " + st;
     s.setTextColor(C_TEXT, C_BG);
-    s.drawString(st, 164, 21);
+    s.drawString(st, 138, 21);
   }
   if (alarmText.length()) {
     int w = s.textWidth(alarmText) + 24;
@@ -259,9 +270,10 @@ static void tabs(int page) {
   tft.setTextDatum(textdatum_t::middle_center);
   for (int i = 0; i < TABS; i++) {
     bool sel = i == page;
-    if (sel) tft.fillRect(i * 80 + 8, TAB_Y + 1, 64, 3, C_ACCENT);
+    if (sel) tft.fillRect(i * TAB_W + 6, TAB_Y + 1, TAB_W - 12, 3, C_ACCENT);
     tft.setTextColor(sel ? C_ACCENT : C_MUTED, C_CARD);
-    tft.drawString(TAB_NAMES[i], i * 80 + 40, TAB_Y + TAB_H / 2 + 2);
+    tft.drawString(TAB_NAMES[i], i * TAB_W + TAB_W / 2 + (i == TABS - 1 ? 2 : 0),
+                   TAB_Y + TAB_H / 2 + 2);
   }
 }
 
@@ -705,7 +717,7 @@ static void setupTouch(const DisplaySnap &d, int x, int y) {
   else if (hit(S_ROTATE, x, y)) { wantRotate = true; changed = false; }
   else if (hit(S_WIFI, x, y)) {
     wifiSetEnabled(!d.wifiOn);
-    showToast(d.wifiOn ? "Wi-Fi hotspot off" : "Wi-Fi BATTLAB-JK on");
+    showToast(d.wifiOn ? "Wi-Fi hotspot off" : "Wi-Fi BATTLAB on");
     changed = false;
   } else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
   else if (hit(S_SOC_MINUS, x, y)) dcfg.lowSoc = dcfg.lowSoc >= 5 ? dcfg.lowSoc - 5 : 0;
@@ -751,7 +763,7 @@ static void info(const DisplaySnap &d, bool) {
   infoRow(y, "Probe", d.probe); y += 29;
   infoRow(y, "Last reset", String(d.resetReason) + "   RAM " + (d.freeHeap / 1024) +
                                "k free, min " + (d.minHeap / 1024) + "k"); y += 29;
-  infoRow(y, "Wi-Fi", d.wifiOn ? String("BATTLAB-JK  192.168.4.1  (") + d.stations + ")"
+  infoRow(y, "Wi-Fi", d.wifiOn ? String("BATTLAB  192.168.4.1  (") + d.stations + ")"
                                : String("off")); y += 29;
   infoRow(y, "Firmware", d.firmware + "   up " + String(d.uptimeMs / 60000) + " min");
 }
@@ -776,6 +788,194 @@ static void calibrate() {
   tft.fillScreen(C_BG);
 }
 
+// -------------------------------------------------------------- PARAM ----
+// JK protection settings with -/+ and SET, plus MOSFET switches for every
+// BMS family. Every write goes through a confirmation dialog.
+static const int PARAM_ROWS = 5;
+static const int PARAM_PAGES = (bmsw::JK_PARAM_COUNT + PARAM_ROWS - 1) / PARAM_ROWS;
+static int paramPage = 0;
+static float pending[bmsw::JK_PARAM_COUNT];
+static bool pendingSet[bmsw::JK_PARAM_COUNT];
+static String paramKey, lastWriteShown;
+static Btn rowMinus(int i) { return {292, 46 + i * 39, 50, 35}; }
+static Btn rowPlus(int i) { return {348, 46 + i * 39, 50, 35}; }
+static Btn rowSet(int i) { return {404, 46 + i * 39, 70, 35}; }
+static Btn swBtn(int i) { return {12 + i * 102, 242, 96, 34}; }
+static const Btn P_PREV = {322, 242, 56, 34}, P_NEXT = {418, 242, 56, 34};
+static const char *const SW_NAMES[bmsw::SW_COUNT] = {"CHG", "DSG", "BAL"};
+
+// confirmation dialog
+struct Confirm {
+  bool active = false, isSwitch = false, on = false;
+  int idx = 0;
+  float value = 0;
+  String line1, line2;
+} confirmDlg;
+static const Btn C_CANCEL = {70, 196, 160, 46}, C_OK = {250, 196, 160, 46};
+static void drawConfirm() {
+  tft.fillRoundRect(40, 62, 400, 196, 14, C_CARD);
+  tft.drawRoundRect(40, 62, 400, 196, 14, C_WARN);
+  tft.setFont(&fonts::FreeSansBold12pt7b);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setTextColor(C_WARN, C_CARD);
+  tft.drawString("Write to BMS?", 240, 90);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextColor(C_TEXT, C_CARD);
+  tft.drawString(confirmDlg.line1, 240, 130);
+  tft.setTextColor(C_MUTED, C_CARD);
+  tft.drawString(confirmDlg.line2, 240, 160);
+  button(C_CANCEL, "CANCEL", false);
+  button(C_OK, "WRITE", true, C_WARN);
+}
+static bool switchState(const DisplaySnap &d, int i) {
+  if (d.family == 1) return d.jk.sw[i];
+  if (i == 0) return d.sample.charge;
+  if (i == 1) return d.sample.discharge;
+  return false;
+}
+static bool switchAvailable(const DisplaySnap &d, int i) {
+  if (!d.linked || !d.family) return false;
+  if (d.family == 1) return d.jkFresh;
+  return i < 2 && d.live; // ANT / JBD: charge + discharge from live data
+}
+static String fmtParam(int i, float v) {
+  const auto &p = bmsw::JK_PARAMS[i];
+  return fmt(v, p.decimals) + " " + p.unit;
+}
+static void paramPageDraw(const DisplaySnap &d, bool force) {
+  if (d.lastWrite.length() && d.lastWrite != lastWriteShown) {
+    lastWriteShown = d.lastWrite;
+    showToast(d.lastWrite, 4000);
+  }
+  bool jk = d.family == 1 && d.jkFresh;
+  String key = String(d.family) + (jk ? "J" : "-") + paramPage + (d.linked ? "L" : "-") +
+               (d.live ? "V" : "-");
+  for (int i = 0; i < bmsw::SW_COUNT; i++) key += switchState(d, i) ? '1' : '0';
+  if (jk)
+    for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++)
+      key += fmt(d.jk.v[i], 3) + (pendingSet[i] ? fmt(pending[i], 3) : String("-"));
+  if (!force && key == paramKey) return;
+  paramKey = key;
+  tft.fillRect(0, 41, 480, TAB_Y - 41, C_BG);
+  if (!jk) {
+    label(16, 70, !d.linked ? "Connect a BMS on the BMS tab first."
+                : d.family == 1 ? "Reading settings from the JK BMS..."
+                : d.family ? "Settings editing is available for JK BMS."
+                : "Identifying the BMS type...");
+    if (d.family == 2 || d.family == 3) {
+      label(16, 98, d.family == 2 ? "ANT: charge / discharge / balance switches below"
+                                  : "JBD: charge / discharge switches below");
+    }
+    label(16, 140, "All writes ask for confirmation first.");
+  } else {
+    for (int r = 0; r < PARAM_ROWS; r++) {
+      int i = paramPage * PARAM_ROWS + r;
+      if (i >= bmsw::JK_PARAM_COUNT) break;
+      const auto &p = bmsw::JK_PARAMS[i];
+      int y = 46 + r * 39;
+      tft.fillRoundRect(12, y, 274, 35, 8, C_CARD);
+      tft.setFont(&fonts::FreeSans9pt7b);
+      tft.setTextDatum(textdatum_t::middle_left);
+      tft.setTextColor(C_MUTED, C_CARD);
+      tft.drawString(p.name, 22, y + 18);
+      bool edited = pendingSet[i] && std::fabs(pending[i] - d.jk.v[i]) > p.step / 2;
+      tft.setFont(&fonts::FreeSansBold9pt7b);
+      tft.setTextDatum(textdatum_t::middle_right);
+      tft.setTextColor(edited ? C_WARN : C_TEXT, C_CARD);
+      tft.drawString(fmtParam(i, edited ? pending[i] : d.jk.v[i]), 278, y + 18);
+      button(rowMinus(r), "-", false, 0, &fonts::FreeSansBold12pt7b);
+      button(rowPlus(r), "+", false, 0, &fonts::FreeSansBold12pt7b);
+      button(rowSet(r), "SET", edited, C_WARN);
+    }
+    button(P_PREV, "<", false, 0, &fonts::FreeSansBold12pt7b);
+    button(P_NEXT, ">", false, 0, &fonts::FreeSansBold12pt7b);
+    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setTextDatum(textdatum_t::middle_center);
+    tft.setTextColor(C_MUTED, C_BG);
+    tft.drawString(String(paramPage + 1) + "/" + PARAM_PAGES, 398, 260);
+  }
+  for (int i = 0; i < bmsw::SW_COUNT; i++) {
+    if (!switchAvailable(d, i)) continue;
+    bool on = switchState(d, i);
+    button(swBtn(i), String(SW_NAMES[i]) + (on ? " ON" : " OFF"), on, C_GOOD);
+  }
+}
+static bool paramRepeatable(int x, int y) {
+  for (int r = 0; r < PARAM_ROWS; r++)
+    if (hit(rowMinus(r), x, y) || hit(rowPlus(r), x, y)) return true;
+  return false;
+}
+static void paramTouch(const DisplaySnap &d, int x, int y) {
+  bool jk = d.family == 1 && d.jkFresh;
+  if (jk && hit(P_PREV, x, y)) { paramPage = (paramPage + PARAM_PAGES - 1) % PARAM_PAGES; return; }
+  if (jk && hit(P_NEXT, x, y)) { paramPage = (paramPage + 1) % PARAM_PAGES; return; }
+  for (int i = 0; i < bmsw::SW_COUNT; i++)
+    if (switchAvailable(d, i) && hit(swBtn(i), x, y)) {
+      bool on = !switchState(d, i);
+      const char *what[3] = {"Charge MOSFET", "Discharge MOSFET", "Balancer"};
+      confirmDlg = Confirm();
+      confirmDlg.active = true;
+      confirmDlg.isSwitch = true;
+      confirmDlg.idx = i;
+      confirmDlg.on = on;
+      confirmDlg.line1 = String(what[i]) + (on ? "  ->  ON" : "  ->  OFF");
+      confirmDlg.line2 = i == 1 && !on ? String("Discharge OFF cuts power to the load!")
+                                       : String("BMS: ") + (d.detected.length() ? d.detected : String("?"));
+      drawConfirm();
+      return;
+    }
+  if (!jk) return;
+  for (int r = 0; r < PARAM_ROWS; r++) {
+    int i = paramPage * PARAM_ROWS + r;
+    if (i >= bmsw::JK_PARAM_COUNT) break;
+    const auto &p = bmsw::JK_PARAMS[i];
+    float cur = pendingSet[i] ? pending[i] : d.jk.v[i];
+    if (hit(rowMinus(r), x, y) || hit(rowPlus(r), x, y)) {
+      float v = cur + (hit(rowPlus(r), x, y) ? p.step : -p.step);
+      v = std::round(v / p.step) * p.step;
+      if (v < p.min) v = p.min;
+      if (v > p.max) v = p.max;
+      pending[i] = v;
+      pendingSet[i] = true;
+      return;
+    }
+    if (hit(rowSet(r), x, y) && pendingSet[i] && std::fabs(pending[i] - d.jk.v[i]) > p.step / 2) {
+      if (const char *e = bmsw::checkJkValue(d.jk, i, pending[i])) {
+        showToast(String("Not allowed: ") + e, 4000);
+        return;
+      }
+      confirmDlg = Confirm();
+      confirmDlg.active = true;
+      confirmDlg.idx = i;
+      confirmDlg.value = pending[i];
+      confirmDlg.line1 = String(p.name) + ":  " + fmtParam(i, d.jk.v[i]) + "  ->  " + fmtParam(i, pending[i]);
+      confirmDlg.line2 = "Check the value is right for your cells";
+      drawConfirm();
+      return;
+    }
+  }
+}
+// returns true when the dialog closed
+static bool confirmTouch(int x, int y) {
+  if (hit(C_CANCEL, x, y)) {
+    confirmDlg.active = false;
+    showToast("Cancelled");
+    return true;
+  }
+  if (hit(C_OK, x, y)) {
+    confirmDlg.active = false;
+    const char *e = confirmDlg.isSwitch ? bmsSetSwitch(confirmDlg.idx, confirmDlg.on)
+                                        : bmsWriteParam(confirmDlg.idx, confirmDlg.value);
+    if (e) showToast(String("Not sent: ") + e, 4000);
+    else {
+      showToast("Writing to BMS...", 3000);
+      if (!confirmDlg.isSwitch) pendingSet[confirmDlg.idx] = false;
+    }
+    return true;
+  }
+  return false;
+}
+
 // ------------------------------------------------------------- splash ----
 // BattLab logo on black for 5 s with a fade-in and a thin progress bar.
 // Bluetooth and Wi-Fi are already starting in the background meanwhile.
@@ -798,7 +998,6 @@ static void splash() {
   tft.setTextColor(tft.color565(120, 120, 120), TFT_BLACK);
   DisplaySnap d;
   takeDisplaySnapshot(d);
-  tft.drawString(String("Battery Studio  v") + d.firmware, 240, 290);
   if (d.resetAbnormal) {
     tft.setTextColor(C_BAD, TFT_BLACK);
     tft.drawString(String("Last restart: ") + d.resetReason, 240, 242);
@@ -851,15 +1050,28 @@ static void displayTask(void *) {
       if (asleep) {
         asleep = false; // first touch only wakes the screen
         applyBacklight();
+      } else if (confirmDlg.active) {
+        if (confirmTouch(tp.x, tp.y)) drawnPage = -1; // repaint the page
       } else if (tp.y >= TAB_Y) {
-        int t = tp.x / 80;
-        if (t >= 0 && t < TABS) page = t;
+        int t = tp.x / TAB_W;
+        if (t >= TABS) t = TABS - 1;
+        if (t >= 0) page = t;
       } else if (tp.y > 42) {
-        if (page == P_LED) ledTouch(tp.x, tp.y);
+        if (page == P_PARAM) paramTouch(d, tp.x, tp.y);
+        else if (page == P_LED) ledTouch(tp.x, tp.y);
         else if (page == P_BMS) bmsTouch(d, tp.x, tp.y);
         else if (page == P_SETUP) setupTouch(d, tp.x, tp.y);
         lastDraw = 0; // show the change right away
       }
+    }
+    // hold -/+ on the PARAM page to repeat
+    static uint32_t pressStart = 0, lastRepeat = 0;
+    if (down && !wasDown) pressStart = now;
+    if (down && wasDown && !asleep && !confirmDlg.active && page == P_PARAM &&
+        now - pressStart > 500 && now - lastRepeat > 110 && paramRepeatable(tp.x, tp.y)) {
+      lastRepeat = now;
+      paramTouch(d, tp.x, tp.y);
+      lastDraw = 0;
     }
     wasDown = down;
     if (wantCalibrate || wantRotate) {
@@ -878,7 +1090,7 @@ static void displayTask(void *) {
       asleep = true;
       tft.setBrightness(0);
     }
-    if (page != drawnPage || now - lastDraw > 700) {
+    if (!confirmDlg.active && (page != drawnPage || now - lastDraw > 700)) {
       bool force = page != drawnPage;
       takeDisplaySnapshot(d);
       evalAlarm(d);
@@ -896,6 +1108,7 @@ static void displayTask(void *) {
         ledDrawnValid = false;
         bmsKey = "";
         setupKey = "";
+        paramKey = "";
         if (page == P_BMS) {
           for (int i = 0; i < 5; i++)
             if (d.protocol == PROTO_VALUE[i]) protoSel = i;
@@ -907,6 +1120,7 @@ static void displayTask(void *) {
           case P_HOME: home(d, force); break;
           case P_CELLS: cells(d, force); break;
           case P_BMS: bmsPage(d, force); break;
+          case P_PARAM: paramPageDraw(d, force); break;
           case P_LED: ledPage(force); break;
           case P_SETUP: setupPage(d, force); break;
           default: info(d, force); break;
