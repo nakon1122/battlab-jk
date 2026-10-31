@@ -300,6 +300,14 @@ def calib():
     d.line((0, 0, 24*S, 24*S), fill=ACCENT, width=3*S); d.polygon([(0, 0), (24*S, 0), (0, 24*S)], fill=ACCENT)
     return s
 
+def ota_screen(pct=62):
+    s = Scr()
+    s.text('Updating firmware', 240, 120, F12B, TEXT, 'mm')
+    s.rr(60, 156, 360, 18, 9, fill=LINE); s.rr(60, 156, int(360 * pct / 100), 18, 9, fill=ACCENT)
+    s.text(f'{pct}%', 240, 189, F9B, TEXT, 'mm')
+    s.text('Do not switch off - restarts by itself', 240, 210, F9, MUTED, 'mm')
+    return s
+
 shots = [
     ('01_boot.png', 'Boot: BattLab logo, 5 s', boot()),
     ('02_touch_calibration.png', 'First start: touch calibration', calib()),
@@ -316,6 +324,7 @@ shots = [
     ('13_info.png', 'INFO: status + HOME WI-FI / CLOUD buttons', info()),
     ('15_wifi_list.png', 'HOME WI-FI: scan and pick your network', wifi_list()),
     ('16_wifi_keyboard.png', 'On-screen keyboard for the Wi-Fi password', keyboard()),
+    ('19_cloud_update.png', 'Firmware update from BattLab Cloud (no USB)', ota_screen()),
     ('18_home_big.png', 'HOME: tap the gauge = BIG view (tap again to go back)', big_home()),
     ('17_cloud_pairing.png', 'CLOUD: pair code to add on the website', cloud()),
     ('14_boot_after_crash.png', 'Boot after an abnormal reset', boot('CRASH (panic)', .3)),

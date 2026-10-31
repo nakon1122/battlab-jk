@@ -230,7 +230,7 @@ def setup():
 def pairing(paired=False):
     s = Scr(); header(s, 'Cloud: waiting for pairing' if not paired else '5 batteries  3 live', WARN if not paired else GOOD)
     if paired:
-        s.button((390, 46, 84, 40), 'BACK')
+        s.button((390, 46, 84, 40), 'BACK'); s.button((302, 46, 84, 40), 'UPDATE')
         s.text('PAIRED AS  Living room screen', 12, 58, F9, MUTED)
     else:
         s.text('PAIR CODE FOR THIS SCREEN', 12, 58, F9, MUTED)
@@ -270,12 +270,21 @@ def boot():
     s.rr(140, 262, 200, 4, 2, fill=(40, 40, 40)); s.rr(140, 262, 120, 4, 2, fill=ACCENT)
     return s
 
+def ota_screen(pct=62):
+    s = Scr()
+    s.text('Updating firmware', 240, 120, F12B, TEXT, 'mm')
+    s.rr(60, 156, 360, 18, 9, fill=LINE); s.rr(60, 156, int(360 * pct / 100), 18, 9, fill=ACCENT)
+    s.text(f'{pct}%', 240, 189, F9B, TEXT, 'mm')
+    s.text('Do not switch off - restarts by itself', 240, 210, F9, MUTED, 'mm')
+    return s
+
 shots = [
     ('cloudscreen_01_boot.png', 'Boot logo', boot()),
     ('cloudscreen_02_pair.png', 'First start: pair code to add on the website', pairing()),
     ('cloudscreen_03_all.png', 'ALL: every battery of the account (tap = open)', all_page()),
     ('cloudscreen_04_all_alarm.png', 'ALL: alarm when a battery is low / hot / offline', all_page('E-bike 60V LOW 12%')),
     ('cloudscreen_05_home.png', 'HOME: one battery, < > switches battery', home()),
+    ('cloudscreen_16_update.png', 'Firmware update from BattLab Cloud (no USB)', ota_screen()),
     ('cloudscreen_05b_big.png', 'HOME: tap the gauge = BIG view; SETUP > SHOW rotates batteries', big_home()),
     ('cloudscreen_06_cells.png', 'CELLS: every cell, min blue / max red', cells()),
     ('cloudscreen_07_graph.png', 'GRAPH: SOC / V / A / W / temp, 6H 24H 7D', graph()),
