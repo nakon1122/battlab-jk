@@ -15,14 +15,14 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include "cloud_config.h"
-#include "cloud_ca.h"
+#include "cloud_ca_bundle.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.0.0-cyd35"
+#define BATTLAB_FW "2.0.1-cyd35"
 #else
-#define BATTLAB_FW "2.0.0-s3"
+#define BATTLAB_FW "2.0.1-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -1384,7 +1384,9 @@ NetInfo netInfo() {
 
 static void cloudTask(void *) {
   WiFiClientSecure tls;
-  tls.setCACert(CLOUD_CA);
+  // Full Mozilla root store, looked up by issuer: works whichever CA the
+  // server uses and only the matching root is parsed (little RAM).
+  tls.setCACertBundle(CLOUD_CA_BUNDLE);
   tls.setTimeout(12);
   HTTPClient http;
   http.setReuse(true);
@@ -1441,7 +1443,7 @@ static void cloudTask(void *) {
     }
     String json;
     serializeJson(body, json);
-    setStatus("sending");
+    setStatus(String("sending (RAM ") + (ESP.getMaxAllocHeap() / 1024) + "k)");
     if (!http.begin(tls, String(CLOUD_URL) + "/rest/v1/rpc/ingest")) {
       setStatus("connect failed");
       continue;
@@ -1459,7 +1461,11 @@ static void cloudTask(void *) {
       cloudPaired = resp.indexOf("unpaired") < 0;
       cloudStatus = cloudPaired ? "online" : "online - add on website";
     } else if (code < 0) {
-      cloudStatus = String("TLS/net error ") + code;
+      char why[96] = {0};
+      int e = tls.lastError(why, sizeof why);
+      cloudStatus = e ? String("TLS: ") + why : String("no connection (") + code + ")";
+      Serial.printf("[CLOUD] POST failed %d, tls %d %s, heap %u\n", code, e, why,
+                    (unsigned)ESP.getFreeHeap());
       tls.stop();
     } else {
       cloudStatus = String("server error ") + code;
