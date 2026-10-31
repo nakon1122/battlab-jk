@@ -139,7 +139,8 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 <section id="vList" class="hide">
  <div class="card" id="fleet"></div>
  <div class="grid" id="devList"></div>
- <div class="card" style="margin-top:14px" id="addCard"><h3>เพิ่มอุปกรณ์</h3><p class="muted small">บนจอ BattLab ไปที่ INFO → CLOUD แล้วกรอกรหัสจับคู่ที่เห็น (บอร์ดต้องต่อ Wi-Fi บ้านและขึ้นว่า online แล้ว) · บอร์ด S3: ดูรหัสในหน้าเว็บ 192.168.4.1 → ตั้งค่า</p>
+ <div class="card hide" style="margin-top:14px" id="viewList"></div>
+ <div class="card" style="margin-top:14px" id="addCard"><h3>เพิ่มอุปกรณ์</h3><p class="muted small">บนจอ BattLab ไปที่ INFO → CLOUD แล้วกรอกรหัสจับคู่ที่เห็น (บอร์ดต้องต่อ Wi-Fi บ้านและขึ้นว่า online แล้ว) · บอร์ด S3: ดูรหัสในหน้าเว็บ 192.168.4.1 → ตั้งค่า · จอ Cloud Screen: รหัสขึ้นบนจอตอนเปิดครั้งแรก (หรือ SETUP → PAIRING)</p>
   <div class="row wrap"><label style="min-width:180px">รหัสจับคู่<input id="pair" placeholder="K7Q2-9XMA" autocapitalize="characters" maxlength="9"></label><label style="min-width:180px">ตั้งชื่อ (ไม่บังคับ)<input id="pairName" placeholder="แบตรถ 72V" maxlength="40"></label></div>
   <button id="btnPair">เพิ่มอุปกรณ์</button></div>
 </section>
@@ -282,10 +283,11 @@ async function route(){const [a,id,t]=ROUTE();
  stopAll();showList()}
 
 // ---------- list
-async function loadDevices(){if(demo){devs=[demoDev()];return}const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}
+let viewers=[];
+async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}
  devs=data.map(d=>{const l=Array.isArray(d.latest)?d.latest[0]:d.latest;latest[d.id]=l||null;delete d.latest;return d})}
 function statusOf(l){if(!l)return ['off','ยังไม่เคยส่งข้อมูล'];const x=(Date.now()-new Date(l.ts))/1000;if(x>150)return ['off','ออฟไลน์ · '+ago(l.ts)];if(!num(l.data&&l.data.v))return ['wait','ออนไลน์ · ยังไม่ได้เชื่อม BMS'];return ['on','ออนไลน์']}
-function showList(){show('vList');$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
+function showList(){show('vList');renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
 function renderList(){
  const on=devs.filter(d=>statusOf(latest[d.id])[0]!=='off').length;let pw=0,socs=[];
  devs.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
@@ -297,8 +299,14 @@ function renderList(){
  $('devList').innerHTML=devs.length||!demo?cards.join(''):'';
  if(!devs.length&&!demo)$('devList').insertAdjacentHTML('afterbegin','<div class="card empty"><div class="e">🔌</div><b>ยังไม่มีอุปกรณ์</b><div class="small muted">เพิ่มด้วยรหัสจับคู่ด้านล่าง</div></div>');
  $('devList').querySelectorAll('.dcard').forEach(e=>e.onclick=()=>{const id=e.dataset.id;if(id===DEMO_ID&&!devs.find(d=>d.id===DEMO_ID)){devs.push(demoDev())}go('d/'+id+'/ov')})}
+function renderViewers(){const e=$('viewList');if(!e)return;e.classList.toggle('hide',demo||!viewers.length);e.innerHTML='<h3>จอ Cloud Screen</h3>'+viewers.map(v=>{const on=v.last_seen&&(Date.now()-new Date(v.last_seen))<60000;return '<div class="devrow"><div class="l"><b>🖥️ '+esc(v.name)+'</b><span class="tiny muted"><span class="dot '+(on?'on':'off')+'"></span> '+(on?'ออนไลน์':v.last_seen?'ออฟไลน์ · '+ago(v.last_seen):'ยังไม่เคยเชื่อมต่อ')+' · '+esc(v.pair_code)+(v.fw?' · '+esc(v.fw):'')+'</span></div><button class="ghost" data-vr="'+esc(v.id)+'">เปลี่ยนชื่อ</button><button class="danger" data-vd="'+esc(v.id)+'">ลบ</button></div>'}).join('')+'<div class="tiny muted" style="margin-top:8px">จอนี้แสดงแบตทุกก้อนในบัญชีนี้ และสั่งงานได้เหมือนหน้าเว็บ</div>';
+ e.querySelectorAll('[data-vd]').forEach(b=>b.onclick=async()=>{if(!confirm('ลบจอนี้ออกจากบัญชี?'))return;const {error}=await sb.rpc('release_viewer',{p_id:b.dataset.vd});if(error)toast(error.message);else{toast('ลบแล้ว');loadDevices()}});
+ e.querySelectorAll('[data-vr]').forEach(b=>b.onclick=async()=>{const v=viewers.find(x=>x.id===b.dataset.vr);const n=prompt('ชื่อจอ',v.name);if(!n)return;const {error}=await sb.from('viewers').update({name:n.slice(0,40)}).eq('id',v.id);if(error)toast(error.message);else loadDevices()})}
 const socColor=s=>s<=15?'var(--bad)':s<=35?'var(--warn)':'var(--good)';
-$('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();if(!/^[A-Z0-9]{4}-?[A-Z0-9]{4}$/.test(code)){toast('รหัสจับคู่ต้องเป็นแบบ XXXX-XXXX');return}const c=code.includes('-')?code:code.slice(0,4)+'-'+code.slice(4);$('btnPair').disabled=true;const {error}=await sb.rpc('claim_device',{p_pair:c,p_name:$('pairName').value});$('btnPair').disabled=false;if(error)toast(error.message.includes('not found')?'ไม่พบรหัสนี้ หรือถูกเพิ่มไปแล้ว (บอร์ดต้องขึ้นว่า online อย่างน้อย 1 ครั้ง)':'เพิ่มไม่สำเร็จ: '+error.message);else{$('pair').value='';$('pairName').value='';toast('เพิ่มอุปกรณ์แล้ว');await loadDevices();renderList()}};
+$('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();if(!/^[A-Z0-9]{4}-?[A-Z0-9]{4}$/.test(code)){toast('รหัสจับคู่ต้องเป็นแบบ XXXX-XXXX');return}const c=code.includes('-')?code:code.slice(0,4)+'-'+code.slice(4);$('btnPair').disabled=true;
+ let {error}=await sb.rpc('claim_device',{p_pair:c,p_name:$('pairName').value});let kind='อุปกรณ์';
+ if(error&&error.message.includes('not found')){const r=await sb.rpc('claim_viewer',{p_pair:c,p_name:$('pairName').value});error=r.error;kind='จอ Cloud Screen'}
+ $('btnPair').disabled=false;if(error)toast(error.message.includes('not found')?'ไม่พบรหัสนี้ หรือถูกเพิ่มไปแล้ว (บอร์ด/จอต้องต่อเน็ตและขึ้นรหัสอย่างน้อย 1 ครั้ง)':'เพิ่มไม่สำเร็จ: '+error.message);else{$('pair').value='';$('pairName').value='';toast('เพิ่ม'+kind+'แล้ว');await loadDevices();renderList()}};
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));

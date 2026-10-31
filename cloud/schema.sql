@@ -248,3 +248,19 @@ revoke all on function public.remote_touch(uuid) from public;
 grant execute on function public.remote_touch(uuid) to authenticated;
 revoke all on function public.ingest2(text, text, jsonb, jsonb) from public;
 grant execute on function public.ingest2(text, text, jsonb, jsonb) to anon, authenticated;
+
+-- ---- v4: BattLab Cloud Screen (viewer) ----
+create table if not exists public.viewers (
+  id uuid primary key default gen_random_uuid(), token_hash text not null unique, pair_code text not null unique,
+  owner uuid references auth.users(id) on delete set null, name text not null default 'BattLab Screen',
+  created_at timestamptz not null default now(), last_seen timestamptz, fw text);
+alter table public.viewers enable row level security;
+create policy viewers_owner_select on public.viewers for select to authenticated using (owner = (select auth.uid()));
+create policy viewers_owner_update on public.viewers for update to authenticated using (owner = (select auth.uid())) with check (owner = (select auth.uid()));
+-- functions (security definer): viewer_auth(token) [internal], viewer_sync(token, pair, focus, fast, fw) [anon],
+-- viewer_history(token, device, hours) [anon], viewer_command(token, device, cmd, args) [anon],
+-- claim_viewer(pair, name) [authenticated], release_viewer(id) [authenticated].
+-- Full bodies are in the Supabase project; summary of behaviour:
+--  viewer_sync registers an unknown token with its pair code, returns {status:'unpaired'} until claimed,
+--  then {devs:[{id,n,age,d}], focus, f: full latest data of the focused device, cmds: last 5 commands}.
+--  viewer_command applies the same allow-list as send_command (without home_wifi/wifi_scan).
