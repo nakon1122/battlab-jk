@@ -146,3 +146,24 @@ as $$
 $$;
 revoke all on function public.release_device(uuid) from public;
 grant execute on function public.release_device(uuid) to authenticated;
+
+-- ---- v2 website: per-device settings, bucketed history, realtime ----
+alter table public.devices add column if not exists settings jsonb not null default '{}'::jsonb;
+revoke update on public.devices from authenticated;
+grant update (name, settings) on public.devices to authenticated;
+
+create or replace function public.history_buckets(p_device uuid, p_from timestamptz, p_to timestamptz, p_bucket int)
+returns table(t timestamptz, soc real, voltage real, current real, power real, temp real, mos real, cell_min real, cell_max real, n int)
+language sql stable security invoker set search_path = public as $$
+  select to_timestamp(floor(extract(epoch from r.ts) / greatest(p_bucket,60)) * greatest(p_bucket,60)) as t,
+         avg(r.soc)::real, avg(r.voltage)::real, avg(r.current)::real, avg(r.power)::real,
+         avg(r.temp)::real, avg(r.mos)::real, min(r.cell_min)::real, max(r.cell_max)::real, count(*)::int
+    from public.readings r
+   where r.device_id = p_device and r.ts >= p_from and r.ts < p_to
+   group by 1 order by 1
+   limit 5000;
+$$;
+revoke all on function public.history_buckets(uuid, timestamptz, timestamptz, int) from public;
+grant execute on function public.history_buckets(uuid, timestamptz, timestamptz, int) to authenticated;
+-- live updates on the website
+alter publication supabase_realtime add table public.latest;
