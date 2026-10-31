@@ -14,9 +14,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.8.2-cyd35"
+#define BATTLAB_FW "1.8.3-cyd35"
 #else
-#define BATTLAB_FW "1.8.2-s3"
+#define BATTLAB_FW "1.8.3-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -475,6 +475,12 @@ void bleWorker(void *) {
     }
     if (!client->isConnected()) {
       linkedLocal = false;
+      // NimBLE frees all remote attribute objects on (re)connect: drop every
+      // pointer we hold to them.
+      lastRxFrom = nullptr;
+      antCh = jbdCh = nullptr;
+      steps.clear();
+      probeStep = -1;
       if (ch)
         Serial.printf("[BLE] link lost after %lu ms (frames ok=%lu)\n",
                       (unsigned long)(millis() - linkedAt),
@@ -509,20 +515,10 @@ void bleWorker(void *) {
         }
         xQueueReset(queue);
         if (client->connect(NimBLEAddress(c.mac.c_str(), c.type))) {
-          auto service = client->getService(NimBLEUUID(uint16_t(0xffe0)));
-          ch = nullptr;
-          NimBLERemoteCharacteristic *notifyCh = nullptr;
-          if (service) {
-            auto chars = service->getCharacteristics(true);
-            if (chars) jk::selectChannels(*chars, ch, notifyCh,
-              [](NimBLERemoteCharacteristic *candidate) {
-                return candidate->getUUID() == NimBLEUUID(uint16_t(0xffe1));
-              });
-          }
-          Serial.printf("[BLE] connected %s, service=%s tx=%s rx=%s mtu=%u\n",
-                        c.mac.c_str(), service ? "FFE0" : "none",
-                        ch ? "ok" : "none", notifyCh ? "ok" : "none",
-                        (unsigned)client->getMTU());
+          // Discover the whole GATT table ONCE (refresh=true). Every later
+          // lookup uses the cached objects (refresh=false): refreshing again
+          // deletes the old objects and leaves earlier pointers dangling,
+          // which crashed the classic ESP32 right after connecting.
           String gatt;
           if (auto svcs = client->getServices(true))
             for (auto sv : *svcs) {
@@ -541,6 +537,23 @@ void bleWorker(void *) {
                 }
               gatt += "} ";
             }
+          NimBLERemoteService *service = nullptr;
+          if (auto svcs = client->getServices(false))
+            for (auto sv : *svcs)
+              if (sv->getUUID() == NimBLEUUID(uint16_t(0xffe0))) service = sv;
+          ch = nullptr;
+          NimBLERemoteCharacteristic *notifyCh = nullptr;
+          if (service) {
+            auto chars = service->getCharacteristics(false);
+            if (chars) jk::selectChannels(*chars, ch, notifyCh,
+              [](NimBLERemoteCharacteristic *candidate) {
+                return candidate->getUUID() == NimBLEUUID(uint16_t(0xffe1));
+              });
+          }
+          Serial.printf("[BLE] connected %s, service=%s tx=%s rx=%s mtu=%u\n",
+                        c.mac.c_str(), service ? "FFE0" : "none",
+                        ch ? "ok" : "none", notifyCh ? "ok" : "none",
+                        (unsigned)client->getMTU());
           Serial.printf("[BLE] GATT: %s\n", gatt.c_str());
           bool subscribed = false;
           steps.clear();
@@ -585,8 +598,12 @@ void bleWorker(void *) {
           if (ch) withResp = !ch->canWriteNoResponse();
           antCh = ch;
           jbdCh = nullptr;
-          if (auto jsv = client->getService(NimBLEUUID(uint16_t(0xff00))))
-            jbdCh = jsv->getCharacteristic(NimBLEUUID(uint16_t(0xff02)));
+          if (auto svcs = client->getServices(false)) // cached, no rediscovery
+            for (auto sv : *svcs)
+              if (sv->getUUID() == NimBLEUUID(uint16_t(0xff00)))
+                if (auto cs = sv->getCharacteristics(false))
+                  for (auto cc : *cs)
+                    if (cc->getUUID() == NimBLEUUID(uint16_t(0xff02))) jbdCh = cc;
           fam = forcedFamily(c.protocol);
           if (!fam && jbdCh) fam = 3; // service FF00 is specific to JBD
           antF.reset();
