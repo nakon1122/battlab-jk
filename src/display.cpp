@@ -363,7 +363,7 @@ static void socGauge(const DisplaySnap &d, bool force) {
   if (soc > 0) tft.fillArc(cx, cy, r0, r1, 135, 135 + 270.f * soc / 100.f, col);
   LGFX_Sprite s(&tft);
   s.setColorDepth(16);
-  if (!s.createSprite(130, 84)) return;
+  if (!s.createSprite(130, 72)) return;
   s.fillSprite(C_BG);
   s.setTextDatum(textdatum_t::middle_center);
   s.setTextColor(C_TEXT, C_BG);
@@ -371,7 +371,7 @@ static void socGauge(const DisplaySnap &d, bool force) {
   s.drawString(soc < 0 ? String("--") : String(soc) + "%", 65, 34);
   s.setFont(&fonts::FreeSans9pt7b);
   s.setTextColor(C_MUTED, C_BG);
-  s.drawString("SOC", 65, 62);
+  s.drawString("SOC", 65, 63);
   s.pushSprite(cx - 65, cy - 38);
   s.deleteSprite();
 }
@@ -535,7 +535,7 @@ static void flowAnim(const DisplaySnap &d) {
     else s.fillTriangle(x, 3, x + 16, 3, x + 8, 14, c);
     if (dir == 0) { s.fillSprite(C_BG); s.fillRoundRect(8, 7, 48, 4, 2, C_LINE); break; }
   }
-  s.pushSprite(106 - 32, 150 + 24);
+  s.pushSprite(106 - 32, 150 + 37);
   s.deleteSprite();
 }
 

@@ -863,7 +863,7 @@ static void flowAnim(const DevSum *d) {
       if (dir > 0) s.fillTriangle(x, 14, x + 16, 14, x + 8, 3, c);
       else s.fillTriangle(x, 3, x + 16, 3, x + 8, 14, c);
     }
-  s.pushSprite(106 - 32, 150 + 24);
+  s.pushSprite(106 - 32, 150 + 37);
   s.deleteSprite();
 }
 static void noFocus(const Model &m) {
@@ -898,7 +898,7 @@ static void homePage(const Model &m, bool force) {
   tft.drawString(ok ? String(int(soc + .5f)) + "%" : String("--"), cx, cy - 4);
   tft.setFont(&fonts::FreeSans9pt7b);
   tft.setTextColor(ok ? C_MUTED : C_WARN, C_BG);
-  tft.drawString(ok ? String("SOC") : devState(d), cx, cy + (ok ? 46 : 34));
+  tft.drawString(ok ? String("SOC") : devState(d), cx, cy + (ok ? 25 : 34));
   int x0 = 214, x1 = 346, w = 126, h = 56;
   tile(x0, 46, w, h, "VOLTAGE", ok ? fmt(d.v, 2) : "--", "V", C_ACCENT);
   tile(x1, 46, w, h, "CURRENT", ok ? fmt(d.i, 1) : "--", "A", d.i < 0 ? C_WARN : C_GOOD);

@@ -55,8 +55,9 @@ def header(s, status, dot=GOOD, rssi='-52 dBm', alarm=None, toast=None):
         w = s.width(alarm, F9) + 24
         s.rr(476 - w, 7, w, 26, 13, fill=BAD)
         s.text(alarm, 476 - w/2, 21, F9, TEXT, 'mm')
-    elif rssi:
-        s.text(rssi, 468, 21, F9, MUTED, 'rm')
+    else:
+        s.text('14:32', 470, 21, F9B, TEXT, 'rm')
+        if rssi: s.text(rssi.replace(' ', ''), 412, 21, F9, MUTED, 'rm')
     s.rect(0, 39, 480, 1, LINE)
 
 def tabs(s, page):
@@ -91,7 +92,10 @@ def home(soc=72, alarm=None, live=True):
     s.arc(cx, cy, 71, 86, 135, 405, LINE)
     s.arc(cx, cy, 71, 86, 135, 135 + 270 * soc / 100, col)
     s.text(f'{soc}%', cx, cy - 4, F24B, TEXT, 'mm')
-    s.text('SOC', cx, cy + 34, F9, MUTED, 'mm')
+    s.text('SOC', cx, cy + 25, F9, MUTED, 'mm')
+    for k in range(3):  # flow chevrons (discharging)
+        x = cx - 32 + 6 + k * 20; c = WARN if k == 1 else LINE
+        s.d.polygon([(x*S, (cy+40)*S), ((x+16)*S, (cy+40)*S), ((x+8)*S, (cy+51)*S)], fill=c)
     p = PACK
     tile(s, 214, 46, 126, 56, 'VOLTAGE', f"{p['v']:.2f}", 'V', ACCENT)
     tile(s, 346, 46, 126, 56, 'CURRENT', f"{p['i']:.1f}", 'A', WARN)
@@ -101,8 +105,23 @@ def home(soc=72, alarm=None, live=True):
     tile(s, 346, 166, 126, 56, 'MOS', f"{p['mos']}", 'C', WARN)
     s.rr(9, 228, 462, 46, 10, fill=CARD)
     mn, mx = min(CELLS20), max(CELLS20)
-    s.text(f"20S  min {mn:.3f}  max {mx:.3f}  d {round((mx-mn)*1000)}mV", 21, 251, F9, TEXT)
+    s.text(f"20S  d{round((mx-mn)*1000)}mV", 21, 242, F9, TEXT)
+    s.text("empty in 2h17", 21, 261, F9, MUTED)
+    sx, sw, sy, sh = 159, 140, 234, 34
+    s.text('10 min W', sx, 229, ImageFont.truetype(FF + 'FreeMono.ttf', 9 * S), MUTED, 'lt')
+    s.rect(sx, sy + 10, sw, 1, LINE)
+    pts = [(sx + sw * k / 59, sy + 10 + 18 * (0.6 + 0.4 * math.sin(k / 6)) ) for k in range(60)]
+    s.d.line([(x*S, y*S) for x, y in pts], fill=WARN, width=S)
     pill(s, 313, 238, 'CHG', True); pill(s, 391, 238, 'DSG', True)
+    tabs(s, 0); return s
+
+def big_home():
+    s = Scr(); header(s, 'JK02_24S  LIVE')
+    s.text('72%', 240, 41 + 74, font(1, 24 * 2.4), TEXT, 'mm')
+    s.rr(40, 41 + 132, 400, 14, 7, fill=LINE); s.rr(40, 41 + 132, 288, 14, 7, fill=GOOD)
+    p = PACK
+    s.text(f"{p['v']*p['i']:.0f} W", 130, 41 + 186, F18B, WARN, 'mm'); s.text(f"{p['v']:.1f} V", 350, 41 + 186, F18B, TEXT, 'mm')
+    s.text('empty in 2h17   -12.6 A   31 C', 240, 41 + 222, F9, MUTED, 'mm')
     tabs(s, 0); return s
 
 def cells(values, title='JK02_24S  LIVE'):
@@ -297,6 +316,7 @@ shots = [
     ('13_info.png', 'INFO: status + HOME WI-FI / CLOUD buttons', info()),
     ('15_wifi_list.png', 'HOME WI-FI: scan and pick your network', wifi_list()),
     ('16_wifi_keyboard.png', 'On-screen keyboard for the Wi-Fi password', keyboard()),
+    ('18_home_big.png', 'HOME: tap the gauge = BIG view (tap again to go back)', big_home()),
     ('17_cloud_pairing.png', 'CLOUD: pair code to add on the website', cloud()),
     ('14_boot_after_crash.png', 'Boot after an abnormal reset', boot('CRASH (panic)', .3)),
 ]
@@ -312,7 +332,7 @@ sheet = Image.new('RGB', (cols * (W + pad) + pad, 90 + rows * (H + capH + pad) +
 d = ImageDraw.Draw(sheet)
 import re as _re
 _fw = _re.search(r'#define BATTLAB_FW "([^"]+)-cyd35"', (ROOT / 'src/main.cpp').read_text()).group(1)
-d.text((pad, 30), f'BATTLAB {_fw} - CYD35 (ESP32-3248S035) screens', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
+d.text((pad, 30), f'BATTLAB {_fw} - CYD35 BMS screen (ESP32-3248S035)', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
 for k, (p, cap) in enumerate(paths):
     r, c = divmod(k, cols)
     x, y = pad + c * (W + pad), 90 + r * (H + capH + pad)

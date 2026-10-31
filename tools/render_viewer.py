@@ -48,6 +48,7 @@ def header(s, txt, dot=GOOD, nav=False, alarm=None):
         w = s.width(alarm, F9) + 24; s.rr(136, 7, w, 26, 13, fill=BAD); s.text(alarm, 148, 21, F9, TEXT)
     else:
         s.text(txt, 138, 21, F9, TEXT)
+    if not nav: s.text('14:32', 472, 21, F9B, TEXT, 'rm')
     if nav:
         for k, b in enumerate([(372, 4, 50, 32), (426, 4, 50, 32)]):
             s.rr(*b, 8, fill=CARD, outline=LINE); s.text('>' if k else '<', b[0]+25, b[1]+17, F12B, TEXT, 'mm')
@@ -89,7 +90,7 @@ def card(s, k, d, sel=False):
     if d['live']: s.rr(x + 10, y + h - 6, int((w - 20) * d['soc'] / 100), 3, 1, fill=soc_col(d['soc']))
 
 def all_page(alarm=None):
-    s = Scr(); header(s, '5 batteries  3 live', alarm=alarm)
+    s = Scr(); header(s, '5 batteries  3 live  +665W', alarm=alarm)
     for k, d in enumerate(FLEET): card(s, k, d, sel=k == 0)
     tabs(s, 0); return s
 
@@ -104,12 +105,21 @@ def home():
     d = FLEET[1]; s = Scr(); header(s, f"{d['n']}  {d['st']}", nav=True)
     cx, cy = 106, 150
     s.arc(cx, cy, 71, 86, 135, 405, LINE); s.arc(cx, cy, 71, 86, 135, 135 + 270 * d['soc'] / 100, soc_col(d['soc']))
-    s.text(f"{d['soc']}%", cx, cy - 4, F24B, TEXT, 'mm'); s.text('SOC', cx, cy + 34, F9, MUTED, 'mm')
+    s.text(f"{d['soc']}%", cx, cy - 4, F24B, TEXT, 'mm'); s.text('SOC', cx, cy + 25, F9, MUTED, 'mm')
+    for k in range(3):
+        x = cx - 32 + 6 + k * 20; c = GOOD if k == 1 else LINE
+        s.d.polygon([(x*S, (cy+51)*S), ((x+16)*S, (cy+51)*S), ((x+8)*S, (cy+40)*S)], fill=c)
     tile(s, 214, 46, 126, 56, 'VOLTAGE', f"{d['v']:.2f}", 'V', ACCENT); tile(s, 346, 46, 126, 56, 'CURRENT', f"{d['i']:.1f}", 'A', GOOD)
     tile(s, 214, 106, 126, 56, 'POWER', f"{d['v']*d['i']:.0f}", 'W', BLUE); tile(s, 346, 106, 126, 56, 'REMAIN', f"{d['cap']:.1f}", 'Ah', ACCENT)
     tile(s, 214, 166, 126, 56, 'TEMP', f"{d['t']}", 'C', WARN); tile(s, 346, 166, 126, 56, 'MOS', f"{d['mos']}", 'C', WARN)
     s.rr(9, 228, 462, 46, 10, fill=CARD)
-    s.text(f"16S d{d['d']}mV  full 1h01  {d['cyc']}cyc", 21, 251, F9, TEXT)
+    s.text(f"16S d{d['d']}mV  full 1h01", 21, 242, F9, TEXT)
+    s.text('today +4.82 / -1.37 kWh', 21, 261, F9, MUTED)
+    sx, sw, sy, sh = 205, 112, 236, 30
+    s.rr(sx, sy, sw, sh + 1, 0, outline=LINE)
+    pts = [(sx + sw * k / 59, sy + sh - sh * (0.55 + 0.35 * math.sin(k / 9)) ) for k in range(60)]
+    s.d.line([(x*S, y*S) for x, y in pts], fill=ACCENT, width=S)
+    s.text('SOC 24h', sx + 3, sy + 2, ImageFont.truetype(FF + 'FreeMono.ttf', 9 * S), MUTED, 'lt')
     pill(s, 325, 238, 'CHG', True); pill(s, 397, 238, 'DSG', True)
     tabs(s, 1); return s
 
@@ -214,7 +224,7 @@ def setup():
     s.button((270, 138, 52, 40), '+', f=F12B); s.button((340, 138, 134, 40), 'BEEP ON', True, GOOD)
     s.text('High temp alarm', 12, 204, F9, MUTED); s.button((150, 184, 52, 40), '-', f=F12B); s.text('55C', 236, 205, F12B, TEXT, 'mm')
     s.button((270, 184, 52, 40), '+', f=F12B); s.button((340, 184, 134, 40), 'OFFLINE ON', True, GOOD)
-    for i, t in enumerate(['WI-FI', 'PAIRING', 'CALIBRATE', 'RESTART']): s.button((8 + i * 118, 230, 112, 42), t, i == 0, GOOD)
+    for i, (b, t) in enumerate(zip([(8, 230, 88, 42), (101, 230, 88, 42), (194, 230, 92, 42), (291, 230, 92, 42), (388, 230, 86, 42)], ['WI-FI', 'PAIRING', 'SHOW ON', 'CALIB', 'RESTART'])): s.button(b, t, i in (0, 2), GOOD)
     tabs(s, 5); return s
 
 def pairing(paired=False):
@@ -245,6 +255,14 @@ def wifi():
         y = 94 + i * 36; s.rr(12, y, 412, 32, 8, fill=CARD); s.text(nm, 24, y + 17, F9B, TEXT); s.text(f'lock  {r}', 414, y + 17, F9, MUTED, 'rm')
     tabs(s, 5); return s
 
+def big_home():
+    d = FLEET[1]; s = Scr(); header(s, f"{d['n']}  {d['st']}", nav=True)
+    s.text(f"{d['soc']}%", 240, 41 + 74, font(1, 24 * 2.4), TEXT, 'mm')
+    s.rr(40, 41 + 132, 400, 14, 7, fill=LINE); s.rr(40, 41 + 132, 4 * d['soc'], 14, 7, fill=GOOD)
+    s.text(f"{d['v']*d['i']:.0f} W", 130, 41 + 186, F18B, GOOD, 'mm'); s.text(f"{d['v']:.1f} V", 350, 41 + 186, F18B, TEXT, 'mm')
+    s.text(f"{d['n']}   {d['i']:.1f} A   {d['t']} C", 240, 41 + 222, F9, MUTED, 'mm')
+    tabs(s, 1); return s
+
 def boot():
     s = Scr((0, 0, 0)); lg = LOGO_BIG
     s.paste_gray(lg, (480 - lg.width) // 2, 86, (0, 0, 0))
@@ -258,6 +276,7 @@ shots = [
     ('cloudscreen_03_all.png', 'ALL: every battery of the account (tap = open)', all_page()),
     ('cloudscreen_04_all_alarm.png', 'ALL: alarm when a battery is low / hot / offline', all_page('E-bike 60V LOW 12%')),
     ('cloudscreen_05_home.png', 'HOME: one battery, < > switches battery', home()),
+    ('cloudscreen_05b_big.png', 'HOME: tap the gauge = BIG view; SETUP > SHOW rotates batteries', big_home()),
     ('cloudscreen_06_cells.png', 'CELLS: every cell, min blue / max red', cells()),
     ('cloudscreen_07_graph.png', 'GRAPH: SOC / V / A / W / temp, 6H 24H 7D', graph()),
     ('cloudscreen_08_mosfet.png', 'CONTROL > MOSFET: charge / discharge / balance', ctl_mos()),
