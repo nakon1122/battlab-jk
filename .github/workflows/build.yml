@@ -22,6 +22,12 @@ jobs:
           set -o pipefail
           mkdir -p $GITHUB_WORKSPACE/out /tmp/uit && cd /tmp/uit && npm i -s jsdom@24 >/dev/null
           NODE_PATH=/tmp/uit/node_modules node $GITHUB_WORKSPACE/test/ui_led_test.cjs 2>&1 | tee $GITHUB_WORKSPACE/out/ui-test.log
+      - name: Render CYD35 screen previews
+        run: |
+          sudo apt-get install -y -qq fonts-freefont-ttf >/dev/null
+          pip install -q pillow
+          python tools/render_screens.py
+          mkdir -p out/screens && cp assets/screens/*.png out/screens/
       - name: Build both boards
         run: |
           set -o pipefail
@@ -50,6 +56,7 @@ jobs:
           git rm -rq --cached .
           mkdir -p firmware
           cp out/* firmware/ 2>/dev/null || true
+          mkdir -p firmware/screens && cp out/screens/*.png firmware/screens/ 2>/dev/null || true
           git add -f firmware/
           git commit -qm "firmware for ${GITHUB_SHA::7} (${{ job.status }})"
           git push -f origin firmware-build

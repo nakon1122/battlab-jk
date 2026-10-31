@@ -217,7 +217,7 @@ def info():
     rows = [('BMS', 'JK02_24S'), ('Model', 'JK_BD6A24S20P'), ('Bluetooth', '10:23:81:A9:C0:D6  AUTO'),
             ('State', 'LIVE   rx 48210 B, 162 frames'), ('Probe', 'identifying'),
             ('Last reset', 'power on   RAM 61k free, min 48k'), ('Wi-Fi', 'BATTLAB  192.168.4.1  (1)'),
-            ('Firmware', '1.9.0-cyd35   up 42 min')]
+            ('Firmware', 'cyd35   up 42 min')]
     for i, (k, v) in enumerate(rows):
         y = 44 + i * 29
         s.text(k, 13, y + 13, F9, MUTED); s.text(v, 139, y + 13, F9, TEXT)
@@ -265,7 +265,9 @@ pad, capH, cols = 24, 40, 2
 rows = (len(paths) + cols - 1) // cols
 sheet = Image.new('RGB', (cols * (W + pad) + pad, 90 + rows * (H + capH + pad) + pad), (238, 241, 244))
 d = ImageDraw.Draw(sheet)
-d.text((pad, 30), 'BATTLAB 1.9.0 - CYD35 (ESP32-3248S035) screens', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
+import re as _re
+_fw = _re.search(r'#define BATTLAB_FW "([^"]+)-cyd35"', (ROOT / 'src/main.cpp').read_text()).group(1)
+d.text((pad, 30), f'BATTLAB {_fw} - CYD35 (ESP32-3248S035) screens', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
 for k, (p, cap) in enumerate(paths):
     r, c = divmod(k, cols)
     x, y = pad + c * (W + pad), 90 + r * (H + capH + pad)
