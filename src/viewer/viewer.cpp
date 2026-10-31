@@ -1538,6 +1538,7 @@ static const char *const KB_ROWS[4][4] = {{"1234567890", "qwertyuiop", "asdfghjk
                                           {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"},
                                           {"1234567890", "!@#$%^&*()", "-_=+[]{};", ":'\".,?/"},
                                           {"1234567890", "~`|\\<>!@#$", "%^&*()-_=", "+;:'\",."}};
+static const Btn U_CHECK = {302, 46, 84, 40};
 static const Btn W_SCAN = {302, 46, 84, 40}, W_BACK = {390, 46, 84, 40}, W_UP = {430, 94, 44, 68}, W_DOWN = {430, 168, 44, 68};
 static Btn netRow(int i) { return {12, 94 + i * 36, 412, 32}; }
 static Btn kbKey(int row, int i) {
@@ -1647,7 +1648,6 @@ static void pairOverlayDraw(const Model &m, bool force) {
                      (ESP.getFreeHeap() / 1024) + "k",
                  12, 232);
 }
-static const Btn U_CHECK = {302, 46, 84, 40};
 static bool overlayTouch(int x, int y) {
   if (overlay == OV_PAIR) {
     if (hit(W_BACK, x, y)) { overlay = OV_NONE; return true; }
