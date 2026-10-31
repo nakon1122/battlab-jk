@@ -17,6 +17,11 @@ jobs:
         run: pip install platformio esptool==4.5.1
       - name: Native decoder tests
         run: g++ -std=c++17 -o other_test test/other_bms_test.cpp && ./other_test
+      - name: Web UI test (lighting page)
+        run: |
+          set -o pipefail
+          mkdir -p $GITHUB_WORKSPACE/out /tmp/uit && cd /tmp/uit && npm i -s jsdom@24 >/dev/null
+          NODE_PATH=/tmp/uit/node_modules node $GITHUB_WORKSPACE/test/ui_led_test.cjs 2>&1 | tee $GITHUB_WORKSPACE/out/ui-test.log
       - name: Build both boards
         run: |
           set -o pipefail

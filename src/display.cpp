@@ -84,6 +84,7 @@ public:
 };
 
 static LGFX tft;
+static const int PAGES = 4; // Overview, Cells, Info, LED
 static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_MUTED, C_ACCENT, C_GOOD, C_WARN,
     C_BAD, C_BLUE;
 
@@ -152,12 +153,12 @@ static void header(const DisplaySnap &d, int page) {
   s.setTextColor(C_TEXT, C_BG);
   s.drawString(st, 164, 21);
   // page dots
-  for (int i = 0; i < 3; i++)
-    s.fillCircle(432 + i * 16, 20, 4, i == page ? C_ACCENT : C_LINE);
+  for (int i = 0; i < PAGES; i++)
+    s.fillCircle(420 + i * 16, 20, 4, i == page ? C_ACCENT : C_LINE);
   if (d.linked) {
     s.setTextDatum(textdatum_t::middle_right);
     s.setTextColor(C_MUTED, C_BG);
-    s.drawString(String(d.rssi) + " dBm", 412, 21);
+    s.drawString(String(d.rssi) + " dBm", 400, 21);
   }
   s.drawFastHLine(0, 39, 480, C_LINE);
   s.pushSprite(0, 0);
@@ -342,21 +343,156 @@ static void info(const DisplaySnap &d, bool) {
                           d.stations + " connected)"); y += 28;
   infoRow(y, "Firmware", d.firmware + "   up " + String(d.uptimeMs / 60000) + " min");
   y += 28;
-  infoRow(y, "Settings", "web: /api/display?rotation=1&invert=0&rgb=0");
+  infoRow(y, "Touch", "hold 4 s on this page to re-calibrate");
+}
+
+// ------------------------------------------------------------ LED page --
+struct Btn { int x, y, w, h; };
+static const Btn B_POWER = {12, 50, 150, 60}, B_MINUS = {250, 50, 64, 60},
+                 B_PLUS = {410, 50, 64, 60};
+static Btn modeBtn(int i) { return {12 + i * 117, 124, 109, 52}; }
+static Btn colorBtn(int i) { return {12 + i * 58, 190, 52, 52}; }
+static bool hit(const Btn &b, int x, int y) {
+  return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
+}
+static uint16_t paletteColor(int i) {
+  return tft.color565(LED_PALETTE[i][0], LED_PALETTE[i][1], LED_PALETTE[i][2]);
+}
+static void button(const Btn &b, const String &label, bool selected,
+                   uint16_t accent = 0) {
+  uint16_t bg = selected ? (accent ? accent : C_ACCENT) : C_CARD;
+  tft.fillRoundRect(b.x, b.y, b.w, b.h, 12, bg);
+  if (!selected) tft.drawRoundRect(b.x, b.y, b.w, b.h, 12, C_LINE);
+  tft.setFont(&fonts::FreeSansBold12pt7b);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setTextColor(selected ? C_BG : C_TEXT, bg);
+  tft.drawString(label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+}
+static LedCfg ledDrawn;
+static bool ledDrawnValid = false;
+static void ledPage(bool force) {
+  LedCfg c = ledGet();
+  if (!force && ledDrawnValid && c.on == ledDrawn.on && c.mode == ledDrawn.mode &&
+      c.color == ledDrawn.color && c.level == ledDrawn.level)
+    return;
+  ledDrawn = c;
+  ledDrawnValid = true;
+  button(B_POWER, c.on ? "LED ON" : "LED OFF", c.on, c.on ? C_GOOD : 0);
+  button(B_MINUS, "-", false);
+  button(B_PLUS, "+", false);
+  // brightness bars
+  tft.fillRect(318, 50, 88, 60, C_BG);
+  for (int i = 0; i < 4; i++) {
+    int h = 14 + i * 10;
+    tft.fillRoundRect(326 + i * 20, 104 - h, 14, h, 3,
+                      i < c.level && c.on ? C_ACCENT : C_LINE);
+  }
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.drawString("brightness", 206, 80);
+  const char *names[LED_MODES] = {"RAINBOW", "SOLID", "BREATHE", "STATUS"};
+  for (int i = 0; i < LED_MODES; i++) {
+    Btn b = modeBtn(i);
+    uint16_t bg = c.mode == i ? C_ACCENT : C_CARD;
+    tft.fillRoundRect(b.x, b.y, b.w, b.h, 12, bg);
+    if (c.mode != i) tft.drawRoundRect(b.x, b.y, b.w, b.h, 12, C_LINE);
+    tft.setFont(&fonts::FreeSansBold9pt7b);
+    tft.setTextDatum(textdatum_t::middle_center);
+    tft.setTextColor(c.mode == i ? C_BG : C_TEXT, bg);
+    tft.drawString(names[i], b.x + b.w / 2, b.y + b.h / 2 + 1);
+  }
+  bool colorUsed = c.mode == 1 || c.mode == 2;
+  for (int i = 0; i < LED_COLORS; i++) {
+    Btn b = colorBtn(i);
+    int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    tft.fillRect(b.x, b.y, b.w, b.h, C_BG);
+    if (c.color == i) tft.fillCircle(cx, cy, 25, C_TEXT);
+    tft.fillCircle(cx, cy, 21, colorUsed ? paletteColor(i) : C_LINE);
+    if (!colorUsed) tft.fillCircle(cx, cy, 8, paletteColor(i));
+  }
+  tft.fillRect(12, 252, 462, 64, C_BG);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextDatum(textdatum_t::middle_left);
+  tft.setTextColor(C_MUTED, C_BG);
+  const char *hint = c.mode == 0 ? "Rainbow: colours cycle by themselves"
+                   : c.mode == 3 ? "Status: green live, amber waiting, blue scanning, red no BMS"
+                   : "Tap a colour to change it";
+  tft.drawString(hint, 14, 266);
+  tft.drawString("Tap the top bar to change page", 14, 296);
+}
+static void ledTouch(int x, int y) {
+  LedCfg c = ledGet();
+  if (hit(B_POWER, x, y)) c.on = !c.on;
+  else if (hit(B_MINUS, x, y)) { if (c.level > 1) c.level--; c.on = true; }
+  else if (hit(B_PLUS, x, y)) { if (c.level < 4) c.level++; c.on = true; }
+  else {
+    bool done = false;
+    for (int i = 0; i < LED_MODES && !done; i++)
+      if (hit(modeBtn(i), x, y)) { c.mode = i; c.on = true; done = true; }
+    for (int i = 0; i < LED_COLORS && !done; i++)
+      if (hit(colorBtn(i), x, y)) {
+        c.color = i;
+        c.on = true;
+        if (c.mode == 0 || c.mode == 3) c.mode = 1; // picking a colour means solid
+        done = true;
+      }
+    if (!done) return;
+  }
+  ledSet(c);
+}
+
+// ------------------------------------------------------- touch calibrate --
+static void calibrate() {
+  uint16_t cal[8];
+  tft.fillScreen(C_BG);
+  tft.setFont(&fonts::FreeSansBold12pt7b);
+  tft.setTextColor(C_TEXT, C_BG);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.drawString("Touch calibration", 240, 130);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.drawString("Touch the tip of each corner arrow, one by one", 240, 170);
+  tft.calibrateTouch(cal, C_ACCENT, C_BG, 24);
+  tft.setTouchCalibrate(cal);
+  Preferences p;
+  p.begin("battlab-disp", false);
+  p.putBytes("cal", cal, sizeof cal);
+  p.end();
+  tft.fillScreen(C_BG);
 }
 
 static void displayTask(void *) {
+  {
+    uint16_t cal[8];
+    Preferences p;
+    p.begin("battlab-disp", true);
+    bool have = p.getBytes("cal", cal, sizeof cal) == sizeof cal;
+    p.end();
+    if (have) tft.setTouchCalibrate(cal);
+    else calibrate();
+  }
   int page = 0, drawnPage = -1;
-  uint32_t lastDraw = 0, lastTouch = 0;
+  uint32_t lastDraw = 0, lastTouch = 0, pressStart = 0;
   bool wasDown = false;
   DisplaySnap d;
   for (;;) {
     uint32_t now = millis();
     lgfx::touch_point_t tp;
     bool down = tft.getTouch(&tp) > 0;
-    if (down && !wasDown && now - lastTouch > 300) {
-      page = (page + 1) % 3;
+    if (down && !wasDown) pressStart = now;
+    if (down && !wasDown && now - lastTouch > 250) {
       lastTouch = now;
+      if (page == 3 && tp.y > 44) {
+        ledTouch(tp.x, tp.y);
+        lastDraw = 0; // show the change right away
+      } else
+        page = (page + 1) % PAGES;
+    }
+    if (down && page == 2 && now - pressStart > 4000) {
+      calibrate();
+      drawnPage = -1;
+      pressStart = now;
     }
     wasDown = down;
     if (page != drawnPage || now - lastDraw > 700) {
@@ -364,12 +500,14 @@ static void displayTask(void *) {
       if (force) {
         tft.fillRect(0, 40, 480, 280, C_BG);
         lastSocDrawn = -2;
+        ledDrawnValid = false;
       }
       takeDisplaySnapshot(d);
       header(d, page);
       if (page == 0) overview(d, force);
       else if (page == 1) cells(d, force);
-      else info(d, force);
+      else if (page == 2) info(d, force);
+      else ledPage(force);
       drawnPage = page;
       lastDraw = millis();
     }

@@ -15,3 +15,19 @@ struct DisplaySnap {
 
 void takeDisplaySnapshot(DisplaySnap &out); // implemented in main.cpp
 void displayStart();                        // no-op on boards without display
+
+// RGB LED settings, shared by the web API, the on-screen controls and the
+// LED task. Persisted in NVS.
+#define LED_COLORS 8
+#define LED_MODES 4 // 0 Rainbow, 1 Solid, 2 Breathe, 3 Status
+struct LedCfg {
+  bool on = true;
+  uint8_t mode = 0;
+  uint8_t color = 3;
+  uint8_t level = 2; // 1..4
+};
+extern const uint8_t LED_PALETTE[LED_COLORS][3];
+extern const char *const LED_COLOR_NAMES[LED_COLORS];
+extern const char *const LED_MODE_NAMES[LED_MODES];
+LedCfg ledGet();
+void ledSet(const LedCfg &c);

@@ -14,9 +14,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.5.0-cyd35"
+#define BATTLAB_FW "1.6.0-cyd35"
 #else
-#define BATTLAB_FW "1.5.0-s3"
+#define BATTLAB_FW "1.6.0-s3"
 #endif
 WebServer web(80);
 Preferences prefs;
@@ -898,6 +898,56 @@ void bleWorker(void *) {
 #ifndef BATTLAB_LED_PIN
 #define BATTLAB_LED_PIN 48
 #endif
+const uint8_t LED_PALETTE[LED_COLORS][3] = {
+    {255, 0, 0},   {255, 80, 0}, {255, 190, 0}, {0, 255, 40},
+    {0, 220, 255}, {0, 50, 255}, {170, 0, 255}, {255, 255, 255}};
+const char *const LED_COLOR_NAMES[LED_COLORS] = {
+    "Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple", "White"};
+const char *const LED_MODE_NAMES[LED_MODES] = {"Rainbow", "Solid", "Breathe",
+                                               "Status"};
+static LedCfg ledCfg;
+static bool ledPersistWanted = false;
+LedCfg ledGet() {
+  Guard g;
+  return ledCfg;
+}
+void ledSet(const LedCfg &n) {
+  LedCfg v = n;
+  if (v.mode >= LED_MODES) v.mode = 0;
+  if (v.color >= LED_COLORS) v.color = 0;
+  if (v.level < 1) v.level = 1;
+  if (v.level > 4) v.level = 4;
+  Guard g;
+  ledCfg = v;
+  ledPersistWanted = true;
+}
+static void ledLoad() {
+  Preferences p;
+  p.begin("battlab-led", true);
+  ledCfg.on = p.getBool("on", true);
+  ledCfg.mode = p.getUChar("mode", 0);
+  ledCfg.color = p.getUChar("color", 3);
+  ledCfg.level = p.getUChar("level", 2);
+  p.end();
+  ledSet(ledCfg);
+  ledPersistWanted = false;
+}
+static void ledPersist() {
+  LedCfg v;
+  {
+    Guard g;
+    if (!ledPersistWanted) return;
+    ledPersistWanted = false;
+    v = ledCfg;
+  }
+  Preferences p;
+  p.begin("battlab-led", false);
+  p.putBool("on", v.on);
+  p.putUChar("mode", v.mode);
+  p.putUChar("color", v.color);
+  p.putUChar("level", v.level);
+  p.end();
+}
 static void ledOut(uint8_t r, uint8_t g, uint8_t b) {
 #ifdef BATTLAB_CYD35
   ledcWrite(0, 255 - r);
@@ -907,6 +957,18 @@ static void ledOut(uint8_t r, uint8_t g, uint8_t b) {
   neopixelWrite(BATTLAB_LED_PIN, r, g, b);
 #endif
 }
+static void hueToRgb(float hue, float &r, float &g, float &b) {
+  float h = hue / 60.f, x = 1.f - fabsf(fmodf(h, 2.f) - 1.f);
+  r = g = b = 0;
+  switch (int(h) % 6) {
+    case 0: r = 1; g = x; break;
+    case 1: r = x; g = 1; break;
+    case 2: g = 1; b = x; break;
+    case 3: g = x; b = 1; break;
+    case 4: r = x; b = 1; break;
+    default: r = 1; b = x; break;
+  }
+}
 void ledTask(void *) {
 #ifdef BATTLAB_CYD35
   const uint8_t pins[3] = {4, 16, 17};
@@ -915,26 +977,71 @@ void ledTask(void *) {
     ledcAttachPin(pins[i], i);
     ledcWrite(i, 255);
   }
-  const uint8_t maxLevel = 90;
+  const uint8_t levels[5] = {0, 30, 80, 150, 255};
 #else
-  const uint8_t maxLevel = 40; // the WS2812 is very bright
+  const uint8_t levels[5] = {0, 10, 25, 50, 90}; // WS2812 is very bright
 #endif
-  float hue = 0;
+  float hue = 0, phase = 0;
   for (;;) {
-    float h = hue / 60.f, x = 1.f - fabsf(fmodf(h, 2.f) - 1.f);
-    float r = 0, g = 0, b = 0;
-    switch (int(h) % 6) {
-      case 0: r = 1; g = x; break;
-      case 1: r = x; g = 1; break;
-      case 2: g = 1; b = x; break;
-      case 3: g = x; b = 1; break;
-      case 4: r = x; b = 1; break;
-      default: r = 1; b = x; break;
+    LedCfg c = ledGet();
+    float r = 0, g = 0, b = 0, k = 1;
+    if (c.on) {
+      const uint8_t *pc = LED_PALETTE[c.color];
+      switch (c.mode) {
+        case 0:
+          hueToRgb(hue, r, g, b);
+          break;
+        case 1:
+          r = pc[0] / 255.f; g = pc[1] / 255.f; b = pc[2] / 255.f;
+          break;
+        case 2:
+          r = pc[0] / 255.f; g = pc[1] / 255.f; b = pc[2] / 255.f;
+          k = .08f + .92f * (.5f - .5f * cosf(phase));
+          break;
+        default: {
+          // Status: green = live data, amber pulse = linked/waiting,
+          // blue pulse = scanning/connecting, red slow pulse = no BMS.
+          bool live, linked, scanning;
+          {
+            Guard gd;
+            live = shared.linked && shared.have &&
+                   uint32_t(millis() - shared.stamp) < 15000;
+            linked = shared.linked;
+            scanning = shared.scanning || shared.state == "CONNECTING";
+          }
+          float pulse = .15f + .85f * (.5f - .5f * cosf(phase));
+          if (live) { g = 1; }
+          else if (linked) { r = 1; g = .55f; k = pulse; }
+          else if (scanning) { b = 1; g = .3f; k = pulse; }
+          else { r = 1; k = .15f + .85f * (.5f - .5f * cosf(phase * .5f)); }
+        }
+      }
     }
-    ledOut(uint8_t(r * maxLevel), uint8_t(g * maxLevel), uint8_t(b * maxLevel));
+    float m = levels[c.on ? c.level : 0] * k;
+    ledOut(uint8_t(r * m), uint8_t(g * m), uint8_t(b * m));
     hue += 0.6f; // full colour circle in about 12 s
     if (hue >= 360.f) hue -= 360.f;
+    phase += 0.045f; // breathing period about 2.8 s
+    if (phase > 12.566f) phase -= 12.566f;
     vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+static void ledJson(JsonDocument &d) {
+  LedCfg c = ledGet();
+  d["on"] = c.on;
+  d["mode"] = c.mode;
+  d["color"] = c.color;
+  d["level"] = c.level;
+  auto modes = d.createNestedArray("modes");
+  for (auto n : LED_MODE_NAMES) modes.add(n);
+  auto pal = d.createNestedArray("palette");
+  for (int i = 0; i < LED_COLORS; i++) {
+    char hx[8];
+    snprintf(hx, sizeof hx, "#%02X%02X%02X", LED_PALETTE[i][0],
+             LED_PALETTE[i][1], LED_PALETTE[i][2]);
+    auto o = pal.createNestedObject();
+    o["name"] = LED_COLOR_NAMES[i];
+    o["hex"] = hx;
   }
 }
 void takeDisplaySnapshot(DisplaySnap &o) {
@@ -977,6 +1084,26 @@ void setup() {
   web.on("/", HTTP_GET,
          []() { web.send_P(200, "text/html; charset=utf-8", UI_HTML); });
   web.on("/api/state", HTTP_GET, stateApi);
+  web.on("/api/led", HTTP_GET, []() {
+    DynamicJsonDocument d(1024);
+    ledJson(d);
+    json(200, d);
+  });
+  web.on("/api/led", HTTP_POST, []() {
+    if (!localRequest()) return;
+    if (web.arg("plain").length() > 256) { error(413, "Too large"); return; }
+    StaticJsonDocument<256> in;
+    if (deserializeJson(in, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
+    LedCfg c = ledGet();
+    if (in.containsKey("on")) c.on = in["on"].as<bool>();
+    if (in.containsKey("mode")) c.mode = in["mode"].as<int>();
+    if (in.containsKey("color")) c.color = in["color"].as<int>();
+    if (in.containsKey("level")) c.level = in["level"].as<int>();
+    ledSet(c);
+    DynamicJsonDocument d(1024);
+    ledJson(d);
+    json(200, d);
+  });
   web.on("/api/display", HTTP_GET, []() {
     // Screen orientation / colour fixes for the on-board display, e.g.
     // /api/display?rotation=3  or  ?invert=1  or  ?rgb=1 (reboots to apply)
@@ -984,7 +1111,8 @@ void setup() {
     Preferences p;
     p.begin("battlab-disp", false);
     bool changed = false;
-    if (web.hasArg("rotation")) { p.putUChar("rot", web.arg("rotation").toInt() & 7); changed = true; }
+    if (web.hasArg("rotation")) { p.putUChar("rot", web.arg("rotation").toInt() & 7); p.remove("cal"); changed = true; }
+    if (web.hasArg("calibrate")) { p.remove("cal"); changed = true; }
     if (web.hasArg("invert")) { p.putBool("inv", web.arg("invert").toInt() != 0); changed = true; }
     if (web.hasArg("rgb")) { p.putBool("rgb", web.arg("rgb").toInt() != 0); changed = true; }
     String out = String("{\"rotation\":") + p.getUChar("rot", 1) +
@@ -1146,6 +1274,7 @@ void setup() {
       []() { error(404, "Not found / BMS writes are not implemented"); });
   web.begin();
   xTaskCreatePinnedToCore(bleWorker, "ble", 12288, nullptr, 1, nullptr, 0);
+  ledLoad();
   xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
   displayStart();
 }
@@ -1161,6 +1290,7 @@ void loop() {
       persist = true;
     }
   }
+  ledPersist();
   if (persist) {
     prefs.putString("mac", saved.mac);
     prefs.putString("protocol", saved.protocol);
