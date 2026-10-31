@@ -20,9 +20,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.0.2-cyd35"
+#define BATTLAB_FW "2.0.3-cyd35"
 #else
-#define BATTLAB_FW "2.0.2-s3"
+#define BATTLAB_FW "2.0.3-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -1387,29 +1387,48 @@ static void cloudTask(void *) {
   // Full Mozilla root store, looked up by issuer: works whichever CA the
   // server uses and only the matching root is parsed (little RAM).
   tls.setCACertBundle(CLOUD_CA_BUNDLE);
-  tls.setTimeout(12);
+  tls.setTimeout(10);
   HTTPClient http;
-  http.setReuse(true);
-  uint32_t lastSend = 0;
+  // A new TLS session per upload: its ~40 KB are returned to the heap between
+  // uploads instead of being held (and re-allocated into a fragmented heap
+  // whenever the server drops an idle keep-alive connection).
+  http.setReuse(false);
+  uint32_t lastSend = 0, retryAt = 0;
   auto setStatus = [](const String &s) { Guard g; cloudStatus = s; };
+  auto ram = []() {
+    return String((unsigned)(ESP.getFreeHeap() / 1024)) + "/" +
+           (unsigned)(ESP.getMaxAllocHeap() / 1024) + "k";
+  };
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(500));
     if (!strlen(CLOUD_URL)) { setStatus("not set up"); continue; }
     if (!staSsid.length()) { setStatus("no home Wi-Fi"); continue; }
     if (WiFi.status() != WL_CONNECTED) { setStatus("Wi-Fi connecting"); continue; }
     bool live;
-    DynamicJsonDocument body(3072);
     {
       Guard g;
       live = shared.linked && shared.have && uint32_t(millis() - shared.stamp) < 15000;
     }
-    uint32_t every = live ? 10000 : 60000; // heartbeat when no BMS data
-    if (lastSend && millis() - lastSend < every) continue;
-    lastSend = millis();
-    body["p_token"] = devToken;
-    body["p_pair"] = pairCode;
-    auto d = body.createNestedObject("p_data");
+    bool paired;
     {
+      Guard g;
+      paired = cloudPaired;
+    }
+    // heartbeat when no BMS data; a bit faster until the device is added
+    uint32_t every = live ? 10000 : (paired ? 60000 : 20000);
+    if (retryAt) {
+      if (int32_t(millis() - retryAt) < 0) continue;
+    } else if (lastSend && millis() - lastSend < every) {
+      continue;
+    }
+    lastSend = millis();
+    retryAt = 0;
+    String json;
+    {
+      DynamicJsonDocument body(3072);
+      body["p_token"] = devToken;
+      body["p_pair"] = pairCode;
+      auto d = body.createNestedObject("p_data");
       Guard g;
       d["fw"] = BATTLAB_FW;
       d["state"] = shared.state;
@@ -1417,6 +1436,8 @@ static void cloudTask(void *) {
       d["model"] = shared.model;
       d["rssi"] = shared.rssi;
       d["up"] = millis() / 1000;
+      d["heap"] = ESP.getFreeHeap();
+      d["blk"] = ESP.getMaxAllocHeap();
       if (live) {
         const auto &s = shared.sample;
         d["v"] = s.voltage;
@@ -1440,20 +1461,33 @@ static void cloudTask(void *) {
           }
         if (mx > 0) { d["cmin"] = mn; d["cmax"] = mx; }
       }
+      serializeJson(body, json);
     }
-    String json;
-    serializeJson(body, json);
-    setStatus(String("sending (RAM ") + (ESP.getMaxAllocHeap() / 1024) + "k)");
-    if (!http.begin(tls, String(CLOUD_URL) + "/rest/v1/rpc/ingest")) {
-      setStatus("connect failed");
+    // Screen pauses its sprite drawing while the TLS session is open.
+    if (!gfxHold(3000)) { retryAt = millis() + 2000; continue; }
+    if (ESP.getMaxAllocHeap() < 20000) {
+      gfxRelease();
+      setStatus(String("low RAM ") + ram() + " - retry");
+      Serial.printf("[CLOUD] low RAM free %u block %u\n", (unsigned)ESP.getFreeHeap(),
+                    (unsigned)ESP.getMaxAllocHeap());
+      retryAt = millis() + 15000;
       continue;
     }
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("apikey", CLOUD_ANON_KEY);
-    http.addHeader("Authorization", String("Bearer ") + CLOUD_ANON_KEY);
-    int code = http.POST(json);
-    String resp = code > 0 ? http.getString() : String();
-    http.end();
+    setStatus(String("sending (RAM ") + ram() + ")");
+    int code = -1;
+    String resp;
+    if (http.begin(tls, String(CLOUD_URL) + "/rest/v1/rpc/ingest")) {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("apikey", CLOUD_ANON_KEY);
+      http.addHeader("Authorization", String("Bearer ") + CLOUD_ANON_KEY);
+      code = http.POST(json);
+      if (code > 0) resp = http.getString();
+      http.end();
+    }
+    char why[96] = {0};
+    int e = code < 0 ? tls.lastError(why, sizeof why) : 0;
+    tls.stop(); // free the TLS buffers before the screen draws again
+    gfxRelease();
     Guard g;
     if (code == 200) {
       cloudSent++;
@@ -1461,12 +1495,11 @@ static void cloudTask(void *) {
       cloudPaired = resp.indexOf("unpaired") < 0;
       cloudStatus = cloudPaired ? "online" : "online - add on website";
     } else if (code < 0) {
-      char why[96] = {0};
-      int e = tls.lastError(why, sizeof why);
       cloudStatus = e ? String("TLS: ") + why : String("no connection (") + code + ")";
-      Serial.printf("[CLOUD] POST failed %d, tls %d %s, heap %u\n", code, e, why,
-                    (unsigned)ESP.getFreeHeap());
-      tls.stop();
+      cloudStatus += String("  RAM ") + ram();
+      Serial.printf("[CLOUD] POST failed %d, tls %d %s, heap %u block %u\n", code, e, why,
+                    (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+      retryAt = millis() + 15000;
     } else {
       cloudStatus = String("server error ") + code;
       Serial.printf("[CLOUD] %d %s\n", code, resp.c_str());

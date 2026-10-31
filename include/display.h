@@ -55,6 +55,9 @@ void wifiSetEnabled(bool on);
 
 void takeDisplaySnapshot(DisplaySnap &out); // implemented in main.cpp
 void displayStart();                        // no-op on boards without display
+// Pause screen drawing (and its big sprite buffers) while TLS runs.
+bool gfxHold(uint32_t waitMs);
+void gfxRelease();
 
 // RGB LED settings, shared by the web API, the on-screen controls and the
 // LED task. Persisted in NVS.

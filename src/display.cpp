@@ -6,6 +6,8 @@
 
 #ifndef BATTLAB_DISPLAY
 void displayStart() {}
+bool gfxHold(uint32_t) { return true; }
+void gfxRelease() {}
 #else
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -772,7 +774,7 @@ static void info(const DisplaySnap &d, bool force) {
                            : n.connected ? n.ssid + "  " + n.ip + "  " + n.rssi + " dBm"
                                          : n.ssid + "  connecting..."); y += 29;
   infoRow(y, "Cloud", n.cloud + (n.sent ? String("   sent ") + n.sent : String(""))); y += 29;
-  infoRow(y, "System", d.firmware + "  " + d.resetReason + "  RAM " + (d.freeHeap / 1024) + "k");
+  infoRow(y, "System", d.firmware + "  " + d.resetReason + "  RAM " + (d.freeHeap / 1024) + "/" + (d.maxBlock / 1024) + "k");
   String key = String(n.connected ? "C" : "-") + n.paired;
   if (!force && key == infoKey) return;
   infoKey = key;
@@ -1248,6 +1250,17 @@ static void splash() {
 }
 
 // --------------------------------------------------------------- task ----
+// The screen draws through short-lived sprites (up to ~22 KB). The cloud task
+// takes this lock while its TLS connection is open, so both never need big
+// RAM blocks at the same moment (classic ESP32 has little heap with BLE+Wi-Fi).
+static SemaphoreHandle_t gfxMutex = nullptr;
+bool gfxHold(uint32_t waitMs) {
+  return !gfxMutex || xSemaphoreTake(gfxMutex, pdMS_TO_TICKS(waitMs)) == pdTRUE;
+}
+void gfxRelease() {
+  if (gfxMutex) xSemaphoreGive(gfxMutex);
+}
+
 static void displayTask(void *) {
   splash();
   {
@@ -1267,6 +1280,7 @@ static void displayTask(void *) {
   bool wasDown = false, asleep = false, alarmWas = false;
   DisplaySnap d;
   for (;;) {
+    xSemaphoreTake(gfxMutex, portMAX_DELAY);
     uint32_t now = millis();
     lgfx::touch_point_t tp;
     bool down = tft.getTouch(&tp) > 0;
@@ -1371,6 +1385,7 @@ static void displayTask(void *) {
       drawnPage = page;
       lastDraw = millis();
     }
+    xSemaphoreGive(gfxMutex);
     vTaskDelay(pdMS_TO_TICKS(30));
   }
 }
@@ -1397,6 +1412,7 @@ void displayStart() {
   C_BLUE = tft.color565(84, 148, 232);
   tft.setBrightness(0);
   tft.fillScreen(TFT_BLACK);
+  gfxMutex = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(displayTask, "disp", 10240, nullptr, 1, nullptr, 1);
 }
 #endif
