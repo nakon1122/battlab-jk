@@ -308,6 +308,18 @@ def ota_screen(pct=62):
     s.text('Do not switch off - restarts by itself', 240, 210, F9, MUTED, 'mm')
     return s
 
+JBDP = [('Cell OVP', 3.650, 'V', 3), ('Cell OVP release', 3.400, 'V', 3), ('Cell UVP', 2.500, 'V', 3), ('Cell UVP release', 2.900, 'V', 3), ('Pack OVP', 58.4, 'V', 1)]
+def param_jbd():
+    s = Scr(); header(s, 'JBD  LIVE')
+    for r, (nm, v, u, dec) in enumerate(JBDP):
+        y = 46 + r * 39; s.rr(12, y, 274, 35, 8, fill=CARD); s.text(nm, 22, y + 18, F9, MUTED)
+        ed = r == 0
+        s.text(f"{3.600 if ed else v:.{dec}f} {u}", 278, y + 18, F9B, WARN if ed else TEXT, 'rm')
+        s.button((292, y, 50, 35), '-', f=F12B); s.button((348, y, 50, 35), '+', f=F12B); s.button((404, y, 70, 35), 'SET', ed, WARN)
+    for i, (t, on) in enumerate([('CHG ON', True), ('DSG ON', True)]): s.button((12 + i * 102, 242, 96, 34), t, on, GOOD)
+    s.button((322, 242, 56, 34), '<', f=F12B); s.button((418, 242, 56, 34), '>', f=F12B); s.text('1/5', 398, 260, F9, MUTED, 'mm')
+    tabs(s, 3); return s
+
 shots = [
     ('01_boot.png', 'Boot: BattLab logo, 5 s', boot()),
     ('02_touch_calibration.png', 'First start: touch calibration', calib()),
@@ -325,6 +337,7 @@ shots = [
     ('15_wifi_list.png', 'HOME WI-FI: scan and pick your network', wifi_list()),
     ('16_wifi_keyboard.png', 'On-screen keyboard for the Wi-Fi password', keyboard()),
     ('19_cloud_update.png', 'Firmware update from BattLab Cloud (no USB)', ota_screen()),
+    ('20_param_jbd.png', 'PARAM: JBD / Xiaoxiang settings (22 values, also ANT 47 values)', param_jbd()),
     ('18_home_big.png', 'HOME: tap the gauge = BIG view (tap again to go back)', big_home()),
     ('17_cloud_pairing.png', 'CLOUD: pair code to add on the website', cloud()),
     ('14_boot_after_crash.png', 'Boot after an abnormal reset', boot('CRASH (panic)', .3)),

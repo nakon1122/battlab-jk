@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
+<script src="params.js"></script>
 <style>
 :root{--bg:#0b1117;--card:#18212a;--card2:#111a22;--line:#2d3a46;--text:#ecf1f4;--muted:#8796a1;--accent:#36c4a8;--on-accent:#0b1117;--good:#40c878;--warn:#e8a040;--bad:#e85458;--s1:#3987e5;--s2:#d95926;--grid:#222d37;--neu:#5b6873}
 :root[data-theme=light]{--bg:#eef2f5;--card:#ffffff;--card2:#f3f6f8;--line:#d9e0e6;--text:#10181f;--muted:#5d6b76;--good:#1f9d55;--warn:#b86f0e;--bad:#d03b3b;--s1:#2a78d6;--s2:#eb6834;--grid:#e8edf1;--neu:#9aa6af}
@@ -579,7 +580,7 @@ function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length
 function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
 function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>🔵 '+esc(c.name||'')+'</b><div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
 function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
- const key=JSON.stringify([c,d.jk,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit,d.fw,!!MAN]);const ae=document.activeElement;
+ const key=JSON.stringify([c,d.jk,d.pa,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit,d.fw,!!MAN]);const ae=document.activeElement;
  if(key===ctlKey&&$('cmdLog'))return;if(ae&&$('tab_ctl').contains(ae)&&/INPUT|SELECT/.test(ae.tagName)&&$('cmdLog'))return;ctlKey=key;
  if(!l||!c){$('tab_ctl').innerHTML='<div class="card empty"><div class="e">🛰️</div><b>'+(!l?'บอร์ดยังไม่เคยส่งข้อมูลขึ้น cloud':'ต้องอัปเดตเฟิร์มแวร์เป็น 2.1.0 ขึ้นไปก่อน')+'</b><div class="small muted">'+(!l?'ตั้ง Wi-Fi บ้านบนบอร์ดก่อน':'เฟิร์มแวร์ตอนนี้: '+esc(d.fw||'--')+' · ใช้ไฟล์ UPDATE_*.bat เพื่ออัปเดตโดยไม่ลบการตั้งค่า')+'</div></div><div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';renderCmdLog();return}
  const off=!x.online,fam=c.fam||0,famN=['ยังไม่รู้จัก','JK','ANT','JBD'][fam]||'?',isCyd=c.board==='cyd35';
@@ -591,7 +592,10 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  // JK params
  h+='<div class="card"><div class="row"><h3 style="margin:0">พารามิเตอร์ BMS</h3><button class="ghost nf" id="cRead" style="padding:6px 12px;font-size:13px" '+(noBms?'disabled':'')+'>อ่านค่าใหม่</button></div>';
  if(fam===1&&d.jk&&d.jk.v){h+=(c.lw?'<div class="small muted" style="margin-top:6px">เขียนล่าสุด: '+esc(c.lw)+'</div>':'')+JKP.map((p,i)=>{const v=d.jk.v[i];return '<div class="prm"><div>'+p[1]+'<small>'+p[0]+' · '+p[4]+'–'+p[5]+' '+p[2]+'</small></div><input type="number" id="pv'+i+'" step="'+p[3]+'" min="'+p[4]+'" max="'+p[5]+'" value="'+(num(v)?v.toFixed(p[6]):'')+'"><button class="soft" data-p="'+i+'">ตั้ง</button></div>'}).join('')}
- else h+='<div class="small muted" style="margin-top:8px">'+(fam===1?'กำลังรออ่านค่าจาก BMS… กด "อ่านค่าใหม่"':'แก้พารามิเตอร์ได้กับ JK BMS (ANT/JBD ปรับได้แค่สวิตช์ MOS)')+'</div>';
+ else if((fam===2||fam===3)&&d.pa&&Array.isArray(d.pa.v)&&typeof BMS_PARAMS!=='undefined'){const T=BMS_PARAMS[fam]||[];
+  h+=(fam===2?'<div class="small" style="color:var(--warn);margin-top:8px">⚠️ ANT: อ่านค่าได้ครบ ส่วนการเขียนเป็นโหมดทดลอง ทุกครั้งที่ตั้งค่า บอร์ดจะอ่านกลับมาตรวจว่า BMS รับค่าจริงไหม (ดูผลที่บรรทัด "เขียนล่าสุด")</div>':'<div class="small muted" style="margin-top:8px">JBD / Xiaoxiang: เขียนลง EEPROM ของ BMS แล้วอ่านกลับมาตรวจทุกครั้ง</div>')+(c.lw?'<div class="small muted" style="margin-top:6px">เขียนล่าสุด: '+esc(c.lw)+'</div>':'');
+  h+=T.map((p,i)=>{const v=d.pa.v[i],has=v!==null&&v!==undefined;return '<div class="prm"><div>'+esc(p[2])+'<small>'+esc(p[1])+' · '+p[5]+'–'+p[6]+' '+esc(p[3])+'</small></div><input type="number" id="qv'+i+'" step="'+p[4]+'" min="'+p[5]+'" max="'+p[6]+'" value="'+(has?(+v).toFixed(p[7]):'')+'" '+(has?'':'disabled placeholder="ยังไม่ได้อ่าน"')+'><button class="soft" data-q="'+i+'" '+(has?'':'disabled')+'>ตั้ง</button></div>'}).join('')}
+ else h+='<div class="small muted" style="margin-top:8px">'+(fam?'กำลังอ่านค่าจาก BMS… (กด "อ่านค่าใหม่" ถ้านานเกิน 15 วินาที · บอร์ดต้องเป็นเฟิร์มแวร์ 2.5.0 ขึ้นไปสำหรับ ANT/JBD)':'เชื่อม BMS ก่อน')+'</div>';
  h+='</div>';
  // BMS connection
  const devs=Array.isArray(d.devs)?d.devs:[];
@@ -624,6 +628,7 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  bind('cDsg',()=>{const t=!on('cDsg');if(!t&&!confirm('ปิด MOS จ่ายไฟ? ไฟที่ออกไปยังโหลดจะดับทันที'))return;sendCmd('bms_switch',{which:1,on:t})});
  bind('cBal',()=>{const t=bal==null?confirm('เปิดบาลานซ์? (กด ยกเลิก = ปิด)'):!on('cBal');sendCmd('bms_switch',{which:2,on:t})});
  bind('cRead',()=>sendCmd('bms_read'));
+ $('tab_ctl').querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>{const i=+b.dataset.q,p=BMS_PARAMS[fam][i],v=parseFloat($('qv'+i).value),old=d.pa.v[i];if(!num(v)||v<p[5]||v>p[6]){toast('ค่าต้องอยู่ระหว่าง '+p[5]+'–'+p[6]+' '+p[3]);return}if(!confirm(p[2]+'\n'+(+old).toFixed(p[7])+' → '+v.toFixed(p[7])+' '+p[3]+(fam===2?'\n\n(ANT: โหมดทดลอง ระบบจะอ่านกลับมาตรวจ)':'')+'\n\nตรวจให้แน่ใจว่าเหมาะกับเซลล์ของคุณ'))return;sendCmd('bms_param',{index:i,value:v})});
  $('tab_ctl').querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{const i=+b.dataset.p,p=JKP[i],v=parseFloat($('pv'+i).value),old=d.jk.v[i];if(!num(v)||v<p[4]||v>p[5]){toast('ค่าต้องอยู่ระหว่าง '+p[4]+'–'+p[5]+' '+p[2]);return}if(!confirm(p[1]+'\n'+(num(old)?old.toFixed(p[6]):'?')+' → '+v.toFixed(p[6])+' '+p[2]+'\n\nตรวจให้แน่ใจว่าเหมาะกับเซลล์ของคุณ'))return;sendCmd('bms_param',{index:i,value:v})});
  bind('cScan',()=>sendCmd('bms_scan'));bind('cAuto',()=>sendCmd('bms_auto'));bind('cDisc',()=>{if(confirm('ตัดการเชื่อม BMS?'))sendCmd('bms_disconnect')});
  $('tab_ctl').querySelectorAll('[data-mac]').forEach(b=>b.onclick=()=>sendCmd('bms_connect',{mac:b.dataset.mac,type:+b.dataset.type,protocol:$('dp'+b.dataset.j).value}));
@@ -686,7 +691,7 @@ const bleRead=async i=>{try{return JSON.parse(new TextDecoder().decode(await ble
 async function blePoll(all){if(!ble||ble.busy)return;ble.busy=true;try{
  const live=await bleRead(0),cfg=await bleRead(1);ble.n=(ble.n||0)+1;
  if(all||ble.n%2===0){ble.last.jk=await bleRead(2);ble.last.devs=await bleRead(3);ble.last.wscan=await bleRead(4)}
- if(live&&cfg){const data={...live,cfg,jk:ble.last.jk&&ble.last.jk.v?ble.last.jk:undefined,devs:Array.isArray(ble.last.devs)?ble.last.devs:undefined,wscan:Array.isArray(ble.last.wscan)&&ble.last.wscan.length?ble.last.wscan:undefined};
+ if(live&&cfg){const data={...live,cfg,jk:ble.last.jk&&ble.last.jk.v&&!ble.last.jk.f?ble.last.jk:undefined,pa:ble.last.jk&&ble.last.jk.f?ble.last.jk:undefined,devs:Array.isArray(ble.last.devs)?ble.last.devs:undefined,wscan:Array.isArray(ble.last.wscan)&&ble.last.wscan.length?ble.last.wscan:undefined};
   latest[BLE_ID]={ts:new Date().toISOString(),data};const d=devs.find(x=>x.id===BLE_ID);if(d){d.pair_code=cfg.pair;d.name=cfg.name||d.name;d.blePaired=cfg.paired}
   if(cur&&cur.ble){if(tab==='ctl')renderCtl();else if(tab!=='hist')renderDev();else renderHeader()}}
 }finally{if(ble)ble.busy=false}}
