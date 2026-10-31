@@ -50,13 +50,15 @@ jobs:
       - name: Publish binaries to firmware-build branch
         if: always()
         run: |
+          trap 'echo "::error::publish failed at: $BASH_COMMAND (exit $?)"' ERR
           git config user.name "battlab-ci"
           git config user.email "battlab-ci@users.noreply.github.com"
+          git stash -u -q || true          # drop regenerated previews etc. from the work tree
           git checkout --orphan firmware-build
-          git rm -rq --cached .
-          mkdir -p firmware
-          cp out/* firmware/ 2>/dev/null || true
-          mkdir -p firmware/screens && cp out/screens/*.png firmware/screens/ 2>/dev/null || true
+          git rm -rq --cached . || true
+          mkdir -p firmware/screens
+          find out -maxdepth 1 -type f -exec cp {} firmware/ \;
+          cp out/screens/*.png firmware/screens/ 2>/dev/null || true
           git add -f firmware/
           git commit -qm "firmware for ${GITHUB_SHA::7} (${{ job.status }})"
-          git push -f origin firmware-build
+          git push -f origin firmware-build 2>&1 | tail -5
