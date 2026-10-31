@@ -1,4 +1,5 @@
 #include "jk_protocol.h"
+#include "bms_other.h"
 #include "jk_auth.h"
 #include "ble_channels.h"
 #include "ui.h"
@@ -148,7 +149,7 @@ void stateApi() {
   }
   d["heap"] = ESP.getFreeHeap();
   d["uptime_ms"] = millis();
-  d["firmware"] = "1.3.4-probe-rgb";
+  d["firmware"] = "1.4.0-multi-bms";
   json(200, d);
 }
 bool validMac(String m) {
@@ -183,7 +184,25 @@ void bleWorker(void *) {
   bool gotInfo = false, gotCellFrame = false;
   uint32_t linkedAt = 0, lastCellFrame = 0, lastCellRequest = 0;
   uint8_t cellRequests = 0;
+  // BMS family: 0 = not identified yet, 1 = JK, 2 = ANT, 3 = JBD/Xiaoxiang
+  uint8_t fam = 0;
+  bool linkedLocal = false;
+  NimBLERemoteCharacteristic *antCh = nullptr, *jbdCh = nullptr;
+  bms::AntFramer antF;
+  bms::JbdFramer jbdF;
+  jk::Sample jbdSample;
+  bool jbdHaveBasic = false;
+  uint32_t identAt = 0, identStartedAt = 0, lastOtherPoll = 0;
+  uint8_t identIdx = 0, jbdToggle = 0;
+  bool fullProbeDone = false;
+  auto forcedFamily = [](const String &p) -> uint8_t {
+    if (p == "ANT") return 2;
+    if (p == "JBD") return 3;
+    if (p == "JK02_24S" || p == "JK02_32S") return 1;
+    return 0;
+  };
   auto receive = [&](const uint8_t *b) {
+    if (!fam && (b[4] == 2 || b[4] == 3)) fam = 1;
     Guard g;
     if (generation != seen)
       return;
@@ -378,9 +397,11 @@ void bleWorker(void *) {
         String upper = name.c_str();
         upper.toUpperCase();
         bool candidate =
-            upper.startsWith("JK") ||
+            upper.startsWith("JK") || upper.startsWith("ANT") ||
+            upper.startsWith("JBD") || upper.startsWith("XIAOXIANG") ||
             (dev.haveServiceUUID() &&
-             dev.isAdvertisingService(NimBLEUUID(uint16_t(0xffe0))));
+             (dev.isAdvertisingService(NimBLEUUID(uint16_t(0xffe0))) ||
+              dev.isAdvertisingService(NimBLEUUID(uint16_t(0xff00)))));
         o["candidate"] = candidate;
         if (candidate) {
           candidates++;
@@ -422,6 +443,7 @@ void bleWorker(void *) {
       }
     }
     if (!client->isConnected()) {
+      linkedLocal = false;
       if (ch)
         Serial.printf("[BLE] link lost after %lu ms (frames ok=%lu)\n",
                       (unsigned long)(millis() - linkedAt),
@@ -530,12 +552,30 @@ void bleWorker(void *) {
             if (!shared.probeLogFrozen) shared.probeLog = "";
           }
           if (ch) withResp = !ch->canWriteNoResponse();
+          antCh = ch;
+          jbdCh = nullptr;
+          if (auto jsv = client->getService(NimBLEUUID(uint16_t(0xff00))))
+            jbdCh = jsv->getCharacteristic(NimBLEUUID(uint16_t(0xff02)));
+          fam = forcedFamily(c.protocol);
+          if (!fam && jbdCh) fam = 3; // service FF00 is specific to JBD
+          antF.reset();
+          jbdF.reset();
+          jbdHaveBasic = false;
+          jbdSample = jk::Sample();
+          identAt = 0;
+          identIdx = 0;
+          identStartedAt = millis();
+          fullProbeDone = false;
+          lastOtherPoll = 0;
+          Serial.printf("[BLE] channels: jk/ant=%s jbd=%s family=%u\n",
+                        ch ? "FFE1" : "-", jbdCh ? "FF02" : "-", fam);
           {
             Guard g;
             shared.gatt = gatt;
           }
-          if (subscribed && !steps.empty()) {
-            probeStep = 0;
+          if (subscribed && (ch || jbdCh || !steps.empty())) {
+            linkedLocal = true;
+            probeStep = -1; // run quick identification first
             probeAt = 0;
             notifyBytes = 0;
             notifyChunks = 0;
@@ -556,7 +596,7 @@ void bleWorker(void *) {
             shared.parameterAuth = "LOCKED";
             shared.bleError = 0;
             shared.writeHandle = ch ? ch->getHandle() : 0;
-            shared.probe = "probing";
+            shared.probe = "identifying";
             shared.notifyHandle = notifyCh ? notifyCh->getHandle() : 0;
             lastPoll = 0;
             lastInfo = 0;
@@ -577,10 +617,99 @@ void bleWorker(void *) {
           shared.bleError = err;
         }
       }
-    } else if (probeStep != -1 || ch) {
+    } else if (linkedLocal) {
+      auto publishOther = [&](const jk::Sample &smp, const char *name) {
+        gotCellFrame = true;
+        lastCellFrame = millis();
+        Guard g;
+        if (generation != seen) return;
+        shared.sample = smp;
+        shared.have = true;
+        shared.stamp = millis();
+        shared.state = "LIVE";
+        shared.detected = name;
+        shared.connectionAuth = "NOT_SET";
+        shared.good = antF.good + jbdF.good + parser.good;
+      };
       Chunk chunk;
-      while (xQueueReceive(queue, &chunk, 0) == pdTRUE)
+      while (xQueueReceive(queue, &chunk, 0) == pdTRUE) {
         parser.feed(chunk.data, chunk.n, receive);
+        antF.feed(chunk.data, chunk.n, [&](const uint8_t *f, size_t n) {
+          jk::Sample smp;
+          if (bms::decodeAnt(f, n, smp)) {
+            if (!fam) fam = 2;
+            if (fam == 2) publishOther(smp, "ANT");
+          } else {
+            Guard g;
+            shared.rejected++;
+          }
+        });
+        jbdF.feed(chunk.data, chunk.n, [&](uint8_t cmd, const uint8_t *d, size_t n) {
+          bool ok = cmd == 3 ? bms::decodeJbdBasic(d, n, jbdSample)
+                  : cmd == 4 ? bms::decodeJbdCells(d, n, jbdSample) : false;
+          if (!ok) return;
+          if (!fam) fam = 3;
+          if (cmd == 3) jbdHaveBasic = true;
+          if (fam == 3 && jbdHaveBasic && jbdSample.count) {
+            float total = 0;
+            for (unsigned i = 0; i < jbdSample.count; i++) total += jbdSample.cells[i];
+            if (std::fabs(jbdSample.voltage - total) <= std::fmax(2.f, total * .05f))
+              publishOther(jbdSample, "JBD");
+          }
+        });
+      }
+      {
+        uint32_t t = millis();
+        auto writeRaw = [&](NimBLERemoteCharacteristic *w, const uint8_t *d,
+                            size_t n, const char *what) {
+          if (!w) return false;
+          bool resp = !w->canWriteNoResponse();
+          bool ok = w->writeValue(d, n, resp);
+          Serial.printf("[BLE] -> %s %s\n", what, ok ? "ok" : "FAILED");
+          Guard g;
+          if (ok) shared.txOk++; else shared.txFail++;
+          return ok;
+        };
+        if (fam == 2 && t - lastOtherPoll > 2000) {
+          writeRaw(antCh, bms::ANT_STATUS_REQUEST, sizeof(bms::ANT_STATUS_REQUEST), "ANT status");
+          lastOtherPoll = t;
+        } else if (fam == 3 && t - lastOtherPoll > 1000) {
+          jbdToggle ^= 1;
+          if (jbdToggle || !jbdHaveBasic)
+            writeRaw(jbdCh ? jbdCh : ch, bms::JBD_BASIC_REQUEST, 7, "JBD basic");
+          else
+            writeRaw(jbdCh ? jbdCh : ch, bms::JBD_CELLS_REQUEST, 7, "JBD cells");
+          lastOtherPoll = t;
+        } else if (fam == 0 && probeStep == -1) {
+          // Quick identification: rotate JK / ANT / JBD requests.
+          uint32_t gap = fullProbeDone ? 3000 : 1200;
+          if (!identAt || t - identAt > gap) {
+            identAt = t;
+            auto j7 = jk::request(0x97), j6 = jk::request(0x96);
+            switch (identIdx++ % 4) {
+              case 0: writeRaw(ch, j7.data(), j7.size(), "ident JK 0x97"); break;
+              case 1: writeRaw(antCh, bms::ANT_STATUS_REQUEST, 10, "ident ANT"); break;
+              case 2: writeRaw(jbdCh ? jbdCh : ch, bms::JBD_BASIC_REQUEST, 7, "ident JBD"); break;
+              default: writeRaw(ch, j6.data(), j6.size(), "ident JK 0x96"); break;
+            }
+            {
+              Guard g;
+              shared.probe = fullProbeDone ? "identifying (slow)" : "identifying";
+            }
+            if (!fullProbeDone && t - identStartedAt > 20000 && !steps.empty()) {
+              // Nothing recognised: run the full diagnostic probe once.
+              Serial.println("[BLE] no known BMS answered, starting full probe");
+              fullProbeDone = true;
+              probeStep = 0;
+              probeAt = 0;
+              winLen = 0;
+              winChunks = 0;
+              jkStep = -1;
+              goodBefore = parser.good;
+            }
+          }
+        }
+      }
       {
         Guard g;
         shared.bad = parser.bad;
@@ -625,6 +754,7 @@ void bleWorker(void *) {
                 : String("DONE_NO_JK_FRAME");
             Serial.printf("[BLE] probe finished: %s\n", r.c_str());
             if (jkStep >= 0) {
+              fam = 1;
               ch = steps[jkStep].target;
               withResp = steps[jkStep].resp;
               lastCellRequest = 0;
@@ -636,7 +766,7 @@ void bleWorker(void *) {
               shared.probeLog += String("FINISHED: ") + r + "\n";
               shared.probeLogFrozen = true; // keep the first full run
             }
-            probeStep = -2;
+            probeStep = -1; // back to (slow) identification
           } else {
             const Step &st = steps[probeStep];
             bool ok = st.target->writeValue(probes[st.probe].data,
@@ -679,7 +809,7 @@ void bleWorker(void *) {
         return ok;
       };
       uint32_t now = millis();
-      bool probing = probeStep >= 0 || !ch;
+      bool probing = fam != 1 || probeStep >= 0 || !ch;
       if (probing) lastInfo = lastInfo ? lastInfo : now;
       // 1) Device info (0x97) right after linking, retried every 5 s until a
       //    0x03 frame arrives (never re-sent while streaming).
@@ -743,7 +873,7 @@ void bleWorker(void *) {
       {
         Guard g;
         uint32_t since = gotCellFrame ? lastCellFrame : linkedAt;
-        reset = now - since > (notifyBytes || probeStep != -1 ? 180000u : 45000u);
+        reset = now - since > (notifyBytes || probeStep != -1 || fam == 0 ? 180000u : 45000u);
         if (!gotCellFrame && reset)
           shared.state = gotInfo ? "NO_CELL_DATA" : "NO_RESPONSE";
         if (generation != seen)
@@ -794,7 +924,7 @@ void setup() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("BATTLAB-JK");
-  Serial.printf("\nBATTLAB 1.3.4-probe-rgb\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB 1.4.0-multi-bms\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
@@ -804,7 +934,7 @@ void setup() {
     String s;
     {
       Guard g;
-      s = String("BATTLAB 1.3.4 probe log\nstate: ") + shared.probe +
+      s = String("BATTLAB 1.4.0 probe log\nstate: ") + shared.probe +
           "\ngatt: " + shared.gatt + "\n\n" + shared.probeLog;
     }
     web.sendHeader("Cache-Control", "no-store");
@@ -865,7 +995,7 @@ void setup() {
     }
     String mac = d["mac"] | "", p = d["protocol"] | "";
     int type = d["type"] | 0;
-    if (!validMac(mac) || (p != "AUTO" && p != "JK02_24S" && p != "JK02_32S") ||
+    if (!validMac(mac) || (p != "AUTO" && p != "JK02_24S" && p != "JK02_32S" && p != "ANT" && p != "JBD") ||
         (type != 0 && type != 1)) {
       error(400, "Invalid MAC, protocol or address type");
       return;
