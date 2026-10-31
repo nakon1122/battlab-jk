@@ -286,10 +286,29 @@ static void header(const DisplaySnap &d) {
     s.setTextColor(C_TEXT, C_BAD);
     s.setTextDatum(textdatum_t::middle_center);
     s.drawString(alarmText, 476 - w / 2, 21);
-  } else if (d.linked) {
-    s.setTextDatum(textdatum_t::middle_right);
-    s.setTextColor(C_MUTED, C_BG);
-    s.drawString(String(d.rssi) + " dBm", 468, 21);
+  } else {
+    String r;
+    time_t now = time(nullptr);
+    if (now > 1700000000) {
+      struct tm t;
+      localtime_r(&now, &t);
+      char hhmm[8];
+      snprintf(hhmm, sizeof hhmm, "%02d:%02d", t.tm_hour, t.tm_min);
+      s.setTextDatum(textdatum_t::middle_right);
+      s.setFont(&fonts::FreeSansBold9pt7b);
+      s.setTextColor(C_TEXT, C_BG);
+      s.drawString(hhmm, 470, 21);
+      r = "  ";
+      s.setFont(&fonts::FreeSans9pt7b);
+      if (d.linked) {
+        s.setTextColor(C_MUTED, C_BG);
+        s.drawString(String(d.rssi) + "dBm", 470 - 58, 21);
+      }
+    } else if (d.linked) {
+      s.setTextDatum(textdatum_t::middle_right);
+      s.setTextColor(C_MUTED, C_BG);
+      s.drawString(String(d.rssi) + " dBm", 468, 21);
+    }
   }
   s.drawFastHLine(0, 39, 480, C_LINE);
   s.pushSprite(0, 0);
@@ -352,7 +371,7 @@ static void socGauge(const DisplaySnap &d, bool force) {
   s.drawString(soc < 0 ? String("--") : String(soc) + "%", 65, 34);
   s.setFont(&fonts::FreeSans9pt7b);
   s.setTextColor(C_MUTED, C_BG);
-  s.drawString("SOC", 65, 72);
+  s.drawString("SOC", 65, 62);
   s.pushSprite(cx - 65, cy - 38);
   s.deleteSprite();
 }
@@ -375,7 +394,65 @@ static void pill(LGFX_Sprite &s, int x, int y, const char *t, bool on) {
   s.setTextDatum(textdatum_t::middle_center);
   s.drawString(t, x + 36, y + 14);
 }
+// 10 minutes of power / SOC (one point every 5 s) for the HOME sparkline
+static const int HIST_N = 120;
+static float histP[HIST_N], histSoc[HIST_N];
+static int histCount = 0, histHead = 0;
+static uint32_t histAt = 0;
+static void histPush(const DisplaySnap &d) {
+  if (!d.live || millis() - histAt < 5000) return;
+  histAt = millis();
+  histP[histHead] = d.sample.voltage * d.sample.current;
+  histSoc[histHead] = d.sample.soc;
+  histHead = (histHead + 1) % HIST_N;
+  if (histCount < HIST_N) histCount++;
+}
+static String etaText(const jk::Sample &s) {
+  float full = s.soc > 3 ? s.capacity / (s.soc / 100.f) : 0;
+  float h = -1;
+  const char *w = "";
+  if (s.current > 0.3f && full > 0) { h = (full - s.capacity) / s.current; w = "full in "; }
+  else if (s.current < -0.3f && s.capacity > 0) { h = s.capacity / -s.current; w = "empty in "; }
+  if (h < 0 || h > 999) return "";
+  int m = int(h * 60 + .5f);
+  return String(w) + (m < 60 ? String(m) + "m" : String(m / 60) + "h" + (m % 60 < 10 ? "0" : "") + String(m % 60));
+}
+static bool bigMode = false;
+static void bigHome(const DisplaySnap &d) {
+  const auto &s = d.sample;
+  bool ok = d.live;
+  int soc = ok ? int(s.soc + .5f) : -1;
+  LGFX_Sprite b(&tft);
+  b.setColorDepth(8);
+  if (!b.createSprite(480, 236)) return;
+  b.fillSprite(C_BG);
+  uint16_t col = soc < 0 ? C_LINE : soc <= 15 ? C_BAD : soc <= 35 ? C_WARN : C_GOOD;
+  b.setTextDatum(textdatum_t::middle_center);
+  b.setFont(&fonts::FreeSansBold24pt7b);
+  b.setTextSize(2.4f);
+  b.setTextColor(C_TEXT, C_BG);
+  b.drawString(soc < 0 ? String("--") : String(soc) + "%", 240, 74);
+  b.setTextSize(1);
+  b.fillRoundRect(40, 132, 400, 14, 7, C_LINE);
+  if (soc > 0) b.fillRoundRect(40, 132, 4 * std::min(soc, 100), 14, 7, col);
+  b.setFont(&fonts::FreeSansBold18pt7b);
+  b.setTextColor(s.current < 0 ? C_WARN : C_GOOD, C_BG);
+  b.drawString(ok ? fmt(s.voltage * s.current, 0) + " W" : String("--"), 130, 186);
+  b.setTextColor(C_TEXT, C_BG);
+  b.drawString(ok ? fmt(s.voltage, 1) + " V" : String("--"), 350, 186);
+  b.setFont(&fonts::FreeSans9pt7b);
+  b.setTextColor(C_MUTED, C_BG);
+  b.drawString(ok ? etaText(s) + (etaText(s).length() ? "   " : "") + fmt(s.current, 1) + " A   " + fmt(s.temp1, 0) + " C"
+                  : String("Waiting for BMS data"), 240, 222);
+  b.pushSprite(0, 41);
+  b.deleteSprite();
+}
 static void home(const DisplaySnap &d, bool force) {
+  if (bigMode) {
+    static uint32_t lastBig = 0;
+    if (force || millis() - lastBig > 900) { lastBig = millis(); bigHome(d); }
+    return;
+  }
   socGauge(d, force);
   const auto &s = d.sample;
   bool ok = d.live;
@@ -398,15 +475,68 @@ static void home(const DisplaySnap &d, bool force) {
   b.setFont(&fonts::FreeSans9pt7b);
   b.setTextDatum(textdatum_t::middle_left);
   b.setTextColor(C_TEXT, C_CARD);
-  String line = ok && imn >= 0
-      ? String(s.count) + "S  min " + fmt(mn, 3) + "  max " + fmt(mx, 3) +
-            "  d " + String(int((mx - mn) * 1000 + .5f)) + "mV"
-      : String(d.linked ? "Waiting for BMS data" : "Not connected - open BMS tab");
-  b.drawString(line, 12, 23);
+  if (ok && imn >= 0) {
+    b.drawString(String(s.count) + "S  d" + String(int((mx - mn) * 1000 + .5f)) + "mV", 12, 14);
+    String e = etaText(s);
+    b.setTextColor(C_MUTED, C_CARD);
+    b.drawString(e.length() ? e : String(s.cycles) + " cycles", 12, 33);
+  } else {
+    b.drawString(d.linked ? "Waiting for BMS data" : "Not connected - open BMS tab", 12, 23);
+  }
+  // power sparkline (last 10 min)
+  if (ok && histCount > 1) {
+    const int sx = 150, sw = 140, sy = 6, sh = 34;
+    float lo = 0, hi = 0;
+    for (int k = 0; k < histCount; k++) {
+      float v = histP[(histHead - histCount + k + HIST_N) % HIST_N];
+      lo = std::min(lo, v);
+      hi = std::max(hi, v);
+    }
+    if (hi - lo < 1) hi = lo + 1;
+    int zy = sy + int(sh * hi / (hi - lo));
+    b.drawFastHLine(sx, zy, sw, C_LINE);
+    int px = -1, py = 0;
+    for (int k = 0; k < histCount; k++) {
+      float v = histP[(histHead - histCount + k + HIST_N) % HIST_N];
+      int x = sx + sw - (histCount - 1 - k) * sw / (HIST_N - 1);
+      int y = sy + int(sh * (hi - v) / (hi - lo));
+      if (px >= 0) b.drawLine(px, py, x, y, v < 0 ? C_WARN : C_GOOD);
+      px = x;
+      py = y;
+    }
+    b.setTextDatum(textdatum_t::top_left);
+    b.setTextColor(C_MUTED, C_CARD);
+    b.setFont(&fonts::Font0);
+    b.drawString("10 min W", sx, 1);
+    b.setFont(&fonts::FreeSans9pt7b);
+  }
   pill(b, 304, 10, "CHG", ok && s.charge);
   pill(b, 382, 10, "DSG", ok && s.discharge);
   b.pushSprite(9, 228);
   b.deleteSprite();
+}
+// moving chevrons under the SOC number: up = charging, down = discharging
+static void flowAnim(const DisplaySnap &d) {
+  if (bigMode) return;
+  static uint32_t last = 0;
+  if (millis() - last < 140) return;
+  last = millis();
+  int dir = !d.live ? 0 : d.sample.current > 0.3f ? 1 : d.sample.current < -0.3f ? -1 : 0;
+  LGFX_Sprite s(&tft);
+  s.setColorDepth(8);
+  if (!s.createSprite(64, 18)) return;
+  s.fillSprite(C_BG);
+  int phase = (millis() / 140) % 3;
+  for (int k = 0; k < 3; k++) {
+    int idx = dir > 0 ? 2 - k : k;
+    uint16_t c = dir == 0 ? C_LINE : idx == phase ? (dir > 0 ? C_GOOD : C_WARN) : C_LINE;
+    int x = 6 + k * 20;
+    if (dir >= 0) s.fillTriangle(x, 14, x + 16, 14, x + 8, 3, c);
+    else s.fillTriangle(x, 3, x + 16, 3, x + 8, 14, c);
+    if (dir == 0) { s.fillSprite(C_BG); s.fillRoundRect(8, 7, 48, 4, 2, C_LINE); break; }
+  }
+  s.pushSprite(106 - 32, 150 + 24);
+  s.deleteSprite();
 }
 
 // -------------------------------------------------------------- CELLS ----
@@ -960,10 +1090,13 @@ static void cloudOverlayDraw(bool force) {
   tft.drawString(String("1. On your phone open  ") + n.site, 12, 150);
   tft.drawString("2. Sign in and tap  Add device", 12, 176);
   tft.drawString("3. Enter the pair code above", 12, 202);
-  uint16_t sc = n.paired ? C_GOOD : n.cloud.startsWith("online") ? C_WARN : C_BAD;
-  tft.fillCircle(18, 246, 6, sc);
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.drawString(String("Hotspot + Bluetooth name: ") + n.name, 12, 224);
   tft.setTextColor(C_TEXT, C_BG);
-  tft.drawString(String("Cloud: ") + n.cloud, 32, 247);
+  uint16_t sc = n.paired ? C_GOOD : n.cloud.startsWith("online") ? C_WARN : C_BAD;
+  tft.fillCircle(18, 252, 6, sc);
+  tft.setTextColor(C_TEXT, C_BG);
+  tft.drawString(String("Cloud: ") + n.cloud, 32, 253);
 }
 // returns true when the overlay wants the page underneath repainted
 static bool overlayTouch(int x, int y) {
@@ -1333,7 +1466,8 @@ static void displayTask(void *) {
         if (t >= 0) page = t;
         if (overlay != OV_NONE) { overlay = OV_NONE; drawnPage = -1; }
       } else if (tp.y > 42) {
-        if (page == P_PARAM) paramTouch(d, tp.x, tp.y);
+        if (page == P_HOME && (bigMode || (tp.x < 210 && tp.y < 228))) { bigMode = !bigMode; drawnPage = -1; }
+        else if (page == P_PARAM) paramTouch(d, tp.x, tp.y);
         else if (page == P_LED) ledTouch(tp.x, tp.y);
         else if (page == P_BMS) bmsTouch(d, tp.x, tp.y);
         else if (page == P_SETUP) setupTouch(d, tp.x, tp.y);
@@ -1379,6 +1513,7 @@ static void displayTask(void *) {
     if (!confirmDlg.active && overlay != OV_KB && (page != drawnPage || now - lastDraw > 700)) {
       bool force = page != drawnPage;
       takeDisplaySnapshot(d);
+      histPush(d);
       evalAlarm(d);
       bool alarmNow = alarmText.length() > 0;
       if (alarmNow && !alarmWas) {
@@ -1421,6 +1556,7 @@ static void displayTask(void *) {
       drawnPage = page;
       lastDraw = millis();
     }
+    if (page == P_HOME && drawnPage == P_HOME && !asleep && overlay == OV_NONE && !confirmDlg.active) flowAnim(d);
     xSemaphoreGive(gfxMutex);
     vTaskDelay(pdMS_TO_TICKS(30));
   }

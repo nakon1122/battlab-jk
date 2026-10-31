@@ -21,9 +21,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.1.0-cyd35"
+#define BATTLAB_FW "2.3.0-cyd35"
 #else
-#define BATTLAB_FW "2.1.0-s3"
+#define BATTLAB_FW "2.3.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -78,6 +78,8 @@ struct Shared {
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
 bool persistWanted = false;
+static String devName = "BATTLAB"; // BATTLAB-XXXX: hotspot + Bluetooth name, unique per board
+void bleSetupStart();               // Bluetooth setup service (defined below)
 class Guard {
 public:
   Guard() { xSemaphoreTake(lock, portMAX_DELAY); }
@@ -292,9 +294,10 @@ void bleWorker(void *) {
   // so both radios never ramp up at the same moment (current spike).
   vTaskDelay(pdMS_TO_TICKS(5500));
 #endif
-  NimBLEDevice::init("BATTLAB");
+  NimBLEDevice::init(devName.c_str());
   NimBLEDevice::setMTU(247);
   applyBleTxPower();
+  bleSetupStart();
   auto scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   scan->setMaxResults(24);
@@ -1307,7 +1310,7 @@ static void wifiApply() {
   if (m == WIFI_AP || m == WIFI_AP_STA) {
     WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                       IPAddress(255, 255, 255, 0));
-    WiFi.softAP("BATTLAB");
+    WiFi.softAP(devName.c_str());
   }
   if (m == WIFI_STA || m == WIFI_AP_STA) {
     WiFi.setAutoReconnect(true);
@@ -1375,6 +1378,7 @@ NetInfo netInfo() {
     n.rssi = WiFi.RSSI();
   }
   n.pair = pairCode;
+  n.name = devName;
   n.site = CLOUD_SITE;
   n.configured = strlen(CLOUD_URL) > 0;
   Guard g;
@@ -1678,6 +1682,232 @@ static void cloudTask(void *) {
   }
 }
 
+// ---- Bluetooth setup service -------------------------------------------
+// A GATT service so the BattLab Cloud website (Web Bluetooth, Chrome on
+// Android / PC) can set up and control this board without joining its
+// hotspot. Values are JSON (max 512 bytes each), refreshed by loop().
+#define BSV_UUID "7a1e0000-5b3c-4f6a-9d2e-b47710ba7700"
+static const char *const B_CHR_UUID[7] = {
+    "7a1e0001-5b3c-4f6a-9d2e-b47710ba7700",  // 0 live data (read)
+    "7a1e0002-5b3c-4f6a-9d2e-b47710ba7700",  // 1 settings (read)
+    "7a1e0003-5b3c-4f6a-9d2e-b47710ba7700",  // 2 JK parameters (read)
+    "7a1e0004-5b3c-4f6a-9d2e-b47710ba7700",  // 3 BMS scan list (read)
+    "7a1e0005-5b3c-4f6a-9d2e-b47710ba7700",  // 4 Wi-Fi scan list (read)
+    "7a1e0006-5b3c-4f6a-9d2e-b47710ba7700",  // 5 command (write)
+    "7a1e0007-5b3c-4f6a-9d2e-b47710ba7700"}; // 6 result (read, notify)
+static NimBLECharacteristic *bChr[7] = {};
+static SemaphoreHandle_t bleQmx = nullptr;
+static std::vector<std::string> bleQ;
+static volatile bool bleClient = false;
+class BleSrvCb : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *) override { bleClient = true; }
+  void onDisconnect(NimBLEServer *s) override { bleClient = s->getConnectedCount() > 0; }
+};
+class BleCmdCb : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c) override {
+    NimBLEAttValue v = c->getValue();
+    std::string m((const char *)v.data(), v.length());
+    if (!bleQmx || m.size() > 512) return;
+    xSemaphoreTake(bleQmx, portMAX_DELAY);
+    if (bleQ.size() < 8) bleQ.push_back(m);
+    xSemaphoreGive(bleQmx);
+  }
+};
+void bleSetupStart() {
+  bleQmx = xSemaphoreCreateMutex();
+  NimBLEServer *srv = NimBLEDevice::createServer();
+  srv->setCallbacks(new BleSrvCb());
+  NimBLEService *svc = srv->createService(BSV_UUID);
+  for (int i = 0; i < 7; i++) {
+    uint32_t props = i == 5 ? (NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR)
+                   : i == 6 ? (NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY)
+                            : NIMBLE_PROPERTY::READ;
+    bChr[i] = svc->createCharacteristic(B_CHR_UUID[i], props, 512);
+    bChr[i]->setValue("{}");
+  }
+  bChr[5]->setCallbacks(new BleCmdCb());
+  svc->start();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(BSV_UUID);
+  adv->setScanResponse(true);
+  adv->setMinInterval(640); // 400-500 ms: cheap on radio time
+  adv->setMaxInterval(800);
+  adv->start();
+}
+static void bleSet(int i, const String &s) {
+  if (bChr[i] && s.length() <= 512) bChr[i]->setValue((const uint8_t *)s.c_str(), s.length());
+}
+static String fitJsonArray(JsonArray a) { // drop items from the end until it fits one value
+  String out;
+  for (;;) {
+    out = "";
+    serializeJson(a, out);
+    if (out.length() <= 512 || a.size() == 0) return out;
+    a.remove(a.size() - 1);
+  }
+}
+static void bleRefresh(bool slow) {
+  LedCfg led = ledGet();
+  NetInfo n = netInfo();
+  String live, conf, jk, devs;
+  {
+    DynamicJsonDocument d(1536), c(1024);
+    c["name"] = devName;
+    c["pair"] = n.pair;
+    c["paired"] = n.paired;
+    c["cloud"] = n.cloud;
+    c["ssid"] = n.ssid;
+    c["conn"] = n.connected;
+    c["ip"] = n.ip;
+    c["wrssi"] = n.rssi;
+    c["ap"] = wifiOn;
+    c["tx"] = radioMax;
+#ifdef BATTLAB_DISPLAY
+    c["board"] = "cyd35";
+    displayCfgGet(c.createNestedObject("disp"));
+#else
+    c["board"] = "s3";
+#endif
+    c["remote"] = 1;
+    auto lo = c.createNestedObject("led");
+    lo["on"] = led.on;
+    lo["mode"] = led.mode;
+    lo["color"] = led.color;
+    lo["level"] = led.level;
+    Guard g;
+    c["mac"] = cfg.mac;
+    c["proto"] = cfg.protocol;
+    c["auto"] = cfg.automatic;
+    c["atype"] = cfg.type;
+    c["fam"] = shared.family;
+    c["scanning"] = shared.scanning;
+    c["lw"] = shared.lastWrite.substring(0, 60);
+    d["fw"] = BATTLAB_FW;
+    d["state"] = shared.state;
+    d["bms"] = shared.detected;
+    d["model"] = shared.model;
+    d["rssi"] = shared.rssi;
+    d["up"] = millis() / 1000;
+    bool fresh = shared.linked && shared.have && uint32_t(millis() - shared.stamp) < 15000;
+    if (fresh) {
+      const auto &s = shared.sample;
+      d["v"] = roundf(s.voltage * 100) / 100;
+      d["i"] = roundf(s.current * 10) / 10;
+      d["p"] = roundf(s.voltage * s.current);
+      d["soc"] = s.soc;
+      d["cap"] = roundf(s.capacity * 10) / 10;
+      d["cyc"] = s.cycles;
+      d["t1"] = s.temp1;
+      d["t2"] = s.temp2;
+      d["mos"] = s.mos;
+      d["chg"] = s.charge;
+      d["dsg"] = s.discharge;
+      float mn = 9, mx = 0;
+      auto cl = d.createNestedArray("cells");
+      for (int k = 0; k < 32; k++)
+        if (s.cells[k] > 0) {
+          cl.add(serialized(String(s.cells[k], 3)));
+          mn = min(mn, s.cells[k]);
+          mx = max(mx, s.cells[k]);
+        }
+      if (mx > 0) { d["cmin"] = serialized(String(mn, 3)); d["cmax"] = serialized(String(mx, 3)); }
+    }
+    serializeJson(d, live);
+    if (live.length() > 512) { d.remove("cells"); live = ""; serializeJson(d, live); }
+    serializeJson(c, conf);
+    if (slow) {
+      if (shared.linked && shared.jk.valid && shared.family == 1) {
+        DynamicJsonDocument j(512);
+        auto v = j.createNestedArray("v");
+        for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) v.add(serialized(String(shared.jk.v[i], 3)));
+        auto sw = j.createNestedArray("sw");
+        for (int i = 0; i < bmsw::SW_COUNT; i++) sw.add(shared.jk.sw[i]);
+        serializeJson(j, jk);
+      } else jk = "{}";
+      devs = shared.devices;
+    }
+  }
+  bleSet(0, live);
+  bleSet(1, conf);
+  if (!slow) return;
+  bleSet(2, jk);
+  {
+    DynamicJsonDocument in(6144), out(2048);
+    auto a = out.to<JsonArray>();
+    if (!deserializeJson(in, devs))
+      for (JsonObject o : in.as<JsonArray>()) {
+        if (a.size() >= 8) break;
+        auto x = a.createNestedObject();
+        x["name"] = String((const char *)(o["name"] | "")).substring(0, 20);
+        x["mac"] = o["mac"];
+        x["type"] = o["type"];
+        x["rssi"] = o["rssi"];
+        x["candidate"] = o["candidate"];
+      }
+    bleSet(3, fitJsonArray(a));
+  }
+  String ws = netScanJson();
+  if (ws.length()) {
+    DynamicJsonDocument in(4096), out(2048);
+    auto a = out.to<JsonArray>();
+    if (!deserializeJson(in, ws))
+      for (JsonObject o : in.as<JsonArray>()) {
+        if (a.size() >= 10) break;
+        auto x = a.createNestedObject();
+        x["ssid"] = o["ssid"];
+        x["rssi"] = o["rssi"];
+        x["lock"] = o["lock"];
+      }
+    bleSet(4, fitJsonArray(a));
+  }
+}
+static void bleSetupTick() {
+  if (!bleQmx) return;
+  std::string m;
+  xSemaphoreTake(bleQmx, portMAX_DELAY);
+  if (!bleQ.empty()) { m = bleQ.front(); bleQ.erase(bleQ.begin()); }
+  xSemaphoreGive(bleQmx);
+  static uint32_t lastFast = 0, lastSlow = 0;
+  if (m.size()) {
+    StaticJsonDocument<768> in;
+    bool ok = false;
+    String msg = "bad JSON";
+    long id = 0;
+    bool reboot = false;
+    if (!deserializeJson(in, m)) {
+      id = in["id"] | 0L;
+      String cmd = in["cmd"] | "";
+      JsonObjectConst a = in["args"].as<JsonObjectConst>();
+      if (cmd == "home_wifi") { // local link: apply at once, no auto-revert needed
+        String ss = a["ssid"] | "", pw = a["pass"] | "";
+        ok = ss.length() && ss.length() <= 32 && pw.length() <= 64;
+        msg = ok ? "joining " + ss : String("SSID 1-32, password up to 64");
+        if (ok) netSetHomeWifi(ss, pw);
+      } else if (cmd == "forget_wifi") { netForgetHomeWifi(); ok = true; msg = "home Wi-Fi removed"; }
+      else if (cmd == "wifi_ap") { wifiSetEnabled(a["on"] | true); ok = true; msg = wifiOn ? "hotspot on" : "hotspot off"; }
+      else if (cmd == "restart") { ok = true; msg = "restarting"; reboot = true; }
+      else msg = runCloudCmd(cmd, a, ok);
+    }
+    StaticJsonDocument<256> r;
+    r["id"] = id;
+    r["ok"] = ok;
+    r["msg"] = msg;
+    String rs;
+    serializeJson(r, rs);
+    if (bChr[6]) { bleSet(6, rs); bChr[6]->notify(); }
+    Serial.printf("[BLE-SETUP] %s -> %s\n", m.c_str(), msg.c_str());
+    if (reboot) { delay(600); ESP.restart(); }
+    lastFast = 0; // push the new state right away
+  }
+  if (!bleClient) return;
+  uint32_t now = millis();
+  if (now - lastFast < 1000) return;
+  lastFast = now;
+  bool slow = now - lastSlow > 2500;
+  if (slow) lastSlow = now;
+  bleRefresh(slow);
+}
+
 void bmsScan() {
   Guard g;
   scanWanted = true;
@@ -1799,6 +2029,12 @@ void takeDisplaySnapshot(DisplaySnap &o) {
 void setup() {
   Serial.begin(115200);
   readResetReason();
+  {
+    uint64_t mac = ESP.getEfuseMac();
+    char nm[16];
+    snprintf(nm, sizeof nm, "BATTLAB-%02X%02X", unsigned((mac >> 32) & 0xff), unsigned((mac >> 40) & 0xff));
+    devName = nm;
+  }
   lock = xSemaphoreCreateMutex();
   prefs.begin("battlab-jk", false);
   cfg.mac = prefs.getString("mac", "");
@@ -1811,9 +2047,10 @@ void setup() {
   radioMax = prefs.getBool("txmax", true);
   netLoad();
   wifiApply();
+  configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com"); // Thailand time for the screen clock
   bool apStarted = wifiOn;
   Serial.printf("\nLast reset: %s\n", resetReasonText);
-  Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi + Bluetooth name: %s (open)\nAP started: %s\nhttp://192.168.4.1\n", devName.c_str(), apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
@@ -2039,6 +2276,7 @@ void loop() {
     }
   }
   ledPersist();
+  bleSetupTick();
   if (persist) {
     prefs.putString("mac", saved.mac);
     prefs.putString("protocol", saved.protocol);
