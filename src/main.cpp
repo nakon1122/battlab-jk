@@ -12,13 +12,17 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include "cloud_config.h"
+#include "cloud_ca.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.9.1-cyd35"
+#define BATTLAB_FW "2.0.0-cyd35"
 #else
-#define BATTLAB_FW "1.9.1-s3"
+#define BATTLAB_FW "2.0.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -89,13 +93,16 @@ void error(int code, const char *msg) {
   json(code, d);
 }
 bool localRequest() {
+  // Only the hotspot address or this board's home-network address are valid
+  // hosts/origins (blocks DNS-rebinding and cross-site requests).
   String h = web.hostHeader();
-  if (h != "192.168.4.1" && h != "192.168.4.1:80") {
+  String lan = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("-");
+  if (h != "192.168.4.1" && h != "192.168.4.1:80" && h != lan && h != lan + ":80") {
     error(403, "Invalid Host");
     return false;
   }
   String o = web.header("Origin");
-  if (o.length() && o != "http://192.168.4.1") {
+  if (o.length() && o != "http://192.168.4.1" && o != "http://" + lan) {
     error(403, "Invalid Origin");
     return false;
   }
@@ -1251,14 +1258,61 @@ static void ledJson(JsonDocument &d) {
 }
 // ---- BMS / Wi-Fi actions shared by the web API and the on-screen UI ----
 // Each uses its own Preferences handle so it is safe from any task.
-static bool wifiOn = true;
-static void wifiStartAp() {
-  WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
-                    IPAddress(255, 255, 255, 0));
-  WiFi.softAP("BATTLAB");
+static bool wifiOn = true; // the BATTLAB hotspot (setup / local web page)
+
+// ---- Home Wi-Fi + cloud upload ------------------------------------------
+// The board joins the home network as a station (credentials in NVS) while
+// optionally keeping the BATTLAB hotspot. A cloud task posts telemetry to the
+// Supabase ingest() function over HTTPS every 10 s.
+static String staSsid, staPass, devToken, pairCode;
+static String cloudStatus = "off";
+static uint32_t cloudOkAt = 0, cloudSent = 0;
+static bool cloudPaired = false;
+
+static void netLoad() {
+  Preferences p;
+  p.begin("battlab-net", false);
+  staSsid = p.getString("ssid", "");
+  staPass = p.getString("pass", "");
+  devToken = p.getString("token", "");
+  pairCode = p.getString("pair", "");
+  if (devToken.length() != 64) { // first boot: create this device's identity
+    char hx[65];
+    for (int i = 0; i < 32; i++) snprintf(hx + i * 2, 3, "%02x", uint8_t(esp_random()));
+    devToken = hx;
+    p.putString("token", devToken);
+  }
+  if (pairCode.length() != 9) {
+    static const char A[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I O 0 1
+    String c;
+    for (int i = 0; i < 8; i++) {
+      if (i == 4) c += '-';
+      c += A[esp_random() % 32];
+    }
+    pairCode = c;
+    p.putString("pair", pairCode);
+  }
+  p.end();
+}
+static void wifiApply() {
+  wifi_mode_t m = WIFI_OFF;
+  if (wifiOn && staSsid.length()) m = WIFI_AP_STA;
+  else if (wifiOn) m = WIFI_AP;
+  else if (staSsid.length()) m = WIFI_STA;
+  WiFi.persistent(false);
+  WiFi.mode(m);
+  if (m == WIFI_AP || m == WIFI_AP_STA) {
+    WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                      IPAddress(255, 255, 255, 0));
+    WiFi.softAP("BATTLAB");
+  }
+  if (m == WIFI_STA || m == WIFI_AP_STA) {
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(staSsid.c_str(), staPass.c_str());
+  }
   applyWifiTxPower();
 }
+static void wifiStartAp() { wifiApply(); }
 bool wifiEnabled() { return wifiOn; }
 void wifiSetEnabled(bool on) {
   if (on == wifiOn) return;
@@ -1267,12 +1321,153 @@ void wifiSetEnabled(bool on) {
   p.begin("battlab-jk", false);
   p.putBool("wifi", on);
   p.end();
-  if (on) wifiStartAp();
-  else {
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_OFF);
+  wifiApply();
+}
+void netSetHomeWifi(const String &ssid, const String &pass) {
+  staSsid = ssid;
+  staPass = pass;
+  Preferences p;
+  p.begin("battlab-net", false);
+  p.putString("ssid", ssid);
+  p.putString("pass", pass);
+  p.end();
+  WiFi.disconnect(false);
+  wifiApply();
+}
+void netForgetHomeWifi() { netSetHomeWifi("", ""); }
+void netScanStart() {
+  wifi_mode_t m = WiFi.getMode();
+  if (m == WIFI_OFF) WiFi.mode(WIFI_STA);
+  else if (m == WIFI_AP) WiFi.mode(WIFI_AP_STA); // keep the hotspot running
+  WiFi.scanNetworks(true); // async
+}
+// JSON array of nearby networks once a scan finished, "" while scanning.
+String netScanJson() {
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return "";
+  if (n < 0) return "[]";
+  DynamicJsonDocument d(4096);
+  auto a = d.to<JsonArray>();
+  for (int i = 0; i < n && i < 20; i++) {
+    String s = WiFi.SSID(i);
+    if (!s.length()) continue;
+    bool dup = false;
+    for (JsonObject o : a) if (s == (const char *)o["ssid"]) dup = true;
+    if (dup) continue;
+    auto o = a.createNestedObject();
+    o["ssid"] = s;
+    o["rssi"] = WiFi.RSSI(i);
+    o["lock"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+  }
+  String out;
+  serializeJson(d, out);
+  return out;
+}
+NetInfo netInfo() {
+  NetInfo n;
+  n.ssid = staSsid;
+  n.connected = WiFi.status() == WL_CONNECTED;
+  if (n.connected) {
+    n.ip = WiFi.localIP().toString();
+    n.rssi = WiFi.RSSI();
+  }
+  n.pair = pairCode;
+  n.site = CLOUD_SITE;
+  n.configured = strlen(CLOUD_URL) > 0;
+  Guard g;
+  n.cloud = cloudStatus;
+  n.paired = cloudPaired;
+  n.lastOkAgo = cloudOkAt ? (millis() - cloudOkAt) / 1000 : -1;
+  n.sent = cloudSent;
+  return n;
+}
+
+static void cloudTask(void *) {
+  WiFiClientSecure tls;
+  tls.setCACert(CLOUD_CA);
+  tls.setTimeout(12);
+  HTTPClient http;
+  http.setReuse(true);
+  uint32_t lastSend = 0;
+  auto setStatus = [](const String &s) { Guard g; cloudStatus = s; };
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(500));
+    if (!strlen(CLOUD_URL)) { setStatus("not set up"); continue; }
+    if (!staSsid.length()) { setStatus("no home Wi-Fi"); continue; }
+    if (WiFi.status() != WL_CONNECTED) { setStatus("Wi-Fi connecting"); continue; }
+    bool live;
+    DynamicJsonDocument body(3072);
+    {
+      Guard g;
+      live = shared.linked && shared.have && uint32_t(millis() - shared.stamp) < 15000;
+    }
+    uint32_t every = live ? 10000 : 60000; // heartbeat when no BMS data
+    if (lastSend && millis() - lastSend < every) continue;
+    lastSend = millis();
+    body["p_token"] = devToken;
+    body["p_pair"] = pairCode;
+    auto d = body.createNestedObject("p_data");
+    {
+      Guard g;
+      d["fw"] = BATTLAB_FW;
+      d["state"] = shared.state;
+      d["bms"] = shared.detected;
+      d["model"] = shared.model;
+      d["rssi"] = shared.rssi;
+      d["up"] = millis() / 1000;
+      if (live) {
+        const auto &s = shared.sample;
+        d["v"] = s.voltage;
+        d["i"] = s.current;
+        d["p"] = s.voltage * s.current;
+        d["soc"] = s.soc;
+        d["cap"] = s.capacity;
+        d["cyc"] = s.cycles;
+        d["t1"] = s.temp1;
+        d["t2"] = s.temp2;
+        d["mos"] = s.mos;
+        d["chg"] = s.charge;
+        d["dsg"] = s.discharge;
+        float mn = 9, mx = 0;
+        auto c = d.createNestedArray("cells");
+        for (int k = 0; k < 32; k++)
+          if (s.cells[k] > 0) {
+            c.add(roundf(s.cells[k] * 1000) / 1000);
+            mn = min(mn, s.cells[k]);
+            mx = max(mx, s.cells[k]);
+          }
+        if (mx > 0) { d["cmin"] = mn; d["cmax"] = mx; }
+      }
+    }
+    String json;
+    serializeJson(body, json);
+    setStatus("sending");
+    if (!http.begin(tls, String(CLOUD_URL) + "/rest/v1/rpc/ingest")) {
+      setStatus("connect failed");
+      continue;
+    }
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", CLOUD_ANON_KEY);
+    http.addHeader("Authorization", String("Bearer ") + CLOUD_ANON_KEY);
+    int code = http.POST(json);
+    String resp = code > 0 ? http.getString() : String();
+    http.end();
+    Guard g;
+    if (code == 200) {
+      cloudSent++;
+      cloudOkAt = millis();
+      cloudPaired = resp.indexOf("unpaired") < 0;
+      cloudStatus = cloudPaired ? "online" : "online - add on website";
+    } else if (code < 0) {
+      cloudStatus = String("TLS/net error ") + code;
+      tls.stop();
+    } else {
+      cloudStatus = String("server error ") + code;
+      Serial.printf("[CLOUD] %d %s\n", code, resp.c_str());
+    }
   }
 }
+
 void bmsScan() {
   Guard g;
   scanWanted = true;
@@ -1404,12 +1599,9 @@ void setup() {
   wifiOn = prefs.getBool("wifi", true); // can be switched off on the screen
   radioMax = prefs.getBool("txmax", true);
 #endif
-  bool apStarted = false;
-  if (wifiOn) {
-    wifiStartAp();
-    apStarted = true;
-  } else
-    WiFi.mode(WIFI_OFF);
+  netLoad();
+  wifiApply();
+  bool apStarted = wifiOn;
   Serial.printf("\nLast reset: %s\n", resetReasonText);
   Serial.printf("\nBATTLAB " BATTLAB_FW "\nWi-Fi: BATTLAB (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
@@ -1456,6 +1648,43 @@ void setup() {
     if (!in["which"].is<int>() || !in["on"].is<bool>()) { error(400, "which and on required"); return; }
     if (const char *e = bmsSetSwitch(in["which"].as<int>(), in["on"].as<bool>())) { error(409, e); return; }
     web.send(202, "application/json", "{\"queued\":true}");
+  });
+  web.on("/api/net", HTTP_GET, []() {
+    NetInfo n = netInfo();
+    DynamicJsonDocument d(4096);
+    d["ssid"] = n.ssid;
+    d["connected"] = n.connected;
+    d["ip"] = n.ip;
+    d["rssi"] = n.rssi;
+    d["cloud"] = n.cloud;
+    d["cloud_configured"] = n.configured;
+    d["paired"] = n.paired;
+    d["pair_code"] = n.pair;
+    d["site"] = n.site;
+    d["sent"] = n.sent;
+    String scan = netScanJson();
+    if (scan.length()) d["scan"] = serialized(scan);
+    else d["scanning"] = true;
+    json(200, d);
+  });
+  web.on("/api/net/scan", HTTP_POST, []() {
+    if (!localRequest()) return;
+    netScanStart();
+    web.send(202, "application/json", "{\"queued\":true}");
+  });
+  web.on("/api/net", HTTP_POST, []() {
+    if (!localRequest()) return;
+    StaticJsonDocument<256> in;
+    if (web.arg("plain").length() > 200 || deserializeJson(in, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
+    String ssid = in["ssid"] | "", pass = in["pass"] | "";
+    if (!ssid.length() || ssid.length() > 32 || pass.length() > 64) { error(400, "SSID 1-32, password up to 64 characters"); return; }
+    netSetHomeWifi(ssid, pass);
+    web.send(202, "application/json", "{\"saved\":true}");
+  });
+  web.on("/api/net/forget", HTTP_POST, []() {
+    if (!localRequest()) return;
+    netForgetHomeWifi();
+    web.send(202, "application/json", "{\"forgotten\":true}");
   });
   web.on("/api/led", HTTP_GET, []() {
     DynamicJsonDocument d(1024);
@@ -1584,6 +1813,7 @@ void setup() {
   xTaskCreatePinnedToCore(bleWorker, "ble", 12288, nullptr, 1, nullptr, 0);
   ledLoad();
   xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(cloudTask, "cloud", 10240, nullptr, 1, nullptr, 1);
   displayStart();
 }
 void loop() {

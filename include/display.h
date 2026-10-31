@@ -24,6 +24,19 @@ struct DisplaySnap {
   bool radioMax = true;
   const char *bleTx = "";
 };
+// Home Wi-Fi + cloud (main.cpp)
+struct NetInfo {
+  String ssid, ip, cloud, pair, site;
+  bool connected = false, configured = false, paired = false;
+  int rssi = 0;
+  long lastOkAgo = -1;
+  uint32_t sent = 0;
+};
+NetInfo netInfo();
+void netSetHomeWifi(const String &ssid, const String &pass);
+void netForgetHomeWifi();
+void netScanStart();
+String netScanJson(); // "" while scanning, else JSON array [{ssid,rssi,lock}]
 bool radioMaxPower();
 void radioSetMaxPower(bool on); // MAX: BLE chip maximum + Wi-Fi 19.5 dBm
 

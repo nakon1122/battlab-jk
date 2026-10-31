@@ -758,19 +758,240 @@ static void infoRow(int y, const char *k, const String &v) {
   s.pushSprite(9, y);
   s.deleteSprite();
 }
-static void info(const DisplaySnap &d, bool) {
+static const Btn I_WIFI = {12, 224, 224, 46}, I_CLOUD = {250, 224, 224, 46};
+static String infoKey;
+static void info(const DisplaySnap &d, bool force) {
+  NetInfo n = netInfo();
   int y = 44;
-  infoRow(y, "BMS", d.detected.length() ? d.detected : String("not identified")); y += 29;
-  infoRow(y, "Model", d.model.length() ? d.model : String("-")); y += 29;
+  infoRow(y, "BMS", (d.detected.length() ? d.detected : String("not identified")) +
+                        (d.model.length() ? "   " + d.model : String(""))); y += 29;
   infoRow(y, "Bluetooth", (d.mac.length() ? d.mac : String(d.automatic ? "auto find" : "none")) +
                               "  " + d.protocol + "  TX " + d.bleTx); y += 29;
   infoRow(y, "State", d.state + "   rx " + d.rxBytes + " B, " + d.good + " frames"); y += 29;
-  infoRow(y, "Probe", d.probe); y += 29;
-  infoRow(y, "Last reset", String(d.resetReason) + "   RAM " + (d.freeHeap / 1024) +
-                               "k free, min " + (d.minHeap / 1024) + "k"); y += 29;
-  infoRow(y, "Wi-Fi", d.wifiOn ? String("BATTLAB  192.168.4.1  (") + d.stations + ")"
-                               : String("off")); y += 29;
-  infoRow(y, "Firmware", d.firmware + "   up " + String(d.uptimeMs / 60000) + " min");
+  infoRow(y, "Home Wi-Fi", !n.ssid.length() ? String("not set")
+                           : n.connected ? n.ssid + "  " + n.ip + "  " + n.rssi + " dBm"
+                                         : n.ssid + "  connecting..."); y += 29;
+  infoRow(y, "Cloud", n.cloud + (n.sent ? String("   sent ") + n.sent : String(""))); y += 29;
+  infoRow(y, "System", d.firmware + "  " + d.resetReason + "  RAM " + (d.freeHeap / 1024) + "k");
+  String key = String(n.connected ? "C" : "-") + n.paired;
+  if (!force && key == infoKey) return;
+  infoKey = key;
+  button(I_WIFI, n.connected ? "HOME WI-FI  OK" : "HOME WI-FI", n.connected, C_GOOD);
+  button(I_CLOUD, n.paired ? "CLOUD  PAIRED" : "CLOUD PAIRING", n.paired, C_GOOD);
+}
+
+// ----------------------------------------------- network overlays (INFO) --
+enum Overlay { OV_NONE, OV_WIFI, OV_KB, OV_CLOUD };
+static Overlay overlay = OV_NONE;
+static String ovKey;
+struct Net {
+  String ssid;
+  int rssi;
+  bool lock;
+};
+static std::vector<Net> nets;
+static int netPage = 0;
+static String kbSsid, kbText;
+static uint8_t kbLayer = 0; // 0 lower, 1 upper, 2 symbols, 3 symbols 2
+static const char *const KB_ROWS[4][4] = {
+    {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"},
+    {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"},
+    {"1234567890", "!@#$%^&*()", "-_=+[]{};", ":'\".,?/"},
+    {"1234567890", "~`|\\<>!@#$", "%^&*()-_=", "+;:'\",."}};
+static const Btn W_SCAN = {302, 46, 84, 40}, W_BACK = {390, 46, 84, 40},
+                 W_FORGET = {12, 240, 140, 34}, W_UP = {430, 94, 44, 68},
+                 W_DOWN = {430, 168, 44, 68};
+static Btn netRow(int i) { return {12, 94 + i * 36, 412, 32}; }
+static Btn kbKey(int row, int i) {
+  static const int x0[4] = {6, 6, 29, 78};
+  return {x0[row] + i * 47, 108 + row * 42, 43, 38};
+}
+static const Btn K_SHIFT = {6, 234, 66, 38}, K_DEL = {410, 234, 64, 38},
+                 K_SYM = {6, 278, 72, 38}, K_SPACE = {82, 278, 184, 38},
+                 K_CANCEL = {270, 278, 92, 38}, K_OK = {366, 278, 108, 38},
+                 C_BACK = {390, 46, 84, 40};
+
+static void parseNets(const String &json) {
+  nets.clear();
+  DynamicJsonDocument d(4096);
+  if (deserializeJson(d, json)) return;
+  for (JsonObject o : d.as<JsonArray>()) nets.push_back({o["ssid"] | "", o["rssi"] | 0, o["lock"] | true});
+  std::sort(nets.begin(), nets.end(), [](const Net &a, const Net &b) { return a.rssi > b.rssi; });
+  netPage = 0;
+}
+static void kbDrawText() {
+  tft.fillRoundRect(6, 64, 468, 36, 8, C_CARD);
+  tft.setFont(&fonts::FreeSans12pt7b);
+  tft.setTextDatum(textdatum_t::middle_left);
+  tft.setTextColor(C_TEXT, C_CARD);
+  String t = kbText;
+  while (t.length() && tft.textWidth(t) > 440) t = t.substring(1); // show the tail
+  tft.drawString(t + "_", 16, 83);
+}
+static void kbDraw() {
+  tft.fillRect(0, 41, 480, 320 - 41, C_BG);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextDatum(textdatum_t::middle_left);
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.drawString(String("Password for  ") + kbSsid, 8, 52);
+  kbDrawText();
+  for (int r = 0; r < 4; r++) {
+    const char *row = KB_ROWS[kbLayer][r];
+    for (int i = 0; row[i]; i++) button(kbKey(r, i), String(row[i]), false, 0, &fonts::FreeSans12pt7b);
+  }
+  button(K_SHIFT, kbLayer >= 2 ? (kbLayer == 3 ? "#+= " : "#+=") : (kbLayer ? "abc" : "ABC"), kbLayer == 1 || kbLayer == 3);
+  button(K_DEL, "DEL", false);
+  button(K_SYM, kbLayer >= 2 ? "abc" : "?123", false);
+  button(K_SPACE, "space", false);
+  button(K_CANCEL, "CANCEL", false);
+  button(K_OK, "CONNECT", true, C_GOOD);
+}
+static void openKeyboard(const String &ssid) {
+  kbSsid = ssid;
+  kbText = "";
+  kbLayer = 0;
+  overlay = OV_KB;
+  kbDraw();
+}
+static void wifiOverlayDraw(bool force) {
+  NetInfo n = netInfo();
+  String scan = netScanJson();
+  String key = scan + n.ssid + n.connected + n.ip + netPage;
+  if (!force && key == ovKey) return;
+  ovKey = key;
+  if (scan.length()) parseNets(scan);
+  tft.fillRect(0, 41, 480, TAB_Y - 41, C_BG);
+  tft.setFont(&fonts::FreeSansBold9pt7b);
+  tft.setTextDatum(textdatum_t::top_left);
+  tft.setTextColor(n.connected ? C_GOOD : C_TEXT, C_BG);
+  tft.drawString(n.connected ? "Connected: " + n.ssid : String(n.ssid.length() ? "Connecting: " + n.ssid : "Home Wi-Fi not set"), 12, 48);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.drawString(n.connected ? n.ip + "   " + n.rssi + " dBm" : String("Pick your network below"), 12, 68);
+  button(W_SCAN, scan.length() ? "SCAN" : "...", !scan.length());
+  button(W_BACK, "BACK", false);
+  if (!scan.length()) {
+    label(20, 140, "Scanning for Wi-Fi networks...");
+  } else if (nets.empty()) {
+    label(20, 140, "No networks found. Tap SCAN.");
+  } else {
+    int pages = (nets.size() + 3) / 4;
+    if (netPage >= pages) netPage = pages - 1;
+    for (int i = 0; i < 4; i++) {
+      size_t k = netPage * 4 + i;
+      if (k >= nets.size()) break;
+      Btn r = netRow(i);
+      bool cur = nets[k].ssid == n.ssid;
+      tft.fillRoundRect(r.x, r.y, r.w, r.h, 8, C_CARD);
+      if (cur) tft.drawRoundRect(r.x, r.y, r.w, r.h, 8, n.connected ? C_GOOD : C_WARN);
+      tft.setFont(&fonts::FreeSansBold9pt7b);
+      tft.setTextDatum(textdatum_t::middle_left);
+      tft.setTextColor(C_TEXT, C_CARD);
+      String nm = nets[k].ssid;
+      if (nm.length() > 26) nm = nm.substring(0, 26);
+      tft.drawString(nm, r.x + 12, r.y + 17);
+      tft.setFont(&fonts::FreeSans9pt7b);
+      tft.setTextDatum(textdatum_t::middle_right);
+      tft.setTextColor(C_MUTED, C_CARD);
+      tft.drawString(String(nets[k].lock ? "lock  " : "open  ") + nets[k].rssi, r.x + r.w - 10, r.y + 17);
+    }
+    if (pages > 1) {
+      button(W_UP, "<", false, 0, &fonts::FreeSansBold12pt7b);
+      button(W_DOWN, ">", false, 0, &fonts::FreeSansBold12pt7b);
+    }
+  }
+  if (n.ssid.length()) button(W_FORGET, "FORGET", false);
+}
+static void cloudOverlayDraw(bool force) {
+  NetInfo n = netInfo();
+  String key = n.cloud + n.paired + n.connected + n.sent;
+  if (!force && key == ovKey) return;
+  ovKey = key;
+  tft.fillRect(0, 41, 480, TAB_Y - 41, C_BG);
+  button(C_BACK, "BACK", false);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextDatum(textdatum_t::top_left);
+  tft.setTextColor(C_MUTED, C_BG);
+  tft.drawString("PAIR CODE", 12, 52);
+  tft.setFont(&fonts::FreeSansBold24pt7b);
+  tft.setTextColor(C_ACCENT, C_BG);
+  tft.setTextDatum(textdatum_t::middle_left);
+  tft.drawString(n.pair, 12, 104);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextDatum(textdatum_t::middle_left);
+  if (!n.configured) {
+    tft.setTextColor(C_WARN, C_BG);
+    tft.drawString("Cloud is not set up in this firmware build.", 12, 160);
+    return;
+  }
+  tft.setTextColor(C_TEXT, C_BG);
+  tft.drawString(String("1. On your phone open  ") + n.site, 12, 150);
+  tft.drawString("2. Sign in and tap  Add device", 12, 176);
+  tft.drawString("3. Enter the pair code above", 12, 202);
+  uint16_t sc = n.paired ? C_GOOD : n.cloud.startsWith("online") ? C_WARN : C_BAD;
+  tft.fillCircle(18, 246, 6, sc);
+  tft.setTextColor(C_TEXT, C_BG);
+  tft.drawString(String("Cloud: ") + n.cloud, 32, 247);
+}
+// returns true when the overlay wants the page underneath repainted
+static bool overlayTouch(int x, int y) {
+  if (overlay == OV_CLOUD) {
+    if (hit(C_BACK, x, y)) { overlay = OV_NONE; return true; }
+    return false;
+  }
+  if (overlay == OV_WIFI) {
+    if (hit(W_BACK, x, y)) { overlay = OV_NONE; return true; }
+    if (hit(W_SCAN, x, y)) { netScanStart(); ovKey = ""; return false; }
+    if (hit(W_FORGET, x, y)) { netForgetHomeWifi(); showToast("Home Wi-Fi removed"); ovKey = ""; return false; }
+    if (nets.size() > 4 && hit(W_UP, x, y)) { if (netPage > 0) netPage--; ovKey = ""; return false; }
+    if (nets.size() > 4 && hit(W_DOWN, x, y)) { if ((netPage + 1) * 4 < (int)nets.size()) netPage++; ovKey = ""; return false; }
+    for (int i = 0; i < 4; i++) {
+      size_t k = netPage * 4 + i;
+      if (k < nets.size() && hit(netRow(i), x, y)) {
+        if (nets[k].lock) openKeyboard(nets[k].ssid);
+        else { netSetHomeWifi(nets[k].ssid, ""); showToast("Connecting to " + nets[k].ssid); ovKey = ""; }
+        return false;
+      }
+    }
+    return false;
+  }
+  if (overlay == OV_KB) {
+    for (int r = 0; r < 4; r++) {
+      const char *row = KB_ROWS[kbLayer][r];
+      for (int i = 0; row[i]; i++)
+        if (hit(kbKey(r, i), x, y)) {
+          if (kbText.length() < 64) kbText += row[i];
+          if (kbLayer == 1) { kbLayer = 0; kbDraw(); } // one-shot shift
+          else kbDrawText();
+          return false;
+        }
+    }
+    if (hit(K_DEL, x, y)) { if (kbText.length()) kbText.remove(kbText.length() - 1); kbDrawText(); }
+    else if (hit(K_SPACE, x, y)) { if (kbText.length() < 64) kbText += ' '; kbDrawText(); }
+    else if (hit(K_SHIFT, x, y)) { kbLayer = kbLayer == 0 ? 1 : kbLayer == 1 ? 0 : kbLayer == 2 ? 3 : 2; kbDraw(); }
+    else if (hit(K_SYM, x, y)) { kbLayer = kbLayer >= 2 ? 0 : 2; kbDraw(); }
+    else if (hit(K_CANCEL, x, y)) { overlay = OV_WIFI; ovKey = ""; return true; }
+    else if (hit(K_OK, x, y)) {
+      netSetHomeWifi(kbSsid, kbText);
+      kbText = "";
+      showToast("Connecting to " + kbSsid, 4000);
+      overlay = OV_WIFI;
+      ovKey = "";
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+static void infoTouch(int x, int y) {
+  if (hit(I_WIFI, x, y)) {
+    overlay = OV_WIFI;
+    ovKey = "";
+    if (!netScanJson().length() || nets.empty()) netScanStart();
+  } else if (hit(I_CLOUD, x, y)) {
+    overlay = OV_CLOUD;
+    ovKey = "";
+  }
 }
 
 // ------------------------------------------------------ touch calibrate --
@@ -1055,17 +1276,27 @@ static void displayTask(void *) {
       if (asleep) {
         asleep = false; // first touch only wakes the screen
         applyBacklight();
+      } else if (overlay == OV_KB) {
+        if (overlayTouch(tp.x, tp.y)) drawnPage = -1;
+      } else if (overlay != OV_NONE && tp.y > 42 && tp.y < TAB_Y) {
+        if (overlayTouch(tp.x, tp.y)) drawnPage = -1;
+        lastDraw = 0;
       } else if (confirmDlg.active) {
         if (confirmTouch(tp.x, tp.y)) drawnPage = -1; // repaint the page
       } else if (tp.y >= TAB_Y) {
         int t = tp.x / TAB_W;
         if (t >= TABS) t = TABS - 1;
         if (t >= 0) page = t;
+        if (overlay != OV_NONE) { overlay = OV_NONE; drawnPage = -1; }
       } else if (tp.y > 42) {
         if (page == P_PARAM) paramTouch(d, tp.x, tp.y);
         else if (page == P_LED) ledTouch(tp.x, tp.y);
         else if (page == P_BMS) bmsTouch(d, tp.x, tp.y);
         else if (page == P_SETUP) setupTouch(d, tp.x, tp.y);
+        else if (page == P_INFO) {
+          infoTouch(tp.x, tp.y);
+          if (overlay != OV_NONE) drawnPage = -1;
+        }
         lastDraw = 0; // show the change right away
       }
     }
@@ -1095,7 +1326,7 @@ static void displayTask(void *) {
       asleep = true;
       tft.setBrightness(0);
     }
-    if (!confirmDlg.active && (page != drawnPage || now - lastDraw > 700)) {
+    if (!confirmDlg.active && overlay != OV_KB && (page != drawnPage || now - lastDraw > 700)) {
       bool force = page != drawnPage;
       takeDisplaySnapshot(d);
       evalAlarm(d);
@@ -1114,6 +1345,8 @@ static void displayTask(void *) {
         bmsKey = "";
         setupKey = "";
         paramKey = "";
+        infoKey = "";
+        ovKey = "";
         if (page == P_BMS) {
           for (int i = 0; i < 5; i++)
             if (d.protocol == PROTO_VALUE[i]) protoSel = i;
@@ -1128,7 +1361,11 @@ static void displayTask(void *) {
           case P_PARAM: paramPageDraw(d, force); break;
           case P_LED: ledPage(force); break;
           case P_SETUP: setupPage(d, force); break;
-          default: info(d, force); break;
+          default:
+            if (overlay == OV_WIFI) wifiOverlayDraw(force);
+            else if (overlay == OV_CLOUD) cloudOverlayDraw(force);
+            else info(d, force);
+            break;
         }
       }
       drawnPage = page;

@@ -215,14 +215,55 @@ def setup():
 
 def info():
     s = Scr(); header(s, 'JK02_24S  LIVE')
-    rows = [('BMS', 'JK02_24S'), ('Model', 'JK_BD6A24S20P'), ('Bluetooth', '10:23:81:A9:C0:D6  AUTO  TX +9 dBm'),
-            ('State', 'LIVE   rx 48210 B, 162 frames'), ('Probe', 'identifying'),
-            ('Last reset', 'power on   RAM 61k free, min 48k'), ('Wi-Fi', 'BATTLAB  192.168.4.1  (1)'),
-            ('Firmware', 'cyd35   up 42 min')]
+    rows = [('BMS', 'JK02_24S   JK_BD6A24S20P'), ('Bluetooth', '10:23:81:A9:C0:D6  AUTO  TX +9 dBm'),
+            ('State', 'LIVE   rx 48210 B, 162 frames'), ('Home Wi-Fi', 'MyHome_5G  192.168.1.57  -61 dBm'),
+            ('Cloud', 'online   sent 1284'), ('System', 'cyd35  power on  RAM 58k')]
     for i, (k, v) in enumerate(rows):
         y = 44 + i * 29
         s.text(k, 13, y + 13, F9, MUTED); s.text(v, 139, y + 13, F9, TEXT)
         s.rect(9, y + 26, 462, 1, LINE)
+    s.button((12, 224, 224, 46), 'HOME WI-FI  OK', True, GOOD)
+    s.button((250, 224, 224, 46), 'CLOUD  PAIRED', True, GOOD)
+    tabs(s, 6); return s
+
+def wifi_list():
+    s = Scr(); header(s, 'JK02_24S  LIVE')
+    s.text('Connected: MyHome_5G', 12, 48, F9B, GOOD, 'lt')
+    s.text('192.168.1.57   -61 dBm', 12, 68, F9, MUTED, 'lt')
+    s.button((302, 46, 84, 40), 'SCAN'); s.button((390, 46, 84, 40), 'BACK')
+    nets = [('MyHome_5G', -61, True, True), ('MyHome_2.4G', -58, True, False), ('TrueGigatexFiber', -72, True, False), ('Cafe Free WiFi', -80, False, False)]
+    for i, (nm, rssi, lock, cur) in enumerate(nets):
+        y = 94 + i * 36
+        s.rr(12, y, 412, 32, 8, fill=CARD, outline=GOOD if cur else None)
+        s.text(nm, 24, y + 17, F9B, TEXT)
+        s.text(('lock  ' if lock else 'open  ') + str(rssi), 414, y + 17, F9, MUTED, 'rm')
+    s.button((430, 94, 44, 68), '<', f=F12B); s.button((430, 168, 44, 68), '>', f=F12B)
+    s.button((12, 240, 140, 34), 'FORGET')
+    tabs(s, 6); return s
+
+F12 = font(0, 12)
+def keyboard():
+    s = Scr(); header(s, 'JK02_24S  LIVE')
+    s.text('Password for  MyHome_5G', 8, 52, F9, MUTED)
+    s.rr(6, 64, 468, 36, 8, fill=CARD); s.text('battlab2026_', 16, 83, F12, TEXT)
+    rows = ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm"]; x0 = [6, 6, 29, 78]
+    for r, row in enumerate(rows):
+        for i, ch in enumerate(row):
+            s.button((x0[r] + i*47, 108 + r*42, 43, 38), ch, f=F12)
+    s.button((6, 234, 66, 38), 'ABC'); s.button((410, 234, 64, 38), 'DEL')
+    s.button((6, 278, 72, 38), '?123'); s.button((82, 278, 184, 38), 'space')
+    s.button((270, 278, 92, 38), 'CANCEL'); s.button((366, 278, 108, 38), 'CONNECT', True, GOOD)
+    return s
+
+def cloud():
+    s = Scr(); header(s, 'JK02_24S  LIVE')
+    s.button((390, 46, 84, 40), 'BACK')
+    s.text('PAIR CODE', 12, 52, F9, MUTED, 'lt')
+    s.text('K7Q2-9XMA', 12, 104, F24B, ACCENT)
+    s.text('1. On your phone open  nakon1122.github.io/battlab-cloud', 12, 150, F9, TEXT)
+    s.text('2. Sign in and tap  Add device', 12, 176, F9, TEXT)
+    s.text('3. Enter the pair code above', 12, 202, F9, TEXT)
+    s.circle(18, 246, 6, WARN); s.text('Cloud: online - add on website', 32, 247, F9, TEXT)
     tabs(s, 6); return s
 
 def boot(warn=None, progress=.6):
@@ -253,7 +294,10 @@ shots = [
     ('10_mos_confirm.png', 'PARAM: discharge OFF warning', confirm(param(edit_row=-1), 'Discharge MOSFET  ->  OFF', 'Discharge OFF cuts power to the load!')),
     ('11_led.png', 'LED: on/off, brightness, modes, 8 colours', led()),
     ('12_setup.png', 'SETUP: screen, sleep, Wi-Fi, alarms', setup()),
-    ('13_info.png', 'INFO: BMS, Bluetooth, reset reason, RAM', info()),
+    ('13_info.png', 'INFO: status + HOME WI-FI / CLOUD buttons', info()),
+    ('15_wifi_list.png', 'HOME WI-FI: scan and pick your network', wifi_list()),
+    ('16_wifi_keyboard.png', 'On-screen keyboard for the Wi-Fi password', keyboard()),
+    ('17_cloud_pairing.png', 'CLOUD: pair code to add on the website', cloud()),
     ('14_boot_after_crash.png', 'Boot after an abnormal reset', boot('CRASH (panic)', .3)),
 ]
 paths = []
