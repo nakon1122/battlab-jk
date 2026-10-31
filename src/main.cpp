@@ -33,7 +33,7 @@ struct Shared {
   int bleError=0;
   uint32_t rxBytes=0, rxChunks=0, txOk=0, txFail=0;
   bool writeWithResponse=false;
-  String lastRxHex, gatt;
+  String lastRxHex, gatt, probe = "idle", lastRxChar;
   String state = "UNCONFIGURED", devices = "[]";
 } shared;
 bool scanWanted = false, configChanged = false, readWanted = false;
@@ -87,6 +87,8 @@ void stateApi() {
     d["tx_fail"] = shared.txFail;
     d["write_with_response"] = shared.writeWithResponse;
     d["gatt"] = shared.gatt;
+    d["probe"] = shared.probe;
+    d["last_rx_char"] = shared.lastRxChar;
     bool fresh = shared.linked && shared.have &&
                  uint32_t(millis() - shared.stamp) < 15000;
     d["live"] = fresh;
@@ -145,7 +147,7 @@ void stateApi() {
   }
   d["heap"] = ESP.getFreeHeap();
   d["uptime_ms"] = millis();
-  d["firmware"] = "1.3.1-ble-diag";
+  d["firmware"] = "1.3.2-ble-probe";
   json(200, d);
 }
 bool validMac(String m) {
@@ -270,7 +272,25 @@ void bleWorker(void *) {
   static volatile uint8_t lastRx[48];
   static volatile size_t lastRxLen = 0;
   bool withResp = false;
-  auto notify = [](NimBLERemoteCharacteristic *, uint8_t *p, size_t n, bool) {
+  static NimBLERemoteCharacteristic *volatile lastRxFrom = nullptr;
+  // Probe table: which bytes to send to which characteristic until the BMS
+  // answers. Covers JK (0x97/0x96), JBD/Xiaoxiang, ANT and Daly requests.
+  struct Probe { const char *name; uint8_t len; uint8_t data[20]; };
+  static Probe probes[5];
+  {
+    auto j7 = jk::request(0x97), j6 = jk::request(0x96);
+    probes[0] = {"JK_0x97", 20, {}}; memcpy(probes[0].data, j7.data(), 20);
+    probes[1] = {"JK_0x96", 20, {}}; memcpy(probes[1].data, j6.data(), 20);
+    probes[2] = {"JBD_03", 7, {0xDD,0xA5,0x03,0x00,0xFF,0xFD,0x77}};
+    probes[3] = {"ANT_01", 10, {0x7E,0xA1,0x01,0x00,0x00,0xBE,0x18,0x55,0xAA,0x55}};
+    probes[4] = {"DALY_90", 13, {0xA5,0x80,0x90,0x08,0,0,0,0,0,0,0,0,0xBD}};
+  }
+  struct Step { NimBLERemoteCharacteristic *target; uint8_t probe; bool resp; };
+  std::vector<Step> steps;
+  int probeStep = -1;
+  uint32_t probeAt = 0;
+  auto notify = [](NimBLERemoteCharacteristic *from, uint8_t *p, size_t n, bool) {
+    lastRxFrom = from;
     if (n > 512)
       return;
     static Chunk q;
@@ -462,23 +482,46 @@ void bleWorker(void *) {
             }
           Serial.printf("[BLE] GATT: %s\n", gatt.c_str());
           bool subscribed = false;
-          if (service)
-            if (auto cs = service->getCharacteristics(false))
+          steps.clear();
+          probeStep = -1;
+          if (auto svcs = client->getServices(false))
+            for (auto sv : *svcs) {
+              if (sv->getUUID() == NimBLEUUID(uint16_t(0x1800)) ||
+                  sv->getUUID() == NimBLEUUID(uint16_t(0x1801)))
+                continue;
+              auto cs = sv->getCharacteristics(false);
+              if (!cs) continue;
               for (auto cc : *cs) {
-                bool ok = false;
-                if (cc->canNotify()) ok = cc->subscribe(true, notify);
-                else if (cc->canIndicate()) ok = cc->subscribe(false, notify);
-                if (cc->canNotify() || cc->canIndicate())
+                if (cc->canNotify() || cc->canIndicate()) {
+                  bool ok = false;
+                  for (int attempt = 0; attempt < 2 && !ok; attempt++) {
+                    ok = cc->canNotify() ? cc->subscribe(true, notify)
+                                         : cc->subscribe(false, notify);
+                    if (!ok) delay(200);
+                  }
                   Serial.printf("[BLE] subscribe %s -> %s\n",
                                 cc->getUUID().toString().c_str(), ok ? "ok" : "FAILED");
-                subscribed |= ok;
+                  subscribed |= ok;
+                }
+                for (uint8_t pi = 0; pi < 5; pi++) {
+                  if (cc->canWriteNoResponse()) steps.push_back({cc, pi, false});
+                  if (cc->canWrite()) steps.push_back({cc, pi, true});
+                }
               }
+            }
+          Serial.printf("[BLE] probe plan: %u steps\n", (unsigned)steps.size());
           if (ch) withResp = !ch->canWriteNoResponse();
           {
             Guard g;
             shared.gatt = gatt;
           }
-          if (ch && subscribed) {
+          if (subscribed && !steps.empty()) {
+            probeStep = 0;
+            probeAt = 0;
+            notifyBytes = 0;
+            notifyChunks = 0;
+            lastRxLen = 0;
+            lastRxFrom = nullptr;
             gotInfo = gotCellFrame = false;
             linkedAt = millis();
             lastCellFrame = lastCellRequest = 0;
@@ -489,7 +532,8 @@ void bleWorker(void *) {
             shared.connectionAuth = "WAITING_INFO";
             shared.parameterAuth = "LOCKED";
             shared.bleError = 0;
-            shared.writeHandle = ch->getHandle();
+            shared.writeHandle = ch ? ch->getHandle() : 0;
+            shared.probe = "probing";
             shared.notifyHandle = notifyCh ? notifyCh->getHandle() : 0;
             lastPoll = 0;
             lastInfo = 0;
@@ -510,7 +554,7 @@ void bleWorker(void *) {
           shared.bleError = err;
         }
       }
-    } else if (ch) {
+    } else if (probeStep != -1 || ch) {
       Chunk chunk;
       while (xQueueReceive(queue, &chunk, 0) == pdTRUE)
         parser.feed(chunk.data, chunk.n, receive);
@@ -520,7 +564,54 @@ void bleWorker(void *) {
         if (shared.have && uint32_t(millis() - shared.stamp) > 15000)
           shared.state = "STALE";
       }
+      if (probeStep >= 0) {
+        uint32_t t = millis();
+        if (notifyBytes) {
+          // Something answered: report which request on which channel.
+          const Step &st = steps[probeStep > 0 ? probeStep - 1 : 0];
+          String r = String("ANSWER after ") + probes[st.probe].name + " on " +
+                     st.target->getUUID().toString().c_str() +
+                     (st.resp ? " (with response)" : " (no response)") +
+                     ", data from " +
+                     (lastRxFrom ? lastRxFrom->getUUID().toString().c_str() : "?");
+          Serial.printf("[BLE] %s\n", r.c_str());
+          {
+            Guard g;
+            shared.probe = r;
+          }
+          if (st.probe <= 1) {
+            ch = st.target;
+            withResp = st.resp;
+            lastCellRequest = 0;
+            lastInfo = 0;
+          }
+          probeStep = -1;
+        } else if (!probeAt || t - probeAt > 1500) {
+          if (probeStep >= (int)steps.size()) {
+            Serial.println("[BLE] probe finished: no answer on any channel");
+            Guard g;
+            shared.probe = "NO_ANSWER_ANY_CHANNEL";
+            probeStep = -2; // exhausted; keep link for diagnostics
+          } else {
+            const Step &st = steps[probeStep];
+            bool ok = st.target->writeValue(probes[st.probe].data,
+                                            probes[st.probe].len, st.resp);
+            Serial.printf("[BLE] probe %d/%u %s -> %s %s %s\n", probeStep + 1,
+                          (unsigned)steps.size(), probes[st.probe].name,
+                          st.target->getUUID().toString().c_str(),
+                          st.resp ? "resp" : "noresp", ok ? "ok" : "FAILED");
+            {
+              Guard g;
+              if (ok) shared.txOk++; else shared.txFail++;
+              shared.probe = String("probing ") + (probeStep + 1) + "/" + steps.size();
+            }
+            probeStep++;
+            probeAt = t;
+          }
+        }
+      }
       auto send = [&](uint8_t cmd) {
+        if (!ch) return false;
         auto b = jk::request(cmd);
         // JK BMS expects write-without-response on FFE1 when it is offered.
         bool ok = ch->writeValue(b.data(), b.size(), withResp);
@@ -540,18 +631,20 @@ void bleWorker(void *) {
         return ok;
       };
       uint32_t now = millis();
+      bool probing = probeStep >= 0 || !ch;
+      if (probing) lastInfo = lastInfo ? lastInfo : now;
       // 1) Device info (0x97) right after linking, retried every 5 s until a
       //    0x03 frame arrives (never re-sent while streaming).
-      if (!lastInfo || (!gotInfo && now - lastInfo > 5000 && cellRequests < 3)) {
+      if (!probing && (!lastInfo || (!gotInfo && now - lastInfo > 5000 && cellRequests < 3))) {
         send(0x97);
         lastInfo = now;
       }
       // 2) Cell info (0x96) starts the continuous 0x02 stream. Send it once
       //    device info arrived or 1.5 s after linking (some firmwares never
       //    answer 0x97), and again whenever the stream stops for 10 s.
-      bool firstRequest = !lastCellRequest &&
+      bool firstRequest = !probing && !lastCellRequest &&
                           (gotInfo || now - linkedAt > 1500);
-      bool streamStalled = lastCellRequest &&
+      bool streamStalled = !probing && lastCellRequest &&
                            now - (gotCellFrame ? lastCellFrame : lastCellRequest) > 10000 &&
                            now - lastCellRequest > 10000;
       if (streamStalled && !notifyBytes) {
@@ -560,7 +653,7 @@ void bleWorker(void *) {
         send(0x97);
         delay(300);
       }
-      if (firstRequest || streamStalled || wantRead) {
+      if (!probing && (firstRequest || streamStalled || wantRead)) {
         delay(gotInfo ? 0 : 100);
         send(0x96);
         lastCellRequest = millis();
@@ -579,6 +672,8 @@ void bleWorker(void *) {
             h += ' ';
           }
           shared.lastRxHex = h;
+          if (lastRxFrom)
+            shared.lastRxChar = lastRxFrom->getUUID().toString().c_str();
         }
       }
       static uint32_t lastRssi = 0, lastLog = 0;
@@ -600,7 +695,7 @@ void bleWorker(void *) {
       {
         Guard g;
         uint32_t since = gotCellFrame ? lastCellFrame : linkedAt;
-        reset = now - since > 45000;
+        reset = now - since > (notifyBytes || probeStep != -1 ? 180000u : 45000u);
         if (!gotCellFrame && reset)
           shared.state = gotInfo ? "NO_CELL_DATA" : "NO_RESPONSE";
         if (generation != seen)
@@ -626,7 +721,7 @@ void setup() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("BATTLAB-JK");
-  Serial.printf("\nBATTLAB 1.3.1-ble-diag\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB 1.3.2-ble-probe\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
