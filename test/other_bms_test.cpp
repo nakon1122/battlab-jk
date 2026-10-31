@@ -1,3 +1,4 @@
+#include <cstring>
 #include "../include/bms_other.h"
 #include <cassert>
 #include <cstdio>
@@ -57,5 +58,31 @@ int main(){
   assert(bms::jbdChecksum(bms::JBD_BASIC_REQUEST+2,2)==0xFFFD);
   assert(bms::jbdChecksum(bms::JBD_CELLS_REQUEST+2,2)==0xFFFC);
   assert(bms::antCrc16(bms::ANT_STATUS_REQUEST+1,5)==0x5518);
+  // ---- 32S checks for every family --------------------------------
+  { // ANT 32S (4 temperature sensors)
+    auto f=antFrame(32,4); bms::AntFramer af2; jk::Sample a32; int n=0;
+    for(size_t i=0;i<f.size();i+=20){size_t k=std::min<size_t>(20,f.size()-i);
+      af2.feed(f.data()+i,k,[&](const uint8_t*fr,size_t len){assert(bms::decodeAnt(fr,len,a32));n++;});}
+    assert(n==1&&a32.count==32&&std::fabs(a32.cells[31]-3.87f)<.001f&&std::fabs(a32.voltage-123.84f)<.02f);
+  }
+  { // JBD 32S
+    std::vector<uint8_t> c32; for(int i=0;i<32;i++){c32.push_back(3300>>8);c32.push_back(3300&255);}
+    auto f=jbdFrame(4,c32); bms::JbdFramer jf2; jk::Sample j32; int n=0;
+    for(size_t i=0;i<f.size();i+=20){size_t k=std::min<size_t>(20,f.size()-i);
+      jf2.feed(f.data()+i,k,[&](uint8_t cmd,const uint8_t*p,size_t len){assert(cmd==4&&bms::decodeJbdCells(p,len,j32));n++;});}
+    assert(n==1&&j32.count==32&&std::fabs(j32.cells[31]-3.3f)<.001f);
+  }
+  { // JK02_32S with 32 active cells (and the auto detector)
+    uint8_t b[300]={0}; b[0]=0x55;b[1]=0xAA;b[2]=0xEB;b[3]=0x90;b[4]=2;
+    for(int i=0;i<32;i++){b[6+i*2]=3300&255;b[7+i*2]=3300>>8;}
+    b[70]=b[71]=b[72]=b[73]=0xFF;                 // enabled cell mask
+    uint32_t mv=32*3300; memcpy(b+150,&mv,4);     // total voltage (mV)
+    int32_t ma=-12500; memcpy(b+158,&ma,4);       // current (mA)
+    b[173]=64;                                    // SOC
+    jk::Sample k; assert(jk::decode(b,true,k)); assert(k.count==32&&std::fabs(k.voltage-105.6f)<.01f);
+    assert(std::fabs(k.cells[31]-3.3f)<.001f&&std::fabs(k.current+12.5f)<.01f&&k.soc==64);
+    jk::Sample z; assert(jk::detect(b,z)==32&&z.count==32);
+  }
+  puts("32S checks PASS");
   puts("other_bms_test PASS");
 }

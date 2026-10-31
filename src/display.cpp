@@ -373,10 +373,21 @@ static void cells(const DisplaySnap &d, bool) {
   float mn, mx;
   int imn, imx;
   cellStats(s, mn, mx, imn, imx);
+  // Up to 16 cells: 2 columns. 17-24: 4 columns. 25-32: dense 4x8 grid that
+  // uses more height, with a slim one-line summary underneath.
+  bool dense = n > 24;
+  static int lastLayout = -1;
+  int layout = n <= 16 ? 0 : dense ? 2 : 1;
+  if (layout != lastLayout) {
+    tft.fillRect(0, 41, 480, TAB_Y - 41, C_BG); // cell count changed
+    lastLayout = layout;
+  }
   int cols = n <= 16 ? 2 : 4;
   int rows = n ? (n + cols - 1) / cols : 1;
-  int cw = 462 / cols - 6, ch = 178 / rows - 4;
+  int gap = dense ? 3 : 4, gridH = dense ? 204 : 178;
+  int cw = 462 / cols - 6, ch = gridH / rows - gap;
   if (ch > 36) ch = 36;
+  int barH = ch < 28 ? 3 : 5;
   LGFX_Sprite c(&tft);
   c.setColorDepth(16);
   if (!c.createSprite(cw, ch)) return;
@@ -402,22 +413,23 @@ static void cells(const DisplaySnap &d, bool) {
     if (f < 0) f = 0;
     if (f > 1) f = 1;
     uint16_t bar = i == imx ? C_BAD : i == imn ? C_BLUE : C_GOOD;
-    c.fillRoundRect(0, ch - 5, int(cw * f), 5, 2, bar);
+    c.fillRoundRect(0, ch - barH, int(cw * f), barH, 1, bar);
     c.setFont(&fonts::FreeSans9pt7b);
     c.setTextDatum(textdatum_t::middle_left);
     c.setTextColor(C_MUTED, C_CARD);
-    c.drawString(String(i + 1), 8, ch / 2 - 1);
+    c.drawString(String(i + 1), 8, ch / 2 - (barH > 3 ? 1 : 0));
     c.setTextDatum(textdatum_t::middle_right);
     c.setTextColor(i == imx ? C_BAD : i == imn ? C_BLUE : C_TEXT, C_CARD);
-    c.drawString(fmt(v, 3), cw - 8, ch / 2 - 1);
-    c.pushSprite(12 + col * (cw + 6), 46 + row * (ch + 4));
+    c.drawString(fmt(v, 3), cw - 8, ch / 2 - (barH > 3 ? 1 : 0));
+    c.pushSprite(12 + col * (cw + 6), 46 + row * (ch + gap));
   }
   c.deleteSprite();
   LGFX_Sprite b(&tft);
   b.setColorDepth(16);
-  if (!b.createSprite(462, 42)) return;
+  int sh = dense ? 24 : 42, sy = dense ? 252 : 230;
+  if (!b.createSprite(462, sh)) return;
   b.fillSprite(C_BG);
-  b.fillRoundRect(0, 0, 462, 42, 10, C_CARD);
+  b.fillRoundRect(0, 0, 462, sh, dense ? 8 : 10, C_CARD);
   b.setFont(&fonts::FreeSans9pt7b);
   b.setTextDatum(textdatum_t::middle_left);
   b.setTextColor(C_TEXT, C_CARD);
@@ -425,8 +437,8 @@ static void cells(const DisplaySnap &d, bool) {
                         fmt(mx, 3) + " (#" + (imx + 1) + ")  delta " +
                         String(int((mx - mn) * 1000 + .5f)) + " mV"
                   : String("Waiting for BMS data");
-  b.drawString(line, 12, 21);
-  b.pushSprite(9, 230);
+  b.drawString(line, 12, sh / 2);
+  b.pushSprite(9, sy);
   b.deleteSprite();
 }
 
