@@ -31,6 +31,9 @@ struct Shared {
   String connectionAuth = "NOT_SET", parameterAuth = "LOCKED";
   uint16_t writeHandle=0, notifyHandle=0;
   int bleError=0;
+  uint32_t rxBytes=0, rxChunks=0, txOk=0, txFail=0;
+  bool writeWithResponse=false;
+  String lastRxHex, gatt;
   String state = "UNCONFIGURED", devices = "[]";
 } shared;
 bool scanWanted = false, configChanged = false, readWanted = false;
@@ -77,6 +80,13 @@ void stateApi() {
     d["write_handle"] = shared.writeHandle;
     d["notify_handle"] = shared.notifyHandle;
     d["ble_error"] = shared.bleError;
+    d["rx_bytes"] = shared.rxBytes;
+    d["rx_chunks"] = shared.rxChunks;
+    d["last_rx_hex"] = shared.lastRxHex;
+    d["tx_ok"] = shared.txOk;
+    d["tx_fail"] = shared.txFail;
+    d["write_with_response"] = shared.writeWithResponse;
+    d["gatt"] = shared.gatt;
     bool fresh = shared.linked && shared.have &&
                  uint32_t(millis() - shared.stamp) < 15000;
     d["live"] = fresh;
@@ -135,7 +145,7 @@ void stateApi() {
   }
   d["heap"] = ESP.getFreeHeap();
   d["uptime_ms"] = millis();
-  d["firmware"] = "1.3.0-ble-fix";
+  d["firmware"] = "1.3.1-ble-diag";
   json(200, d);
 }
 bool validMac(String m) {
@@ -256,7 +266,10 @@ void bleWorker(void *) {
     uint8_t data[512];
   };
   static QueueHandle_t queue = xQueueCreate(40, sizeof(Chunk));
-  static volatile uint32_t dropped = 0, notifyBytes = 0;
+  static volatile uint32_t dropped = 0, notifyBytes = 0, notifyChunks = 0;
+  static volatile uint8_t lastRx[48];
+  static volatile size_t lastRxLen = 0;
+  bool withResp = false;
   auto notify = [](NimBLERemoteCharacteristic *, uint8_t *p, size_t n, bool) {
     if (n > 512)
       return;
@@ -264,6 +277,9 @@ void bleWorker(void *) {
     q.n = n;
     memcpy(q.data, p, n);
     notifyBytes += n;
+    notifyChunks++;
+    lastRxLen = n < sizeof(lastRx) ? n : sizeof(lastRx);
+    memcpy((void *)lastRx, p, lastRxLen);
     if (xQueueSend(queue, &q, 0) != pdTRUE)
       dropped++;
   };
@@ -426,7 +442,43 @@ void bleWorker(void *) {
                         c.mac.c_str(), service ? "FFE0" : "none",
                         ch ? "ok" : "none", notifyCh ? "ok" : "none",
                         (unsigned)client->getMTU());
-          if (ch && notifyCh && notifyCh->subscribe(true, notify)) {
+          String gatt;
+          if (auto svcs = client->getServices(true))
+            for (auto sv : *svcs) {
+              gatt += sv->getUUID().toString().c_str();
+              gatt += "{";
+              if (auto cs = sv->getCharacteristics(true))
+                for (auto cc : *cs) {
+                  gatt += cc->getUUID().toString().c_str();
+                  gatt += ":";
+                  if (cc->canRead()) gatt += "R";
+                  if (cc->canWrite()) gatt += "W";
+                  if (cc->canWriteNoResponse()) gatt += "w";
+                  if (cc->canNotify()) gatt += "N";
+                  if (cc->canIndicate()) gatt += "I";
+                  gatt += " ";
+                }
+              gatt += "} ";
+            }
+          Serial.printf("[BLE] GATT: %s\n", gatt.c_str());
+          bool subscribed = false;
+          if (service)
+            if (auto cs = service->getCharacteristics(false))
+              for (auto cc : *cs) {
+                bool ok = false;
+                if (cc->canNotify()) ok = cc->subscribe(true, notify);
+                else if (cc->canIndicate()) ok = cc->subscribe(false, notify);
+                if (cc->canNotify() || cc->canIndicate())
+                  Serial.printf("[BLE] subscribe %s -> %s\n",
+                                cc->getUUID().toString().c_str(), ok ? "ok" : "FAILED");
+                subscribed |= ok;
+              }
+          if (ch) withResp = !ch->canWriteNoResponse();
+          {
+            Guard g;
+            shared.gatt = gatt;
+          }
+          if (ch && subscribed) {
             gotInfo = gotCellFrame = false;
             linkedAt = millis();
             lastCellFrame = lastCellRequest = 0;
@@ -438,7 +490,7 @@ void bleWorker(void *) {
             shared.parameterAuth = "LOCKED";
             shared.bleError = 0;
             shared.writeHandle = ch->getHandle();
-            shared.notifyHandle = notifyCh->getHandle();
+            shared.notifyHandle = notifyCh ? notifyCh->getHandle() : 0;
             lastPoll = 0;
             lastInfo = 0;
           } else {
@@ -471,8 +523,15 @@ void bleWorker(void *) {
       auto send = [&](uint8_t cmd) {
         auto b = jk::request(cmd);
         // JK BMS expects write-without-response on FFE1 when it is offered.
-        bool ok = ch->writeValue(b.data(), b.size(), !ch->canWriteNoResponse());
-        Serial.printf("[BLE] -> 0x%02X %s\n", cmd, ok ? "ok" : "FAILED");
+        bool ok = ch->writeValue(b.data(), b.size(), withResp);
+        Serial.printf("[BLE] -> 0x%02X (%s) %s\n", cmd,
+                      withResp ? "with response" : "no response",
+                      ok ? "ok" : "FAILED");
+        {
+          Guard g;
+          if (ok) shared.txOk++; else shared.txFail++;
+          shared.writeWithResponse = withResp;
+        }
         if (!ok) {
           Guard g;
           shared.bleError = client->getLastError();
@@ -495,11 +554,32 @@ void bleWorker(void *) {
       bool streamStalled = lastCellRequest &&
                            now - (gotCellFrame ? lastCellFrame : lastCellRequest) > 10000 &&
                            now - lastCellRequest > 10000;
+      if (streamStalled && !notifyBytes) {
+        // Nothing received at all: try the other write type, and re-ask info.
+        if (ch->canWrite() && ch->canWriteNoResponse()) withResp = !withResp;
+        send(0x97);
+        delay(300);
+      }
       if (firstRequest || streamStalled || wantRead) {
         delay(gotInfo ? 0 : 100);
         send(0x96);
         lastCellRequest = millis();
         cellRequests++;
+      }
+      {
+        Guard g;
+        shared.rxBytes = notifyBytes;
+        shared.rxChunks = notifyChunks;
+        if (lastRxLen) {
+          static const char hx[] = "0123456789ABCDEF";
+          String h;
+          for (size_t i = 0; i < lastRxLen; i++) {
+            h += hx[lastRx[i] >> 4];
+            h += hx[lastRx[i] & 15];
+            h += ' ';
+          }
+          shared.lastRxHex = h;
+        }
       }
       static uint32_t lastRssi = 0, lastLog = 0;
       if (now - lastRssi > 5000) {
@@ -546,7 +626,7 @@ void setup() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("BATTLAB-JK");
-  Serial.printf("\nBATTLAB 1.3.0-ble-fix\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB 1.3.1-ble-diag\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
