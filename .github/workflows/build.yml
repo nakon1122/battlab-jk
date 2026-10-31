@@ -27,12 +27,13 @@ jobs:
           sudo apt-get install -y -qq fonts-freefont-ttf >/dev/null
           pip install -q pillow
           python tools/render_screens.py
+          python tools/render_viewer.py
           mkdir -p out/screens && cp assets/screens/*.png out/screens/
       - name: Build both boards
         run: |
           set -o pipefail
           mkdir -p out
-          pio run -e esp32-s3 -e esp32-035 2>&1 | tee out/build.log
+          pio run -e esp32-s3 -e esp32-035 -e cyd35-cloud 2>&1 | tee out/build.log
       - name: Make single install images (flash at 0x0)
         run: |
           BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
@@ -44,6 +45,11 @@ jobs:
           python -m esptool --chip esp32 merge_bin -o out/BATTLAB_CYD35_INSTALL.bin \
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 $CY/bootloader.bin 0x8000 $CY/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $CY/firmware.bin
+          CL=.pio/build/cyd35-cloud
+          python -m esptool --chip esp32 merge_bin -o out/BATTLAB_CLOUDSCREEN_INSTALL.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000 $CL/bootloader.bin 0x8000 $CL/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $CL/firmware.bin
+          cp $CL/firmware.bin out/BATTLAB_CLOUDSCREEN_APP_UPDATE.bin
           # app-only images: update without erasing settings (Wi-Fi, pair code, calibration)
           cp $S3/firmware.bin out/BATTLAB_S3_APP_UPDATE.bin
           cp $CY/firmware.bin out/BATTLAB_CYD35_APP_UPDATE.bin
