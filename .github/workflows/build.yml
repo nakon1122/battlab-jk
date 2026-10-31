@@ -1,7 +1,10 @@
 name: Build firmware
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,3 +31,14 @@ jobs:
         with:
           name: BATTLAB_S3_v1_3_BLE_FIX
           path: out/
+      - name: Publish binaries to firmware-build branch
+        run: |
+          git config user.name "battlab-ci"
+          git config user.email "battlab-ci@users.noreply.github.com"
+          git checkout --orphan firmware-build
+          git rm -rq --cached .
+          mkdir -p firmware
+          cp out/* firmware/
+          git add -f firmware/
+          git commit -qm "firmware for ${GITHUB_SHA::7}"
+          git push -f origin firmware-build
