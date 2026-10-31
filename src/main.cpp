@@ -148,7 +148,7 @@ void stateApi() {
   }
   d["heap"] = ESP.getFreeHeap();
   d["uptime_ms"] = millis();
-  d["firmware"] = "1.3.3-ble-probe-log";
+  d["firmware"] = "1.3.4-probe-rgb";
   json(200, d);
 }
 bool validMac(String m) {
@@ -757,6 +757,31 @@ void bleWorker(void *) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
+// Onboard RGB LED (WS2812). DevKitC-1 v1.0 uses GPIO48, v1.1 uses GPIO38.
+#ifndef BATTLAB_LED_PIN
+#define BATTLAB_LED_PIN 48
+#endif
+void ledTask(void *) {
+  const uint8_t maxLevel = 40; // keep it soft, the LED is very bright
+  float hue = 0;
+  for (;;) {
+    float h = hue / 60.f, x = 1.f - fabsf(fmodf(h, 2.f) - 1.f);
+    float r = 0, g = 0, b = 0;
+    switch (int(h) % 6) {
+      case 0: r = 1; g = x; break;
+      case 1: r = x; g = 1; break;
+      case 2: g = 1; b = x; break;
+      case 3: g = x; b = 1; break;
+      case 4: r = x; b = 1; break;
+      default: r = 1; b = x; break;
+    }
+    neopixelWrite(BATTLAB_LED_PIN, uint8_t(r * maxLevel),
+                  uint8_t(g * maxLevel), uint8_t(b * maxLevel));
+    hue += 0.6f; // full colour circle in about 12 s
+    if (hue >= 360.f) hue -= 360.f;
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
 void setup() {
   Serial.begin(115200);
   lock = xSemaphoreCreateMutex();
@@ -769,7 +794,7 @@ void setup() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("BATTLAB-JK");
-  Serial.printf("\nBATTLAB 1.3.3-ble-probe-log\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
+  Serial.printf("\nBATTLAB 1.3.4-probe-rgb\nWi-Fi: BATTLAB-JK (OPEN)\nAP started: %s\nhttp://192.168.4.1\n", apStarted ? "YES" : "NO");
   const char *headers[] = {"Origin"};
   web.collectHeaders(headers, 1);
   web.on("/", HTTP_GET,
@@ -779,7 +804,7 @@ void setup() {
     String s;
     {
       Guard g;
-      s = String("BATTLAB 1.3.3 probe log\nstate: ") + shared.probe +
+      s = String("BATTLAB 1.3.4 probe log\nstate: ") + shared.probe +
           "\ngatt: " + shared.gatt + "\n\n" + shared.probeLog;
     }
     web.sendHeader("Cache-Control", "no-store");
@@ -923,6 +948,7 @@ void setup() {
       []() { error(404, "Not found / BMS writes are not implemented"); });
   web.begin();
   xTaskCreatePinnedToCore(bleWorker, "ble", 12288, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
 }
 void loop() {
   web.handleClient();
