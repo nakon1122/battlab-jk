@@ -1,0 +1,30 @@
+name: Build firmware
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PlatformIO and esptool
+        run: pip install platformio esptool==4.5.1
+      - name: Build
+        run: pio run -e esp32-s3
+      - name: Make single install image (flash at 0x0)
+        run: |
+          B=.pio/build/esp32-s3
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
+          mkdir -p out
+          cp $B/bootloader.bin $B/partitions.bin $B/firmware.bin "$BOOT_APP0" out/
+          python -m esptool --chip esp32s3 merge_bin -o out/BATTLAB_S3_BLEFIX_INSTALL.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
+          sha256sum out/* > out/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BATTLAB_S3_v1_3_BLE_FIX
+          path: out/
