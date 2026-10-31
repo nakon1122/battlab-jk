@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
+#include <esp_bt.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -15,9 +16,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.9.0-cyd35"
+#define BATTLAB_FW "1.9.1-cyd35"
 #else
-#define BATTLAB_FW "1.9.0-s3"
+#define BATTLAB_FW "1.9.1-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -199,6 +200,42 @@ String asciiField(const uint8_t *b, size_t n) {
     s += b[i] >= 32 && b[i] < 127 ? char(b[i]) : '?';
   return s;
 }
+// ---- Radio transmit power ------------------------------------------------
+// MAX (default): Bluetooth at the chip maximum, Wi-Fi at 19.5 dBm.
+// LOW: Bluetooth +3 dBm, Wi-Fi 8.5 dBm, for weak power supplies.
+#if CONFIG_IDF_TARGET_ESP32S3
+static const esp_power_level_t BLE_MAX_LEVEL = ESP_PWR_LVL_P21; // S3: about +20 dBm
+static const char *BLE_MAX_TEXT = "+20 dBm";
+#else
+static const esp_power_level_t BLE_MAX_LEVEL = ESP_PWR_LVL_P9;  // ESP32: +9 dBm
+static const char *BLE_MAX_TEXT = "+9 dBm";
+#endif
+static bool radioMax = true;
+static volatile bool bleTxApplyWanted = false;
+bool radioMaxPower() { return radioMax; }
+const char *bleTxText() { return radioMax ? BLE_MAX_TEXT : "+3 dBm"; }
+static void applyBleTxPower() { // call from the BLE task after init / connect
+  esp_power_level_t l = radioMax ? BLE_MAX_LEVEL : ESP_PWR_LVL_P3;
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, l);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, l);
+  esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, l);
+  for (int i = 0; i < 3; i++)
+    esp_ble_tx_power_set(esp_ble_power_type_t(ESP_BLE_PWR_TYPE_CONN_HDL0 + i), l);
+}
+static void applyWifiTxPower() {
+  if (WiFi.getMode() != WIFI_OFF)
+    WiFi.setTxPower(radioMax ? WIFI_POWER_19_5dBm : WIFI_POWER_8_5dBm);
+}
+void radioSetMaxPower(bool on) {
+  radioMax = on;
+  Preferences p;
+  p.begin("battlab-jk", false);
+  p.putBool("txmax", on);
+  p.end();
+  applyWifiTxPower();
+  bleTxApplyWanted = true; // BLE task applies it
+}
+
 // ---- BMS write commands (queued by web/screen, executed by the BLE task) --
 struct BmsCmd {
   bool isSwitch;
@@ -244,6 +281,7 @@ void bleWorker(void *) {
 #endif
   NimBLEDevice::init("BATTLAB");
   NimBLEDevice::setMTU(247);
+  applyBleTxPower();
   auto scan = NimBLEDevice::getScan();
   scan->setActiveScan(true);
   scan->setMaxResults(24);
@@ -412,6 +450,10 @@ void bleWorker(void *) {
       dropped++;
   };
   for (;;) {
+    if (bleTxApplyWanted) {
+      bleTxApplyWanted = false;
+      applyBleTxPower();
+    }
     bool change, wantScan, wantRead;
     {
       Guard g;
@@ -695,6 +737,7 @@ void bleWorker(void *) {
             Guard g;
             shared.linked = true;
             shared.state = "WAITING_DEVICE_INFO";
+            applyBleTxPower(); // per-connection power on the new link
             shared.connectionAuth = "WAITING_INFO";
             shared.parameterAuth = "LOCKED";
             shared.bleError = 0;
@@ -1210,9 +1253,7 @@ static void wifiStartAp() {
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
   WiFi.softAP("BATTLAB");
-#ifdef BATTLAB_CYD35
-  WiFi.setTxPower(WIFI_POWER_8_5dBm); // lower peak current, still fine nearby
-#endif
+  applyWifiTxPower();
 }
 bool wifiEnabled() { return wifiOn; }
 void wifiSetEnabled(bool on) {
@@ -1328,6 +1369,8 @@ void takeDisplaySnapshot(DisplaySnap &o) {
     o.connAuth = shared.connectionAuth;
   }
   o.wifiOn = wifiOn;
+  o.radioMax = radioMax;
+  o.bleTx = bleTxText();
   {
     Guard g;
     o.jk = shared.jk;
@@ -1355,6 +1398,7 @@ void setup() {
   cfg.type = prefs.getUChar("type", 0);
 #ifdef BATTLAB_DISPLAY
   wifiOn = prefs.getBool("wifi", true); // can be switched off on the screen
+  radioMax = prefs.getBool("txmax", true);
 #endif
   bool apStarted = false;
   if (wifiOn) {

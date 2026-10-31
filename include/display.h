@@ -21,7 +21,11 @@ struct DisplaySnap {
   bool jkFresh = false;
   uint8_t family = 0; // 0 unknown, 1 JK, 2 ANT, 3 JBD
   String lastWrite;
+  bool radioMax = true;
+  const char *bleTx = "";
 };
+bool radioMaxPower();
+void radioSetMaxPower(bool on); // MAX: BLE chip maximum + Wi-Fi 19.5 dBm
 
 // BMS writes (validated, then queued to the Bluetooth task). Return nullptr
 // when accepted, otherwise a short reason.

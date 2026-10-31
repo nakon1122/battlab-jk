@@ -202,8 +202,9 @@ def setup():
     s.text('Sleep', 12, 112, F9, MUTED)
     for i, t in enumerate(['OFF', '1 min', '5 min', '10 min']):
         s.button((150 + i*82, 92, 76, 40), t, i == 2)
-    s.text('Wi-Fi', 12, 158, F9, MUTED)
-    s.button((150, 138, 120, 40), 'WIFI ON', True, GOOD); s.button((280, 138, 194, 40), 'CALIBRATE TOUCH')
+    s.text('Radio', 12, 158, F9, MUTED)
+    s.button((150, 138, 104, 40), 'WIFI ON', True, GOOD); s.button((260, 138, 96, 40), 'TX MAX', True, GOOD)
+    s.button((362, 138, 112, 40), 'CALIBRATE')
     s.text('Low SOC alarm', 12, 204, F9, MUTED)
     s.button((150, 184, 52, 40), '-', f=F12B); s.text('15%', 236, 205, F12B, TEXT, 'mm'); s.button((270, 184, 52, 40), '+', f=F12B)
     s.button((340, 184, 134, 40), 'BEEP ON', True, GOOD)
@@ -214,7 +215,7 @@ def setup():
 
 def info():
     s = Scr(); header(s, 'JK02_24S  LIVE')
-    rows = [('BMS', 'JK02_24S'), ('Model', 'JK_BD6A24S20P'), ('Bluetooth', '10:23:81:A9:C0:D6  AUTO'),
+    rows = [('BMS', 'JK02_24S'), ('Model', 'JK_BD6A24S20P'), ('Bluetooth', '10:23:81:A9:C0:D6  AUTO  TX +9 dBm'),
             ('State', 'LIVE   rx 48210 B, 162 frames'), ('Probe', 'identifying'),
             ('Last reset', 'power on   RAM 61k free, min 48k'), ('Wi-Fi', 'BATTLAB  192.168.4.1  (1)'),
             ('Firmware', 'cyd35   up 42 min')]

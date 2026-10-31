@@ -663,8 +663,8 @@ static void ledTouch(int x, int y) {
 
 // -------------------------------------------------------------- SETUP ----
 static const Btn S_BL_MINUS = {150, 46, 52, 40}, S_BL_PLUS = {300, 46, 52, 40},
-                 S_ROTATE = {370, 46, 104, 40}, S_WIFI = {150, 138, 120, 40},
-                 S_CAL = {280, 138, 194, 40}, S_SOC_MINUS = {150, 184, 52, 40},
+                 S_ROTATE = {370, 46, 104, 40}, S_WIFI = {150, 138, 104, 40},
+                 S_TX = {260, 138, 96, 40}, S_CAL = {362, 138, 112, 40}, S_SOC_MINUS = {150, 184, 52, 40},
                  S_SOC_PLUS = {270, 184, 52, 40}, S_BEEP = {340, 184, 134, 40},
                  S_T_MINUS = {150, 230, 52, 40}, S_T_PLUS = {270, 230, 52, 40},
                  S_RESTART = {340, 230, 134, 40};
@@ -679,7 +679,7 @@ static void valueBox(int x, int y, const String &v) {
 }
 static void setupPage(const DisplaySnap &d, bool force) {
   String key = String(dcfg.bl) + dcfg.sleep + dcfg.rot + dcfg.lowSoc + "/" +
-               dcfg.hiTemp + dcfg.beep + d.wifiOn;
+               dcfg.hiTemp + dcfg.beep + d.wifiOn + (d.radioMax ? "M" : "L");
   if (!force && key == setupKey) return;
   setupKey = key;
   clearContent();
@@ -694,9 +694,10 @@ static void setupPage(const DisplaySnap &d, bool force) {
   label(12, 112, "Sleep");
   const char *sl[4] = {"OFF", "1 min", "5 min", "10 min"};
   for (int i = 0; i < 4; i++) button(sleepBtn(i), sl[i], dcfg.sleep == i);
-  label(12, 158, "Wi-Fi");
+  label(12, 158, "Radio");
   button(S_WIFI, d.wifiOn ? "WIFI ON" : "WIFI OFF", d.wifiOn, C_GOOD);
-  button(S_CAL, "CALIBRATE TOUCH", false);
+  button(S_TX, d.radioMax ? "TX MAX" : "TX LOW", d.radioMax, C_GOOD);
+  button(S_CAL, "CALIBRATE", false);
   label(12, 204, "Low SOC alarm");
   button(S_SOC_MINUS, "-", false, 0, &fonts::FreeSansBold12pt7b);
   valueBox(204, 184, dcfg.lowSoc ? String(dcfg.lowSoc) + "%" : String("off"));
@@ -718,6 +719,10 @@ static void setupTouch(const DisplaySnap &d, int x, int y) {
   else if (hit(S_WIFI, x, y)) {
     wifiSetEnabled(!d.wifiOn);
     showToast(d.wifiOn ? "Wi-Fi hotspot off" : "Wi-Fi BATTLAB on");
+    changed = false;
+  } else if (hit(S_TX, x, y)) {
+    radioSetMaxPower(!d.radioMax);
+    showToast(d.radioMax ? "Radio power LOW (weak power supply)" : "Radio power MAX");
     changed = false;
   } else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
   else if (hit(S_SOC_MINUS, x, y)) dcfg.lowSoc = dcfg.lowSoc >= 5 ? dcfg.lowSoc - 5 : 0;
@@ -758,7 +763,7 @@ static void info(const DisplaySnap &d, bool) {
   infoRow(y, "BMS", d.detected.length() ? d.detected : String("not identified")); y += 29;
   infoRow(y, "Model", d.model.length() ? d.model : String("-")); y += 29;
   infoRow(y, "Bluetooth", (d.mac.length() ? d.mac : String(d.automatic ? "auto find" : "none")) +
-                              "  " + d.protocol); y += 29;
+                              "  " + d.protocol + "  TX " + d.bleTx); y += 29;
   infoRow(y, "State", d.state + "   rx " + d.rxBytes + " B, " + d.good + " frames"); y += 29;
   infoRow(y, "Probe", d.probe); y += 29;
   infoRow(y, "Last reset", String(d.resetReason) + "   RAM " + (d.freeHeap / 1024) +
