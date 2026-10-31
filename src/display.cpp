@@ -9,6 +9,7 @@ void displayStart() {}
 #else
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
+#include "logo.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -762,8 +763,51 @@ static void calibrate() {
   tft.fillScreen(C_BG);
 }
 
+// ------------------------------------------------------------- splash ----
+// BattLab logo on black for 5 s with a fade-in and a thin progress bar.
+// Bluetooth and Wi-Fi are already starting in the background meanwhile.
+static void splash() {
+  const uint32_t SPLASH_MS = 5000;
+  tft.setBrightness(0);
+  tft.fillScreen(TFT_BLACK);
+  const int lx = (480 - LOGO_W) / 2, ly = 96;
+  static lgfx::rgb565_t line[LOGO_W];
+  for (int y = 0; y < LOGO_H; y++) {
+    const uint8_t *row = LOGO_GRAY + size_t(y) * LOGO_W;
+    for (int x = 0; x < LOGO_W; x++) line[x] = lgfx::rgb565_t(row[x], row[x], row[x]);
+    tft.pushImage(lx, ly + y, LOGO_W, 1, line);
+  }
+  const uint16_t barBg = tft.color565(40, 40, 40);
+  const int bx = 140, by = 262, bw = 200;
+  tft.fillRoundRect(bx, by, bw, 4, 2, barBg);
+  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setTextColor(tft.color565(120, 120, 120), TFT_BLACK);
+  DisplaySnap d;
+  takeDisplaySnapshot(d);
+  tft.drawString(String("Battery Studio  v") + d.firmware, 240, 290);
+  uint32_t t0 = millis();
+  int drawn = 0;
+  for (;;) {
+    uint32_t t = millis() - t0;
+    if (t > SPLASH_MS) t = SPLASH_MS;
+    // fade the backlight in over the first 700 ms
+    uint32_t level = BL_LEVEL[dcfg.bl];
+    tft.setBrightness(t < 700 ? level * t / 700 : level);
+    int w = bw * t / SPLASH_MS;
+    if (w > drawn) {
+      tft.fillRoundRect(bx, by, w, 4, 2, C_ACCENT);
+      drawn = w;
+    }
+    if (t >= SPLASH_MS) break;
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  tft.fillScreen(C_BG);
+}
+
 // --------------------------------------------------------------- task ----
 static void displayTask(void *) {
+  splash();
   {
     uint16_t cal[8];
     Preferences p;
@@ -868,7 +912,6 @@ void displayStart() {
   tft.configure(invert, rgb);
   tft.init();
   tft.setRotation(dcfg.rot);
-  applyBacklight();
   C_BG = tft.color565(11, 17, 23);
   C_CARD = tft.color565(24, 33, 42);
   C_LINE = tft.color565(45, 58, 70);
@@ -879,14 +922,8 @@ void displayStart() {
   C_WARN = tft.color565(232, 160, 64);
   C_BAD = tft.color565(232, 84, 88);
   C_BLUE = tft.color565(84, 148, 232);
-  tft.fillScreen(C_BG);
-  tft.setFont(&fonts::FreeSansBold18pt7b);
-  tft.setTextColor(C_ACCENT, C_BG);
-  tft.setTextDatum(textdatum_t::middle_center);
-  tft.drawString("BATTLAB", 240, 140);
-  tft.setFont(&fonts::FreeSans9pt7b);
-  tft.setTextColor(C_MUTED, C_BG);
-  tft.drawString("Battery Studio  -  starting", 240, 180);
+  tft.setBrightness(0);
+  tft.fillScreen(TFT_BLACK);
   xTaskCreatePinnedToCore(displayTask, "disp", 10240, nullptr, 1, nullptr, 1);
 }
 #endif

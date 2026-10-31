@@ -14,9 +14,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "1.7.0-cyd35"
+#define BATTLAB_FW "1.8.0-cyd35"
 #else
-#define BATTLAB_FW "1.7.0-s3"
+#define BATTLAB_FW "1.8.0-s3"
 #endif
 WebServer web(80);
 Preferences prefs;
