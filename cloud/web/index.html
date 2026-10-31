@@ -47,7 +47,8 @@ canvas{width:100%;height:220px}
  <label>อีเมล<input id="email" type="email" autocomplete="email"></label>
  <label>รหัสผ่าน (อย่างน้อย 8 ตัว)<input id="pass" type="password" autocomplete="current-password"></label>
  <div class="row"><button id="btnIn">เข้าสู่ระบบ</button><button class="soft" id="btnUp">สมัครใหม่</button></div>
- <p class="muted small" id="loginMsg"></p>
+ <p class="small" id="loginMsg" style="min-height:1.4em"></p>
+ <div class="row small"><button class="soft" id="btnResend" style="padding:8px">ส่งอีเมลยืนยันอีกครั้ง</button><button class="soft" id="btnForgot" style="padding:8px">ลืมรหัสผ่าน</button></div>
 </div></section>
 <!-- device list -->
 <section id="vList" class="hide">
@@ -91,8 +92,23 @@ function state(ts,d){const s=(Date.now()-new Date(ts))/1000;if(s>120)return['off
 // ---- auth
 async function boot(){const {data}=await sb.auth.getSession();if(data.session){listDevices()}else show('vLogin')}
 sb.auth.onAuthStateChange((e,s)=>{if(e==='SIGNED_OUT')show('vLogin')});
-$('btnIn').onclick=async()=>{$('loginMsg').textContent='';const {error}=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('pass').value});if(error){$('loginMsg').textContent=error.message==='Email not confirmed'?'กรุณายืนยันอีเมลก่อน (เช็กกล่องจดหมาย)':'เข้าสู่ระบบไม่สำเร็จ: '+error.message}else listDevices()};
-$('btnUp').onclick=async()=>{const pw=$('pass').value;if(pw.length<8){$('loginMsg').textContent='รหัสผ่านต้องมีอย่างน้อย 8 ตัว';return}const {data,error}=await sb.auth.signUp({email:$('email').value.trim(),password:pw,options:{emailRedirectTo:location.origin+location.pathname}});if(error)$('loginMsg').textContent='สมัครไม่สำเร็จ: '+error.message;else if(data.session)listDevices();else $('loginMsg').textContent='ส่งอีเมลยืนยันแล้ว กดลิงก์ในอีเมล แล้วกลับมาเข้าสู่ระบบ'};
+function thErr(e){const m=(e&&e.message)||String(e);
+ if(/after \d+ seconds|rate limit|too many/i.test(m))return 'กดถี่เกินไป รอสักครู่แล้วลองใหม่';
+ if(/Email not confirmed/i.test(m))return 'ยังไม่ได้ยืนยันอีเมล เปิดอีเมลแล้วกดลิงก์ยืนยัน (ดูในโฟลเดอร์สแปมด้วย) หรือกด "ส่งอีเมลยืนยันอีกครั้ง"';
+ if(/Invalid login credentials/i.test(m))return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+ if(/already registered|already exists/i.test(m))return 'อีเมลนี้สมัครไว้แล้ว ให้กด "เข้าสู่ระบบ"';
+ if(/Password should be/i.test(m))return 'รหัสผ่านสั้นหรือง่ายเกินไป';
+ if(/valid email|invalid format/i.test(m))return 'รูปแบบอีเมลไม่ถูกต้อง';
+ if(/Failed to fetch|NetworkError/i.test(m))return 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจอินเทอร์เน็ต';
+ return m}
+function msg(t,ok){$('loginMsg').textContent=t;$('loginMsg').style.color=ok?'var(--good)':'var(--warn)'}
+async function busy(fn){const bs=['btnIn','btnUp','btnResend','btnForgot'].map($);bs.forEach(b=>b.disabled=true);try{await fn()}finally{setTimeout(()=>bs.forEach(b=>b.disabled=false),1500)}}
+const email=()=>$('email').value.trim();
+$('btnIn').onclick=()=>busy(async()=>{msg('');if(!email()||!$('pass').value){msg('กรอกอีเมลและรหัสผ่าน');return}const {error}=await sb.auth.signInWithPassword({email:email(),password:$('pass').value});if(error)msg(thErr(error));else listDevices()});
+$('btnUp').onclick=()=>busy(async()=>{const pw=$('pass').value;if(!email()){msg('กรอกอีเมล');return}if(pw.length<8){msg('รหัสผ่านต้องมีอย่างน้อย 8 ตัว');return}const {data,error}=await sb.auth.signUp({email:email(),password:pw,options:{emailRedirectTo:location.origin+location.pathname}});if(error)msg(thErr(error));else if(data.session)listDevices();else if(data.user&&data.user.identities&&data.user.identities.length===0)msg('อีเมลนี้สมัครไว้แล้ว ให้กด "เข้าสู่ระบบ"');else msg('สมัครสำเร็จ! เปิดอีเมลแล้วกดลิงก์ยืนยัน (ดูในโฟลเดอร์สแปมด้วย) จากนั้นกลับมากด "เข้าสู่ระบบ"',true)});
+$('btnResend').onclick=()=>busy(async()=>{if(!email()){msg('กรอกอีเมลก่อน');return}const {error}=await sb.auth.resend({type:'signup',email:email(),options:{emailRedirectTo:location.origin+location.pathname}});msg(error?thErr(error):'ส่งอีเมลยืนยันใหม่แล้ว',!error)});
+$('btnForgot').onclick=()=>busy(async()=>{if(!email()){msg('กรอกอีเมลก่อน');return}const {error}=await sb.auth.resetPasswordForEmail(email(),{redirectTo:location.origin+location.pathname});msg(error?thErr(error):'ส่งลิงก์ตั้งรหัสผ่านใหม่ไปที่อีเมลแล้ว',!error)});
+sb.auth.onAuthStateChange(async(e)=>{if(e==='PASSWORD_RECOVERY'){const np=prompt('ตั้งรหัสผ่านใหม่ (อย่างน้อย 8 ตัว)');if(np&&np.length>=8){const {error}=await sb.auth.updateUser({password:np});toast(error?thErr(error):'เปลี่ยนรหัสผ่านแล้ว')}listDevices()}else if(e==='SIGNED_IN'&&!$('vLogin').classList.contains('hide'))listDevices()});
 $('btnOut').onclick=async()=>{clearInterval(timer);await sb.auth.signOut();show('vLogin')};
 $('btnBack').onclick=()=>{clearInterval(timer);cur=null;listDevices()};
 // ---- devices
