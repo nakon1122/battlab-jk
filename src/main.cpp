@@ -24,9 +24,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.5.0-cyd35"
+#define BATTLAB_FW "2.5.1-cyd35"
 #else
-#define BATTLAB_FW "2.5.0-s3"
+#define BATTLAB_FW "2.5.1-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -1459,16 +1459,42 @@ void netSetHomeWifi(const String &ssid, const String &pass) {
   wifiApply();
 }
 void netForgetHomeWifi() { netSetHomeWifi("", ""); }
+// A scan fails while the station keeps retrying a network that is not there
+// (ESP_ERR_WIFI_STATE -> "no networks"). Pause the retries, scan, resume.
+static bool scanResume = false;
+static uint8_t scanTries = 0;
 void netScanStart() {
   wifi_mode_t m = WiFi.getMode();
   if (m == WIFI_OFF) WiFi.mode(WIFI_STA);
   else if (m == WIFI_AP) WiFi.mode(WIFI_AP_STA); // keep the hotspot running
-  WiFi.scanNetworks(true); // async
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false);
+    scanResume = true;
+    delay(150);
+  }
+  WiFi.scanDelete();
+  WiFi.scanNetworks(true, true); // async, include hidden networks
+}
+static void scanFinished() {
+  if (!scanResume) return;
+  scanResume = false;
+  if (staSsid.length()) {
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(staSsid.c_str(), staPass.c_str());
+  }
 }
 // JSON array of nearby networks once a scan finished, "" while scanning.
 String netScanJson() {
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING) return "";
+  if (n == WIFI_SCAN_FAILED && scanResume && scanTries < 2) { // failed: try again once
+    scanTries++;
+    WiFi.scanNetworks(true, true);
+    return "";
+  }
+  scanTries = 0;
+  scanFinished();
   if (n < 0) return "[]";
   DynamicJsonDocument d(4096);
   auto a = d.to<JsonArray>();
