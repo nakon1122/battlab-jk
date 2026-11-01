@@ -21,13 +21,14 @@ button.sec{background:#2a3442}a{color:var(--b)}code{background:#0f141b;padding:2
 .chk{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:8px}.chk label{display:flex;gap:6px;align-items:center;margin:0;color:var(--text)}
 .chk input{width:auto}details summary{cursor:pointer;color:var(--muted)}#msg{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#222c38;padding:10px 16px;border-radius:10px;display:none}
 </style></head><body><main>
-<h1><b>Bambu</b> Bridge</h1><div class=sub>อ่านสถานะเครื่องพิมพ์ผ่าน LAN แล้วส่งขึ้น cloud · <span id=fw></span></div>
+<h1><b>Bambu</b> Bridge <span id=dev style="color:var(--muted);font-weight:500"></span></h1><div class=sub>บอร์ดนี้ดูแลได้ 4 เครื่อง · ใช้หลายบอร์ดได้ (4 บอร์ด = 16 เครื่อง) ทุกบอร์ดรวมอยู่ใน dashboard เดียวกัน · <span id=fw></span></div>
 
 <div class="card kv" id=sys></div>
 <div class=card><div class=sub>ดูจากนอกบ้าน (เปิดบนมือถือได้เลย)</div><div style="margin-top:6px"><a id=dash target=_blank></a></div>
 <div class=sub style="margin-top:8px">View key สำหรับจอ CYD: <code id=vkey></code></div></div>
 
-<h2>เครื่องพิมพ์</h2><div class=grid id=live></div>
+<h2>เครื่องพิมพ์ของบอร์ดนี้</h2><div class=grid id=live></div>
+<h2>ทุกบอร์ดในระบบ</h2><div class=card><div id=site class=sub>กำลังโหลด...</div></div>
 
 <h2>ตั้งค่าเครื่องพิมพ์</h2>
 <div class=sub>ดู IP, Serial และ Access Code ได้ที่หน้าจอเครื่อง: Settings → Network (LAN Only / Developer Mode ต้องเปิด)</div>
@@ -68,8 +69,8 @@ function slotHtml(p){const i=p.slot;return `<div class=card><b>ช่อง ${i+
 <div><label>Serial</label><input id=s${i} value="${esc(p.serial)}" placeholder="01S00C..."></div></div>
 <label>Access code ${p.has_code?'(บันทึกแล้ว)':''}</label><input id=c${i} placeholder="${p.has_code?'(ไม่เปลี่ยนถ้าเว้นว่าง)':'8 ตัวอักษร'}">
 ${p.used?`<label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type=checkbox id=x${i} style="width:auto">ลบเครื่องนี้</label>`:''}</div>`}
-function render(d){$('fw').textContent='v'+d.fw;
- $('sys').innerHTML=`<div>Wi-Fi</div><div>${d.wifi?esc(d.ssid)+' ('+d.rssi+' dBm) · '+d.ip:'<span class="pill bad">ยังไม่ได้ต่อ</span>'}${d.ap?' · เปิด hotspot BAMBU-BRIDGE':''}</div>
+function render(d){$('fw').textContent='v'+d.fw;$('dev').textContent=d.device+' · '+d.host;
+ $('sys').innerHTML=`<div>Wi-Fi</div><div>${d.wifi?esc(d.ssid)+' ('+d.rssi+' dBm) · '+d.ip:'<span class="pill bad">ยังไม่ได้ต่อ</span>'}${d.ap?' · เปิด hotspot '+esc(d.ap_name):''}</div>
  <div>Cloud</div><div>${d.cloud_ok?'<span class="pill ok">OK</span> ส่งล่าสุด '+d.cloud_age+' วินาทีที่แล้ว':'<span class="pill bad">'+esc(d.cloud_err)+'</span>'}</div>
  <div>หน่วยความจำ</div><div>${Math.round(d.heap/1024)} KB ว่าง · ทำงาน ${Math.floor(d.uptime/3600)} ชม. ${Math.floor(d.uptime/60)%60} นาที</div>`;
  const url=d.dashboard+'#'+d.view_key;$('dash').href=url;$('dash').textContent=url;$('vkey').textContent=d.view_key;
@@ -80,6 +81,14 @@ function render(d){$('fw').textContent='v'+d.fw;
  <div class=sub style="margin-top:6px">${p.pct||0}% · เหลือ ${p.remain||0} นาที · หัวฉีด ${Math.round(p.noz||0)}° · ฐาน ${Math.round(p.bed||0)}°</div>`:''}
  ${p.err?`<div class=sub style="color:var(--r);margin-top:6px">${esc(p.err)}</div>`:''}</div>`).join(''):'<div class=sub>ยังไม่มีเครื่องพิมพ์ — ตั้งค่าด้านล่าง</div>';
  if(!filled){$('slots').innerHTML=d.printers.map(slotHtml).join('');$('ssid').value=d.ssid||'';filled=true}}
+function site(){fetch('/api/site').then(r=>r.json()).then(d=>{if(d.error)return $('site').textContent='โหลดไม่ได้ ('+d.error+')';
+ const devs=d.devices||[];if(!devs.length)return $('site').textContent='ยังไม่มีบอร์ดส่งข้อมูล';
+ $('site').innerHTML=`<div class=sub style="margin-bottom:8px">รวม ${(d.printers||[]).length} เครื่อง จาก ${devs.length} บอร์ด</div>`+devs.map(v=>{const ps=(d.printers||[]).filter(p=>p.device==v.device);
+ return `<div style="padding:8px 0;border-top:1px solid var(--line)"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill ${v.online?'ok':'bad'}">${v.online?'ออนไลน์':'ออฟไลน์'}</span>
+ <b style="color:var(--text)">${esc(v.device)}</b>${v.device==d.me?' (บอร์ดนี้)':''} <span>${esc(v.ip||'')} · v${esc(v.fw||'?')}</span>
+ ${v.device!=d.me&&!v.online?`<button class=sec style="margin-left:auto;padding:5px 10px;font-size:13px" onclick="forget('${esc(v.device)}')">ลบบอร์ดนี้ออก</button>`:''}</div>
+ <div style="margin-top:4px">${ps.map(p=>`<span style="color:${p.online?'var(--text)':'var(--muted)'}">${esc(p.name)}</span>`).join(' · ')||'-'}</div></div>`}).join('')}).catch(()=>{})}
+function forget(dv){if(!confirm('ลบบอร์ด '+dv+' และเครื่องพิมพ์ของบอร์ดนั้นออกจาก dashboard?'))return;post('/api/forget',{device:dv}).then(()=>{toast('ลบแล้ว');site()})}
 function load(){fetch('/api/status').then(r=>r.json()).then(render).catch(()=>{})}
 function savePrinters(){const a=[];for(let i=0;i<4;i++)a.push({name:$('n'+i).value,model:$('m'+i).value,ip:$('i'+i).value,serial:$('s'+i).value,code:$('c'+i).value,clear:$('x'+i)?.checked||false});
  post('/api/save',{printers:a}).then(()=>{toast('บันทึกแล้ว กำลังเชื่อมต่อ...');filled=false;setTimeout(load,800)})}
@@ -94,5 +103,5 @@ function saveLine(){const k=[...document.querySelectorAll('#kinds input:checked'
  if(!$('lto').value)return toast('ใส่ User ID ก่อน');
  post('/api/line',{action:'save',token:$('ltok').value,to:$('lto').value,kinds:k}).then(d=>{toast(d.error?'บันทึกไม่สำเร็จ':'บันทึกแล้ว');lineStatus()})}
 function testLine(){post('/api/line',{action:'test'}).then(d=>{toast(d.ok?'ส่งแล้ว ดูใน LINE':(d.error||'ส่งไม่ได้'));setTimeout(lineStatus,3000)})}
-load();lineStatus();setInterval(load,3000);
+load();lineStatus();site();setInterval(load,3000);setInterval(site,15000);
 </script></body></html>)HTML";

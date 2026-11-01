@@ -7,6 +7,8 @@
 #include <string.h>
 #include <string>
 #include "../src/screen/ui.h"
+#include "../include/bb_config.h"
+#define BB_FW BB_FW_VERSION
 
 static void save(lgfx::LGFX_Sprite &s, int W, int H, const std::string &path) {
   FILE *f = fopen(path.c_str(), "wb");
@@ -39,7 +41,7 @@ static Model demo() {
   snprintf(m.ip, sizeof m.ip, "192.168.1.57");
   m.rssi = -58;
   snprintf(m.keyTail, sizeof m.keyTail, "9e71");
-  snprintf(m.fw, sizeof m.fw, "1.0.0");
+  snprintf(m.fw, sizeof m.fw, BB_FW);
   struct tm tm = {};
   tm.tm_year = 126; tm.tm_mon = 10; tm.tm_mday = 1; tm.tm_hour = 15; tm.tm_min = 42;
   m.now = mktime(&tm);
@@ -112,6 +114,33 @@ static Model demo() {
                          {"A1", "finished", "phone stand", "", "10:12"},
                          {"X2D", "offline", "", "", "08:30"},
                          {"X2D", "online", "", "", "08:33"}};
+  // 12 more printers -> 16 like the real farm
+  const char *models[] = {"A1", "A1", "P2S", "A1", "X2D", "A1 mini", "P2S", "A1", "H2C", "A1", "P2S", "A1"};
+  const char *states[] = {"RUNNING", "IDLE", "RUNNING", "RUNNING", "FINISH", "RUNNING", "IDLE", "RUNNING", "RUNNING", "FAILED", "RUNNING", "IDLE"};
+  int pcts[] = {63, 0, 8, 95, 100, 37, 0, 71, 52, 22, 14, 0};
+  int rem[] = {48, 0, 402, 6, 0, 85, 0, 33, 140, 0, 610, 0};
+  for (int i = 0; i < 12; i++) {
+    Printer &p = m.p[4 + i];
+    p = m.p[i % 4 == 2 ? 2 : 0];
+    snprintf(p.model, sizeof p.model, "%s", models[i]);
+    snprintf(p.name, sizeof p.name, "%s-%02d", strncmp(models[i], "A1", 2) == 0 ? "A1" : models[i], i + 2);
+    snprintf(p.state, sizeof p.state, "%s", states[i]);
+    p.pct = pcts[i];
+    p.remain = rem[i];
+    p.err[0] = 0;
+    p.nhms = 0;
+    p.online = true;
+  }
+  m.p[10].online = false;
+  m.p[10].ageS = 3000;
+  snprintf(m.p[13].err, sizeof m.p[13].err, "0300_400C");
+  snprintf(m.p[0].name, sizeof m.p[0].name, "A1-01");
+  snprintf(m.p[1].name, sizeof m.p[1].name, "P2S-01");
+  snprintf(m.p[2].name, sizeof m.p[2].name, "X2D-01");
+  snprintf(m.p[3].name, sizeof m.p[3].name, "H2C-01");
+  m.np = 16;
+  m.devices = 4;
+  m.devicesOnline = 4;
   m.nev = 8;
   for (int i = 0; i < 8; i++) {
     Event &e = m.ev[i];
@@ -138,7 +167,14 @@ int main(int argc, char **argv) {
     sp.createSprite(s.W, s.H);
     Model m = demo();
     UiState u;
-    const char *names[] = {"1_all", "2_printer", "3_events", "4_setup"};
+    {  // overview with only 4 printers (big cards)
+      Model m4 = m;
+      m4.np = 4;
+      u.page = PG_ALL;
+      uiDraw(sp, s.W, s.H, 0, m4, u);
+      save(sp, s.W, s.H, out + "/" + s.tag + "_1_all_4printers.ppm");
+    }
+    const char *names[] = {"1_all_16printers", "2_printer", "3_events", "4_setup"};
     for (int pg = 0; pg < PG_COUNT; pg++) {
       u.page = pg;
       u.focus = 0;
@@ -147,7 +183,7 @@ int main(int argc, char **argv) {
     }
     // printer page for each printer
     u.page = PG_ONE;
-    for (int i = 1; i < m.np; i++) {
+    for (int i = 1; i < 4; i++) {
       u.focus = i;
       uiDraw(sp, s.W, s.H, 0, m, u);
       save(sp, s.W, s.H, out + "/" + s.tag + "_2_printer_" + m.p[i].name + ".ppm");
@@ -160,6 +196,7 @@ int main(int argc, char **argv) {
     u.toast[0] = 0;
     // one printer offline
     Model m2 = m;
+    m2.np = 4;
     m2.p[2].online = false;
     m2.p[2].ageS = 1260;
     m2.bridgeOnline = true;

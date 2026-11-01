@@ -1,6 +1,6 @@
 #pragma once
 // Bambu LAN -> Cloud bridge / remote screen: shared settings.
-#define BB_FW_VERSION "1.0.0"
+#define BB_FW_VERSION "1.1.0"
 
 // Supabase project "data". The anon key is public by design: the tables are
 // closed to it, and the bambu_push / bambu_get functions check the bridge's
@@ -16,4 +16,5 @@
 // Local time (POSIX TZ). Thailand = UTC+7.
 #define BB_TZ "ICT-7"
 
+// printers per bridge board (use more boards for more printers: 4 boards = 16)
 #define BB_MAX_PRINTERS 4

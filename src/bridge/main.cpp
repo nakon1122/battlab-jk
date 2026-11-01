@@ -61,6 +61,17 @@ static bool used(int i) { return cfg.p[i].ip.length() && cfg.p[i].serial.length(
 
 // -------------------------------------------------------------- cloud ----
 static String cloudErr = "not sent yet";
+static String devId, hostName, apName;  // bridge-ab12 / bambubridge-ab12 / BAMBU-BRIDGE-AB12
+static void makeIds() {
+  uint64_t mac = ESP.getEfuseMac();  // bytes in reverse order
+  char t[8];
+  snprintf(t, sizeof t, "%02x%02x", (uint8_t)(mac >> 32), (uint8_t)(mac >> 40));
+  devId = String("bridge-") + t;
+  hostName = String("bambubridge-") + t;
+  String u = t;
+  u.toUpperCase();
+  apName = "BAMBU-BRIDGE-" + u;
+}
 static uint32_t lastPushMs = 0, lastPushOkMs = 0;
 static uint32_t pushes = 0, pushFails = 0;
 
@@ -83,6 +94,9 @@ static int rpc(const char *fn, const String &body, String &resp) {
 static void pushCloud() {
   DynamicJsonDocument doc(24576);
   doc["p_key"] = cfg.wkey;
+  doc["p_device"] = devId;
+  doc["p_info"]["ip"] = WiFi.localIP().toString();
+  doc["p_info"]["fw"] = BB_FW_VERSION;
   JsonArray a = doc.createNestedArray("p_printers");
   for (int i = 0; i < BB_MAX_PRINTERS; i++)
     if (used(i)) printers[i].toJson(a.createNestedObject());
@@ -90,7 +104,7 @@ static void pushCloud() {
   serializeJson(doc, body);
   String resp;
   lastPushMs = millis();
-  int code = rpc("bambu_push", body, resp);
+  int code = rpc("bambu_push2", body, resp);
   pushes++;
   if (code == 200) {
     lastPushOkMs = millis();
@@ -122,7 +136,7 @@ static bool apOn = false;
 static void startAp() {
   if (apOn) return;
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP("BAMBU-BRIDGE");
+  WiFi.softAP(apName.c_str());
   dns.start(53, "*", WiFi.softAPIP());
   apOn = true;
 }
@@ -144,6 +158,9 @@ static void sendJson(JsonDocument &d, int code = 200) {
 static void apiStatus() {
   DynamicJsonDocument d(12288);
   d["fw"] = BB_FW_VERSION;
+  d["device"] = devId;
+  d["host"] = hostName + ".local";
+  d["ap_name"] = apName;
   d["wifi"] = WiFi.status() == WL_CONNECTED;
   d["ssid"] = cfg.ssid;
   d["ip"] = WiFi.localIP().toString();
@@ -262,6 +279,47 @@ static void apiLine() {
   else web.send(502, "application/json", String("{\"error\":") + (resp.length() ? resp : String("\"cloud ") + code + "\"") + "}");
 }
 
+// all bridge boards + printers on this account (to see which board has which printer)
+static void apiSite() {
+  String resp;
+  int code = rpc("bambu_get", String("{\"p_key\":\"") + BB_DEFAULT_VIEW_KEY + "\",\"p_events\":0}", resp);
+  if (code != 200) {
+    web.send(502, "application/json", "{\"error\":\"cloud " + String(code) + "\"}");
+    return;
+  }
+  // keep it small: devices + printer name/device/online
+  DynamicJsonDocument in(32768), out(8192);
+  if (deserializeJson(in, resp)) {
+    web.send(502, "application/json", "{\"error\":\"bad reply\"}");
+    return;
+  }
+  out["devices"] = in["devices"];
+  JsonArray pa = out.createNestedArray("printers");
+  for (JsonObject p : in["printers"].as<JsonArray>()) {
+    JsonObject o = pa.createNestedObject();
+    o["name"] = p["name"];
+    o["model"] = p["model"];
+    o["device"] = p["device"];
+    o["online"] = p["online"];
+    o["serial"] = p["serial"];
+  }
+  out["me"] = devId;
+  sendJson(out);
+}
+
+static void apiForget() {
+  DynamicJsonDocument in(512);
+  deserializeJson(in, web.arg("plain"));
+  String dev = in["device"] | "";
+  if (!dev.length() || dev == devId) {
+    web.send(400, "application/json", "{\"error\":\"bad device\"}");
+    return;
+  }
+  String resp;
+  int code = rpc("bambu_forget_device", "{\"p_key\":\"" + cfg.wkey + "\",\"p_device\":\"" + dev + "\"}", resp);
+  web.send(code == 200 ? 200 : 502, "application/json", code == 200 ? resp : String("{\"error\":\"cloud\"}"));
+}
+
 static void apiScan() {
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING) {
@@ -290,6 +348,8 @@ static void webSetup() {
   web.on("/api/save", HTTP_POST, apiSave);
   web.on("/api/line", HTTP_POST, apiLine);
   web.on("/api/scan", apiScan);
+  web.on("/api/site", apiSite);
+  web.on("/api/forget", HTTP_POST, apiForget);
   web.on("/api/pushall", [] {
     for (auto &p : printers) p.requestPushall();
     web.send(200, "application/json", "{\"ok\":true}");
@@ -313,11 +373,12 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println("\nBambu bridge " BB_FW_VERSION);
+  makeIds();
   cfgLoad();
   bambuInitFilter();
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
-  WiFi.setHostname("bambubridge");
+  WiFi.setHostname(hostName.c_str());
   if (cfg.ssid.length()) {
     WiFi.mode(WIFI_STA);
     WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
@@ -335,8 +396,8 @@ void loop() {
   web.handleClient();
   bool up = WiFi.status() == WL_CONNECTED;
   if (!up && !apOn && millis() - bootMs > 60000) startAp();
-  if (up && !mdnsUp) mdnsUp = MDNS.begin("bambubridge");
-  if (up && !wasUp) Serial.printf("Wi-Fi up, http://%s/  http://bambubridge.local/\n", WiFi.localIP().toString().c_str());
+  if (up && !mdnsUp) mdnsUp = MDNS.begin(hostName.c_str());
+  if (up && !wasUp) Serial.printf("Wi-Fi up, http://%s/  http://%s.local/\n", WiFi.localIP().toString().c_str(), hostName.c_str());
   wasUp = up;
   if (up) {
     for (int i = 0; i < BB_MAX_PRINTERS; i++) {

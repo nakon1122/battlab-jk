@@ -59,11 +59,12 @@ struct Model {
   bool haveData = false;
   bool bridgeOnline = false;
   long bridgeAgeS = -1;
+  int devices = 0, devicesOnline = 0;  // bridge boards
   long fetchAgeS = -1;
   char bridgeName[24] = "";
   char cloudErr[40] = "";
   int np = 0;
-  Printer p[6];
+  Printer p[16];
   int nev = 0;
   Event ev[10];
   time_t now = 0;               // local wall clock (0 = unknown)

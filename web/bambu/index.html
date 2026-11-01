@@ -56,6 +56,21 @@ h2{font-size:16px;margin:26px 0 10px;color:var(--muted);font-weight:600}
 .keybox input{width:100%;padding:12px;border-radius:9px;border:1px solid var(--line);background:#0f141b;color:var(--text);font-size:16px;margin:12px 0}
 .keybox button,.btn{padding:11px 16px;border:0;border-radius:9px;background:var(--bambu);color:#fff;font-weight:700;font-size:15px;cursor:pointer}
 .empty{color:var(--muted);padding:30px;text-align:center}
+.bar2{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.f{background:var(--card);border:1px solid var(--line);color:var(--muted);border-radius:99px;padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit}
+.f.on{background:var(--card2);color:var(--text);border-color:var(--bambu)}.f b{color:var(--text);margin-left:4px}
+.seg{margin-left:auto;display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{background:var(--card);border:0;color:var(--muted);padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit}.seg button.on{background:var(--card2);color:var(--text)}
+.list{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.li{display:grid;grid-template-columns:6px minmax(90px,1.1fr) 92px minmax(120px,2fr) 70px 86px 80px;gap:10px;align-items:center;padding:9px 12px 9px 0;border-bottom:1px solid var(--line);font-size:14px;cursor:pointer}
+.li:last-child{border:0}.li:hover{background:var(--card2)}.li .s{height:100%;min-height:30px;background:var(--sc)}
+.li .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.li .nm small{display:block;font-weight:400;color:var(--muted);font-size:11px}
+.li .st{font-size:12px;font-weight:700;color:var(--sc)}.li .tk{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.mini{height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:4px}.mini i{display:block;height:100%;background:var(--sc)}
+.num{font-variant-numeric:tabular-nums;text-align:right}
+.devs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.dev{font-size:12px;color:var(--muted);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:5px 9px}
+.card.hl{box-shadow:0 0 0 2px var(--bambu)}
+@media (max-width:700px){.li{grid-template-columns:6px minmax(0,1fr) 78px 40px 84px;gap:8px}.li .tk,.li .hide{display:none}.li .num{white-space:nowrap;font-size:13px}.li .st{font-size:11px}}
 @media (max-width:420px){.grid{grid-template-columns:1fr}.ev{grid-template-columns:70px 74px 1fr}}
 </style>
 </head>
@@ -69,6 +84,7 @@ const store = { get(k){ try { return localStorage.getItem(k) } catch(e){ return 
 let key = decodeURIComponent(location.hash.slice(1)) || store.get('bambu_view_key') || '';
 if (location.hash.length > 1) { store.set('bambu_view_key', key); history.replaceState(null, '', location.pathname); }
 let data = null, lastOk = 0, err = '', timer = null;
+let filt = store.get('bambu_filter') || 'all', view = store.get('bambu_view') || 'auto', focusSerial = '';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STATE = {
@@ -120,7 +136,7 @@ function card(p){
   if(s.cham!=null) temps.push(temp('ห้องพิมพ์', s.cham, 0));
   const fans=[]; if(s.fan_part!=null) fans.push(`พัดลมชิ้นงาน ${s.fan_part}%`); if(s.fan_aux!=null) fans.push(`Aux ${s.fan_aux}%`); if(s.fan_cham!=null) fans.push(`Chamber ${s.fan_cham}%`);
   const spd={1:'Silent',2:'Standard',3:'Sport',4:'Ludicrous'}[s.spd]; if(spd&&busy(p)) fans.push('ความเร็ว '+spd);
-  return `<div class="card ${p.online?'':'off'}" style="--sc:var(${col})">
+  return `<div class="card ${p.online?'':'off'}" data-s="${esc(p.serial)}" style="--sc:var(${col})">
    <div class="top"><span class="name">${esc(p.name)}</span><span class="model">${esc(p.model||'')}</span><span class="pill">${txt}</span></div>
    <div class="mid">${ring(p,col)}<div>
      <div class="task">${esc(s.subtask_name||'ไม่มีงาน')}</div>
@@ -142,25 +158,54 @@ function eventRow(e){
   return `<div class="ev"><span class="sub">${ts}</span><span class="k" style="background:var(${c})">${t}</span>
    <span class="w"><b>${esc(e.printer_name)}</b> <span class="sub">${esc(e.error_code||e.task||'')}</span></span></div>`;
 }
+const hasErr = p => p.online && (p.error_code || (p.state?.hms||[]).length);
+const FILTERS = [['all','ทั้งหมด',()=>true],['busy','กำลังพิมพ์',busy],['err','มีปัญหา',p=>hasErr(p)||(p.online&&['FAILED','PAUSE'].includes(p.state?.gcode_state))],
+  ['done','เสร็จ/ว่าง',p=>p.online&&!busy(p)],['off','ออฟไลน์',p=>!p.online]];
+function rank(p){ const g=p.state?.gcode_state; if(hasErr(p)||g==='FAILED') return 0; if(g==='PAUSE') return 1; if(!p.online) return 2;
+  if(g==='FINISH') return 3; if(busy(p)) return 4; return 5; }
+function sorted(ps){ return ps.slice().sort((a,b)=> rank(a)-rank(b) || (busy(a)&&busy(b)? (a.state.remain||0)-(b.state.remain||0):0) || a.name.localeCompare(b.name,'th',{numeric:true})); }
+function row(p){
+  const s=p.state||{}, g=s.gcode_state||'';
+  let [txt,col]=p.online? (STATE[g]||['รอข้อมูล','--muted']) : ['ออฟไลน์','--dim'];
+  if(hasErr(p)) { col='--red'; txt = txt+' · ERR'; }
+  const b=busy(p), pct=b||g==='FINISH'? (s.mc_percent||0):0;
+  return `<div class="li" style="--sc:var(${col})" data-s="${esc(p.serial)}"><span class="s"></span>
+   <span class="nm">${esc(p.name)}<small>${esc(p.model||'')}</small></span>
+   <span><span class="st">${txt}</span>${b?`<div class="mini"><i style="width:${pct}%"></i></div>`:''}</span>
+   <span class="tk">${esc(s.subtask_name||'')}${p.error_code?` <span style="color:var(--red)">${esc(p.error_code)}</span>`:''}</span>
+   <span class="num" style="font-weight:700">${b||g==='FINISH'?pct+'%':'--'}</span>
+   <span class="num">${g==='FINISH'?'เสร็จ':b?dur(s.remain):p.online?'':ago(p.updated_at)}</span>
+   <span class="num sub hide">${b?eta(s.remain):''}</span></div>`;
+}
 function render(){
   if(!key) return askKey();
   if(!data){ $app.innerHTML = `<div class="empty">${err?esc(err):'กำลังโหลด...'}</div>`; return; }
-  const b=data.bridge, ps=data.printers||[];
+  const b=data.bridge, all=data.printers||[], devs=data.devices||[];
   const cloudCls = Date.now()-lastOk<20000? 'ok':'bad';
-  const busyN = ps.filter(busy).length, errN = ps.filter(p=>p.online&&(p.error_code||(p.state?.hms||[]).length)).length;
+  const f = FILTERS.find(x=>x[0]===filt)||FILTERS[0];
+  const ps = sorted(all.filter(f[2]));
+  const v = view==='auto' ? (all.length>6?'list':'cards') : view;
+  const devOff = devs.filter(d=>!d.online);
   $app.innerHTML = `
   <header><h1><b>Bambu</b> Monitor</h1>
-   <div class="links"><span><i class="dot ${cloudCls}"></i>Cloud</span><span><i class="dot ${b.online?'ok':'warn'}"></i>Bridge ${esc(b.name)} ${b.online?'':'· '+ago(b.last_seen)}</span>
+   <div class="links"><span><i class="dot ${cloudCls}"></i>Cloud</span>
+   <span><i class="dot ${devs.length&&!devOff.length?'ok':'warn'}"></i>Bridge ${b.devices_online??0}/${b.devices??0} บอร์ด</span>
    <a href="#" id="chg" style="color:var(--muted)">เปลี่ยน key</a></div></header>
-  <div class="summary"><div class="chip"><b>${ps.length}</b>เครื่อง</div><div class="chip"><b>${busyN}</b>กำลังทำงาน</div>
-   <div class="chip"><b style="color:${errN?'var(--red)':'inherit'}">${errN}</b>มีปัญหา</div>
-   <div class="chip"><b>${ps.filter(p=>!p.online).length}</b>ออฟไลน์</div></div>
-  ${!b.online?`<div class="err" style="margin-bottom:12px">ตัว Bridge ที่บ้านไม่ได้ส่งข้อมูลมา ${ago(b.last_seen)} — ข้อมูลด้านล่างอาจไม่ใช่ปัจจุบัน</div>`:''}
+  <div class="bar2">${FILTERS.map(([id,name,fn])=>`<button class="f ${filt===id?'on':''}" data-f="${id}">${name}<b ${id==='err'&&all.filter(fn).length?'style="color:var(--red)"':''}>${all.filter(fn).length}</b></button>`).join('')}
+   <div class="seg"><button data-v="list" class="${v==='list'?'on':''}">รายการ</button><button data-v="cards" class="${v==='cards'?'on':''}">การ์ด</button></div></div>
+  ${devOff.length?`<div class="err" style="margin-bottom:12px">บอร์ด Bridge ไม่ส่งข้อมูล: ${devOff.map(d=>esc(d.device)+' ('+ago(d.last_seen)+')').join(', ')} — เครื่องพิมพ์ของบอร์ดนี้จะขึ้นออฟไลน์</div>`:''}
   ${err?`<div class="err" style="margin-bottom:12px">${esc(err)}</div>`:''}
-  <div class="grid">${ps.length? ps.map(card).join('') : '<div class="empty">ยังไม่มีเครื่องพิมพ์ — ตั้งค่าในหน้าเว็บของ Bridge</div>'}</div>
+  ${!all.length? '<div class="empty">ยังไม่มีเครื่องพิมพ์ — ตั้งค่าในหน้าเว็บของ Bridge</div>'
+    : !ps.length? '<div class="empty">ไม่มีเครื่องในกลุ่มนี้</div>'
+    : v==='list'? `<div class="list">${ps.map(row).join('')}</div>` : `<div class="grid">${ps.map(card).join('')}</div>`}
   <h2>เหตุการณ์ล่าสุด</h2>
-  <div class="events">${(data.events||[]).length? data.events.map(eventRow).join('') : '<div class="empty">ยังไม่มี</div>'}</div>`;
+  <div class="events">${(data.events||[]).length? data.events.map(eventRow).join('') : '<div class="empty">ยังไม่มี</div>'}</div>
+  ${devs.length?`<h2>บอร์ด Bridge</h2><div class="devs">${devs.map(d=>`<span class="dev"><i class="dot ${d.online?'ok':'bad'}"></i>${esc(d.device)} · ${d.printers} เครื่อง · ${esc(d.ip||'')} · v${esc(d.fw||'?')}</span>`).join('')}</div>`:''}`;
   document.getElementById('chg').onclick = ev => { ev.preventDefault(); key=''; data=null; render(); };
+  $app.querySelectorAll('[data-f]').forEach(x=>x.onclick=()=>{ filt=x.dataset.f; store.set('bambu_filter',filt); render(); });
+  $app.querySelectorAll('[data-v]').forEach(x=>x.onclick=()=>{ view=x.dataset.v; store.set('bambu_view',view); render(); });
+  $app.querySelectorAll('.li').forEach(x=>x.onclick=()=>{ focusSerial=x.dataset.s; view='cards'; filt='all'; render();
+    const c=$app.querySelector(`.card[data-s="${CSS.escape(focusSerial)}"]`); if(c){ c.classList.add('hl'); c.scrollIntoView({behavior:'smooth',block:'center'}); } });
 }
 function askKey(){
   $app.innerHTML = `<div class="keybox"><h1 style="margin:0 0 6px;font-size:20px"><b style="color:var(--bambu)">Bambu</b> Monitor</h1>

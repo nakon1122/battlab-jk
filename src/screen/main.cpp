@@ -268,17 +268,22 @@ static bool fetchCloud(Model &m) {
     else fetchErr = "cloud error " + String(code);
     return false;
   }
-  DynamicJsonDocument doc(32768);
-  if (deserializeJson(doc, resp)) { fetchErr = "bad reply"; return false; }
+  // zero-copy parse (strings stay in `resp`): 16 printers with AMS fit in 48 KB
+  DynamicJsonDocument doc(49152);
+  if (!doc.capacity()) { fetchErr = "low memory"; return false; }
+  DeserializationError je = deserializeJson(doc, resp.begin());
+  if (je) { fetchErr = je == DeserializationError::NoMemory ? "reply too big" : "bad reply"; return false; }
   time_t srvNow = parseIso(doc["now"]);
   m.haveData = true;
   copyStr(m.bridgeName, sizeof m.bridgeName, doc["bridge"]["name"] | "");
   m.bridgeOnline = doc["bridge"]["online"] | false;
+  m.devices = doc["bridge"]["devices"] | 0;
+  m.devicesOnline = doc["bridge"]["devices_online"] | 0;
   time_t ls = parseIso(doc["bridge"]["last_seen"]);
   m.bridgeAgeS = (ls && srvNow) ? (long)(srvNow - ls) : -1;
   m.np = 0;
   for (JsonObject o : doc["printers"].as<JsonArray>()) {
-    if (m.np >= 6) break;
+    if (m.np >= 16) break;
     m.p[m.np] = Printer();
     parsePrinter(o, m.p[m.np++], srvNow);
   }
@@ -298,7 +303,7 @@ static bool fetchCloud(Model &m) {
 }
 
 static void netTask(void *) {
-  Model work;
+  static Model work;  // ~11 KB: keep off the task stack
   uint32_t lastFetch = 0;
   bool ntp = false;
   for (;;) {
@@ -498,7 +503,7 @@ void loop() {
     lx = tp.x; ly = tp.y;
   } else if (down) {
     down = false;
-    Model m;
+    static Model m;
     xSemaphoreTake(mtx, portMAX_DELAY);
     m = shared;
     xSemaphoreGive(mtx);
@@ -533,7 +538,7 @@ void loop() {
   // --- redraw on new data, on input, or every 20 s for the clock
   if (dataDirty || millis() - lastDraw > 20000) {
     dataDirty = false;
-    Model m;
+    static Model m;
     xSemaphoreTake(mtx, portMAX_DELAY);
     m = shared;
     xSemaphoreGive(mtx);

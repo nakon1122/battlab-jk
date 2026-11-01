@@ -226,24 +226,73 @@ static void card(const D &d, const Model &m, const Printer &p, float x, float y,
   }
 }
 
+// overview layout: up to 4 printers as big cards, more as a grid of small tiles
+static void gridShape(int n, int &cols, int &rows) {
+  if (n <= 1) cols = 1;
+  else if (n <= 4) cols = 2;
+  else if (n <= 9) cols = 3;
+  else cols = 4;
+  rows = (n + cols - 1) / cols;
+  if (n == 2) rows = 1;
+}
+static const int MAX_TILES = 16;
+
+static void shortDur(int min, char *o, size_t n) {
+  if (min <= 0) snprintf(o, n, "--");
+  else if (min < 60) snprintf(o, n, "%dm", min);
+  else if (min < 24 * 60) snprintf(o, n, "%dh%02d", min / 60, min % 60);
+  else snprintf(o, n, "%dd%dh", min / 1440, (min % 1440) / 60);
+}
+
+static void tile(const D &d, const Model &m, const Printer &p, float x, float y, float w, float h) {
+  uint16_t sc = stateColor(p);
+  bool err = p.online && (p.err[0] || p.nhms);
+  d.rrect(x, y, w, h, 5, err ? C_RED : C_CARD);
+  if (err) d.rrect(x + 1.5f, y + 1.5f, w - 3, h - 3, 4, C_CARD);
+  d.rrect(x, y, 3, h, 1.5f, sc);
+  d.text(x + 7, y + h * 0.27f, p.name, 1, p.online ? C_TEXT : C_MUTED, 0, w - 10);
+  float ly = y + h * 0.62f;
+  bool b = busy(p);
+  if (b) {
+    char pc[8], r[12];
+    snprintf(pc, sizeof pc, "%d%%", p.pct);
+    shortDur(p.remain, r, sizeof r);
+    d.text(x + 7, ly, pc, 1, sc);
+    d.text(x + w - 4, ly, r, 5, C_MUTED, 2);
+    bar(d, x + 7, y + h - 6, w - 12, 3, p.pct, sc);
+  } else {
+    const char *t = !p.online ? "OFFLINE" : !strcmp(p.state, "FINISH") ? "DONE" : !strcmp(p.state, "FAILED") ? "FAILED" : "IDLE";
+    d.text(x + 7, ly, t, 5, sc == C_MUTED ? C_MUTED : sc);
+    if (err) d.text(x + w - 4, ly, "ERR", 5, C_RED, 2);
+  }
+}
+
 static void allPage(const D &d, const Model &m) {
-  int printing = 0;
-  for (int i = 0; i < m.np; i++) printing += busy(m.p[i]);
-  char title[40];
-  snprintf(title, sizeof title, "Printers  %d/%d busy", printing, m.np);
-  header(d, m, m.np ? title : "Bambu Monitor", C_TEXT);
-  float top = HDR + 4, bot = TABY - 4, gap = 5;
+  int printing = 0, bad = 0, off = 0;
+  for (int i = 0; i < m.np; i++) {
+    printing += busy(m.p[i]);
+    bad += m.p[i].online && (m.p[i].err[0] || m.p[i].nhms);
+    off += !m.p[i].online;
+  }
+  char title[48];
+  if (bad) snprintf(title, sizeof title, "%d/%d busy  %d error", printing, m.np, bad);
+  else if (off) snprintf(title, sizeof title, "%d/%d busy  %d off", printing, m.np, off);
+  else snprintf(title, sizeof title, "Printers  %d/%d busy", printing, m.np);
+  header(d, m, m.np ? title : "Bambu Monitor", bad ? C_RED : C_TEXT);
+  float top = HDR + 4, bot = TABY - 4;
   if (!m.np) {
     d.text(160, 100, m.haveData ? "No printers on the bridge yet" : "Waiting for cloud data...", 1, C_MUTED, 1);
     if (m.cloudErr[0]) d.text(160, 125, m.cloudErr, 0, C_RED, 1, 300);
     return;
   }
-  int n = m.np > 4 ? 4 : m.np;
-  int cols = n == 1 ? 1 : 2, rows = n <= 2 ? 1 : 2;
+  int n = m.np > MAX_TILES ? MAX_TILES : m.np, cols, rows;
+  gridShape(n, cols, rows);
+  float gap = n > 4 ? 4 : 5;
   float cw = (320 - 8 - gap * (cols - 1)) / cols, ch = (bot - top - gap * (rows - 1)) / rows;
   for (int i = 0; i < n; i++) {
     float x = 4 + (i % cols) * (cw + gap), y = top + (i / cols) * (ch + gap);
-    card(d, m, m.p[i], x, y, cw, ch);
+    if (n <= 4) card(d, m, m.p[i], x, y, cw, ch);
+    else tile(d, m, m.p[i], x, y, cw, ch);
   }
 }
 
@@ -483,7 +532,8 @@ static void setupPage(const D &d, const Model &m, const UiState &u) {
   else snprintf(b, sizeof b, "%s", m.cloudErr[0] ? m.cloudErr : "no data yet");
   row("Cloud", b, m.cloudOk ? C_GREEN : C_ORANGE);
   fmtAge(m.bridgeAgeS, a, sizeof a);
-  if (m.haveData) snprintf(b, sizeof b, "%s %s, %s", m.bridgeName, m.bridgeOnline ? "online" : "OFFLINE", a);
+  if (m.haveData && m.devices > 1) snprintf(b, sizeof b, "%d/%d boards online, %s", m.devicesOnline, m.devices, a);
+  else if (m.haveData) snprintf(b, sizeof b, "%s %s, %s", m.bridgeName, m.bridgeOnline ? "online" : "OFFLINE", a);
   else snprintf(b, sizeof b, "-");
   row("Bridge", b, m.bridgeOnline ? C_GREEN : C_ORANGE);
   snprintf(b, sizeof b, "...%s", m.keyTail);
@@ -560,9 +610,9 @@ Action uiTouch(int W, int H, int x, int y, const Model &m, UiState &u) {
   }
   switch (u.page) {
     case PG_ALL: {
-      int n = m.np > 4 ? 4 : m.np;
+      int n = m.np > MAX_TILES ? MAX_TILES : m.np, cols, rows;
       if (!n || y < d.Y(HDR)) return A_NONE;
-      int cols = n == 1 ? 1 : 2, rows = n <= 2 ? 1 : 2;
+      gridShape(n, cols, rows);
       int c = x * cols / W, r = (y - d.Y(HDR)) * rows / (d.Y(TABY) - d.Y(HDR));
       int i = r * cols + c;
       if (i < n) {
