@@ -1,0 +1,59 @@
+name: Build Bambu bridge + screens
+on:
+  push:
+    branches: [bambu-bridge]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PlatformIO and esptool
+        run: pip install platformio esptool==4.5.1 pillow
+      - name: Build firmware
+        run: |
+          set -o pipefail
+          mkdir -p out
+          pio run -e bridge-s3 -e screen-cyd28 -e screen-cyd35 2>&1 | tee out/build.log
+      - name: Render screen previews (real UI code on the PC)
+        if: always()
+        run: |
+          LG=$(find .pio/libdeps -maxdepth 2 -type d -name LovyanGFX | head -1)
+          if [ -z "$LG" ]; then git clone -q --depth 1 --branch 1.1.16 https://github.com/lovyan03/LovyanGFX /tmp/LovyanGFX; LG=/tmp/LovyanGFX; fi
+          tools/render_screens.sh "$LG/src" out/screens
+      - name: Make install images (flash at 0x0)
+        run: |
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
+          B=.pio/build/bridge-s3
+          python -m esptool --chip esp32s3 merge_bin -o out/BAMBU_BRIDGE_S3_INSTALL.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
+          cp $B/firmware.bin out/BAMBU_BRIDGE_S3_APP_UPDATE.bin
+          for S in cyd28 cyd35; do
+            P=.pio/build/screen-$S
+            U=$(echo $S | tr a-z A-Z)
+            python -m esptool --chip esp32 merge_bin -o out/BAMBU_SCREEN_${U}_INSTALL.bin \
+              --flash_mode dio --flash_freq 40m --flash_size 4MB \
+              0x1000 $P/bootloader.bin 0x8000 $P/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $P/firmware.bin
+            cp $P/firmware.bin out/BAMBU_SCREEN_${U}_APP_UPDATE.bin
+          done
+          grep -E "RAM:|Flash:|Environment|SUCCESS|FAILED" out/build.log > out/SIZES.txt || true
+          (cd out && sha256sum *.bin > SHA256SUMS.txt)
+      - name: Publish to bambu-build branch
+        if: always()
+        run: |
+          git config user.name "bambu-ci"
+          git config user.email "bambu-ci@users.noreply.github.com"
+          git checkout --orphan bambu-build
+          git read-tree --empty
+          mkdir -p firmware/screens
+          find out -maxdepth 1 -type f -exec cp {} firmware/ \;
+          cp out/screens/*.png firmware/screens/ 2>/dev/null || true
+          git add -f firmware/
+          git commit -qm "bambu firmware for ${GITHUB_SHA::7} (${{ job.status }})"
+          git push -f origin bambu-build 2>&1 | tail -3

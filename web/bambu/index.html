@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Bambu Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300ae42'/%3E%3Cpath d='M18 46V18h20a8 8 0 0 1 0 16H18m20 0a6 6 0 0 1 0 12H18' fill='none' stroke='%23fff' stroke-width='6'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#0b0f14;--card:#151b23;--card2:#1d2530;--line:#273141;--text:#e9eef3;--muted:#8794a3;--dim:#5b6675;
+--green:#00c25a;--bambu:#00ae42;--yellow:#f5c400;--orange:#ff8c1e;--red:#f04848;--blue:#3ca0ff;--cyan:#28d2dc}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:1180px;margin:auto;padding:14px 16px 40px}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+header h1{font-size:21px;margin:0;font-weight:700;letter-spacing:.2px}header h1 b{color:var(--bambu)}
+.links{display:flex;gap:14px;margin-left:auto;align-items:center;font-size:13px;color:var(--muted)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--dim);vertical-align:1px}
+.dot.ok{background:var(--green)}.dot.warn{background:var(--orange)}.dot.bad{background:var(--red)}
+.summary{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px;color:var(--muted)}
+.chip b{color:var(--text);font-size:16px;margin-right:4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--sc,var(--dim))}
+.top{display:flex;align-items:center;gap:8px}.name{font-weight:700;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model{color:var(--muted);font-size:13px}.pill{margin-left:auto;font-size:12px;font-weight:700;padding:3px 10px;border-radius:99px;color:#0b0f14;background:var(--sc);white-space:nowrap}
+.mid{display:grid;grid-template-columns:96px 1fr;gap:14px;align-items:center;margin-top:12px}
+.ring{width:96px;height:96px;position:relative}.ring svg{transform:rotate(-90deg)}
+.ring .v{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:700;font-size:26px;font-variant-numeric:tabular-nums}
+.ring .v small{font-size:11px;color:var(--muted);font-weight:500}
+.task{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nums{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:8px}
+.lbl{font-size:11px;color:var(--muted);letter-spacing:.4px}.val{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+.sub{font-size:13px;color:var(--muted)}
+.temps{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:6px;margin-top:12px}
+.t{background:var(--card2);border-radius:9px;padding:6px 9px}.t .val{font-size:17px}.t .val.hot{color:var(--orange)}.t .val small{font-size:11px;color:var(--muted);font-weight:500}
+.ams{margin-top:10px;background:var(--card2);border-radius:10px;padding:8px 9px}
+.amsh{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
+.trays{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.tray{border-radius:8px;height:46px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:1px solid rgba(255,255,255,.08)}
+.tray span{font-size:15px}.tray.empty{border:1px dashed var(--line);color:var(--dim);font-weight:500}
+.tray.act{outline:2px solid var(--text);outline-offset:2px}
+.err{margin-top:10px;background:rgba(240,72,72,.14);border:1px solid rgba(240,72,72,.45);color:#ffb3b3;border-radius:9px;padding:7px 10px;font-size:13px}
+.err a{color:#ffd0d0}.fans{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:var(--muted)}
+.off{opacity:.62}
+h2{font-size:16px;margin:26px 0 10px;color:var(--muted);font-weight:600}
+.events{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.ev{display:grid;grid-template-columns:88px 84px 1fr;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:14px;align-items:center}
+.ev:last-child{border:0}.ev .k{font-size:11px;font-weight:700;text-align:center;border-radius:6px;padding:3px 0;color:#0b0f14}
+.ev .w{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.keybox{max-width:420px;margin:12vh auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+.keybox input{width:100%;padding:12px;border-radius:9px;border:1px solid var(--line);background:#0f141b;color:var(--text);font-size:16px;margin:12px 0}
+.keybox button,.btn{padding:11px 16px;border:0;border-radius:9px;background:var(--bambu);color:#fff;font-weight:700;font-size:15px;cursor:pointer}
+.empty{color:var(--muted);padding:30px;text-align:center}
+@media (max-width:420px){.grid{grid-template-columns:1fr}.ev{grid-template-columns:70px 74px 1fr}}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const CLOUD = "https://zpsxcdzkayqhzbdcdoed.supabase.co";
+const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpwc3hjZHprYXlxaHpiZGNkb2VkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0NTMyODgsImV4cCI6MjEwOTAyOTI4OH0.aAXESY_MJ1IHlvF_8CVdVAGWdfz5ZM6ysoOki7kUv08";
+const $app = document.getElementById('app');
+const store = { get(k){ try { return localStorage.getItem(k) } catch(e){ return null } }, set(k,v){ try { localStorage.setItem(k,v) } catch(e){} } };
+let key = decodeURIComponent(location.hash.slice(1)) || store.get('bambu_view_key') || '';
+if (location.hash.length > 1) { store.set('bambu_view_key', key); history.replaceState(null, '', location.pathname); }
+let data = null, lastOk = 0, err = '', timer = null;
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STATE = {
+  RUNNING:['กำลังพิมพ์','--green'], PREPARE:['เตรียมพิมพ์','--green'], PAUSE:['หยุดพัก','--yellow'],
+  FINISH:['เสร็จแล้ว','--blue'], FAILED:['ล้มเหลว','--red'], IDLE:['ว่าง','--muted'] };
+const KIND = { finished:['เสร็จ','--blue'], failed:['ล้มเหลว','--red'], error:['ERROR','--red'], paused:['หยุดพัก','--yellow'],
+  started:['เริ่ม','--green'], resumed:['ต่อ','--green'], offline:['ออฟไลน์','--dim'], online:['ออนไลน์','--green'] };
+const busy = p => p.online && ['RUNNING','PREPARE','PAUSE'].includes(p.state?.gcode_state);
+
+function dur(min){ if(!min||min<=0) return '--'; if(min<60) return min+' นาที'; const h=Math.floor(min/60), m=min%60;
+  if(h<24) return `${h} ชม. ${String(m).padStart(2,'0')} น.`; return `${Math.floor(h/24)} วัน ${h%24} ชม.`; }
+function eta(min){ if(!min||min<=0) return '--:--'; const d=new Date(Date.now()+min*60000), n=new Date();
+  const t=d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); return d.getDate()!==n.getDate()? t+' (พรุ่งนี้)': t; }
+function ago(iso){ if(!iso) return 'ไม่เคย'; const s=Math.max(0,(Date.now()-new Date(iso))/1000);
+  if(s<60) return Math.round(s)+' วินาทีที่แล้ว'; if(s<3600) return Math.round(s/60)+' นาทีที่แล้ว';
+  if(s<86400) return Math.round(s/3600)+' ชม.ที่แล้ว'; return Math.round(s/86400)+' วันที่แล้ว'; }
+function light(hex){ const n=parseInt(hex||'808080',16); return ((n>>16&255)*3+(n>>8&255)*6+(n&255))/10>150; }
+
+function ring(p, color){
+  const r=40, c=2*Math.PI*r, pct=busy(p)||p.state?.gcode_state==='FINISH'? (p.state.mc_percent||0):0;
+  return `<div class="ring"><svg width="96" height="96"><circle cx="48" cy="48" r="${r}" stroke="var(--line)" stroke-width="9" fill="none"/>
+  <circle cx="48" cy="48" r="${r}" stroke="var(${color})" stroke-width="9" fill="none" stroke-linecap="round"
+   stroke-dasharray="${c*pct/100} ${c}"/></svg><div class="v">${p.online&&pct?pct:'--'}<small>%</small></div></div>`;
+}
+function temp(lbl, v, t){ const hot=t>0; return `<div class="t"><div class="lbl">${lbl}</div><div class="val ${hot?'hot':''}">${v==null?'--':Math.round(v)}°${hot?`<small>/${Math.round(t)}</small>`:''}</div></div>`; }
+function amsHtml(s){
+  if(!s.ams||!s.ams.length) return '';
+  return s.ams.map(a=>{
+    const hum = a.dry>0? `<span style="color:var(--orange)">กำลังอบ เหลือ ${dur(a.dry)}</span>` : a.hum!=null? `ความชื้น ${a.hum}%` : a.lvl!=null? `ความชื้นระดับ ${a.lvl}`:'';
+    const trays=(a.trays||[]).map((t,i)=>{ const act=s.tray_now===a.id*4+i;
+      if(!t) return `<div class="tray empty ${act?'act':''}">ว่าง</div>`;
+      const fg=light(t.c)?'#0b0f14':'#fff';
+      return `<div class="tray ${act?'act':''}" style="background:#${esc(t.c)};color:${fg}">${esc(t.t)}${t.r!=null?`<span>${t.r}%</span>`:''}</div>`; }).join('');
+    return `<div class="ams"><div class="amsh"><span>AMS ${a.id+1}${a.temp!=null?' · '+a.temp+'°C':''}</span><span>${hum}</span></div><div class="trays">${trays}</div></div>`;
+  }).join('');
+}
+function card(p){
+  const s=p.state||{}, g=s.gcode_state||'';
+  let [txt,col]=p.online? (STATE[g]||['รอข้อมูล','--muted']) : ['ออฟไลน์','--dim'];
+  if(p.online && (p.error_code||(s.hms||[]).length) && ['RUNNING','PREPARE'].includes(g)) col='--orange';
+  const b=busy(p)||g==='FINISH';
+  const errs=[];
+  if(p.error_code) errs.push(`Print error <b>${esc(p.error_code)}</b>`);
+  (s.hms||[]).forEach(h=>errs.push(`HMS <a target="_blank" rel="noopener" href="https://wiki.bambulab.com/en/x1/troubleshooting/hmscode/${esc(h)}">${esc(h)}</a>`));
+  const temps = [];
+  if(s.noz2){ temps.push(temp(s.active===0?'หัวซ้าย ●':'หัวซ้าย', s.noz?.[0], s.noz?.[1])); temps.push(temp(s.active===1?'หัวขวา ●':'หัวขวา', s.noz2[0], s.noz2[1])); }
+  else temps.push(temp('หัวฉีด', s.noz?.[0], s.noz?.[1]));
+  temps.push(temp('ฐาน', s.bed?.[0], s.bed?.[1]));
+  if(s.cham!=null) temps.push(temp('ห้องพิมพ์', s.cham, 0));
+  const fans=[]; if(s.fan_part!=null) fans.push(`พัดลมชิ้นงาน ${s.fan_part}%`); if(s.fan_aux!=null) fans.push(`Aux ${s.fan_aux}%`); if(s.fan_cham!=null) fans.push(`Chamber ${s.fan_cham}%`);
+  const spd={1:'Silent',2:'Standard',3:'Sport',4:'Ludicrous'}[s.spd]; if(spd&&busy(p)) fans.push('ความเร็ว '+spd);
+  return `<div class="card ${p.online?'':'off'}" style="--sc:var(${col})">
+   <div class="top"><span class="name">${esc(p.name)}</span><span class="model">${esc(p.model||'')}</span><span class="pill">${txt}</span></div>
+   <div class="mid">${ring(p,col)}<div>
+     <div class="task">${esc(s.subtask_name||'ไม่มีงาน')}</div>
+     <div class="nums">
+      <div><div class="lbl">เหลือเวลา</div><div class="val" style="color:var(${col})">${g==='FINISH'?'เสร็จ':b?dur(s.remain):'--'}</div></div>
+      <div><div class="lbl">เสร็จประมาณ</div><div class="val">${b&&g!=='FINISH'?eta(s.remain):'--:--'}</div></div>
+      <div><div class="lbl">ชั้น</div><div class="val" style="font-size:15px">${s.tlayer?`${s.layer} / ${s.tlayer}`:'--'}</div></div>
+      <div><div class="lbl">อัปเดต</div><div class="sub" style="margin-top:3px">${ago(p.updated_at)}</div></div>
+     </div></div></div>
+   ${errs.length?`<div class="err">⚠ ${errs.join('<br>')}</div>`:''}
+   ${p.online?`<div class="temps">${temps.join('')}</div>${fans.length?`<div class="fans">${fans.map(f=>`<span>${f}</span>`).join('')}</div>`:''}${amsHtml(s)}`
+     :`<div class="sub" style="margin-top:10px">ขาดการเชื่อมต่อ · ข้อมูลล่าสุด ${ago(p.updated_at)}</div>`}
+  </div>`;
+}
+function eventRow(e){
+  const [t,c]=KIND[e.kind]||[e.kind,'--muted'];
+  const d=new Date(e.created_at), n=new Date();
+  const ts=d.toDateString()===n.toDateString()? d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('th-TH',{day:'numeric',month:'short'})+' '+d.toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+  return `<div class="ev"><span class="sub">${ts}</span><span class="k" style="background:var(${c})">${t}</span>
+   <span class="w"><b>${esc(e.printer_name)}</b> <span class="sub">${esc(e.error_code||e.task||'')}</span></span></div>`;
+}
+function render(){
+  if(!key) return askKey();
+  if(!data){ $app.innerHTML = `<div class="empty">${err?esc(err):'กำลังโหลด...'}</div>`; return; }
+  const b=data.bridge, ps=data.printers||[];
+  const cloudCls = Date.now()-lastOk<20000? 'ok':'bad';
+  const busyN = ps.filter(busy).length, errN = ps.filter(p=>p.online&&(p.error_code||(p.state?.hms||[]).length)).length;
+  $app.innerHTML = `
+  <header><h1><b>Bambu</b> Monitor</h1>
+   <div class="links"><span><i class="dot ${cloudCls}"></i>Cloud</span><span><i class="dot ${b.online?'ok':'warn'}"></i>Bridge ${esc(b.name)} ${b.online?'':'· '+ago(b.last_seen)}</span>
+   <a href="#" id="chg" style="color:var(--muted)">เปลี่ยน key</a></div></header>
+  <div class="summary"><div class="chip"><b>${ps.length}</b>เครื่อง</div><div class="chip"><b>${busyN}</b>กำลังทำงาน</div>
+   <div class="chip"><b style="color:${errN?'var(--red)':'inherit'}">${errN}</b>มีปัญหา</div>
+   <div class="chip"><b>${ps.filter(p=>!p.online).length}</b>ออฟไลน์</div></div>
+  ${!b.online?`<div class="err" style="margin-bottom:12px">ตัว Bridge ที่บ้านไม่ได้ส่งข้อมูลมา ${ago(b.last_seen)} — ข้อมูลด้านล่างอาจไม่ใช่ปัจจุบัน</div>`:''}
+  ${err?`<div class="err" style="margin-bottom:12px">${esc(err)}</div>`:''}
+  <div class="grid">${ps.length? ps.map(card).join('') : '<div class="empty">ยังไม่มีเครื่องพิมพ์ — ตั้งค่าในหน้าเว็บของ Bridge</div>'}</div>
+  <h2>เหตุการณ์ล่าสุด</h2>
+  <div class="events">${(data.events||[]).length? data.events.map(eventRow).join('') : '<div class="empty">ยังไม่มี</div>'}</div>`;
+  document.getElementById('chg').onclick = ev => { ev.preventDefault(); key=''; data=null; render(); };
+}
+function askKey(){
+  $app.innerHTML = `<div class="keybox"><h1 style="margin:0 0 6px;font-size:20px"><b style="color:var(--bambu)">Bambu</b> Monitor</h1>
+   <div class="sub">ใส่ View key ที่แสดงในหน้าเว็บของ Bridge (ขึ้นต้นด้วย bv_)</div>
+   <input id="k" placeholder="bv_..." autocomplete="off"><button id="go">เปิดดู</button>
+   ${err?`<div class="err">${esc(err)}</div>`:''}</div>`;
+  document.getElementById('go').onclick = () => { key=document.getElementById('k').value.trim(); if(!key) return; store.set('bambu_view_key',key); err=''; data=null; render(); load(); };
+}
+async function load(){
+  if(!key) return;
+  try{
+    const r = await fetch(CLOUD+'/rest/v1/rpc/bambu_get',{method:'POST',headers:{apikey:ANON,Authorization:'Bearer '+ANON,'Content-Type':'application/json'},
+      body:JSON.stringify({p_key:key,p_events:15})});
+    const j = await r.json();
+    if(!r.ok){ if(String(j.message||'').includes('invalid key')){ err='View key ไม่ถูกต้อง'; key=''; data=null; } else err='โหลดไม่ได้ ('+r.status+')'; }
+    else { data=j; lastOk=Date.now(); err=''; }
+  }catch(e){ err='ต่ออินเทอร์เน็ตไม่ได้'; }
+  render();
+}
+render(); load(); setInterval(load, 5000);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
+</script>
+</body>
+</html>
