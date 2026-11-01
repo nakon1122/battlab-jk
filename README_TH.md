@@ -1,71 +1,87 @@
-# Bambu LAN → Cloud Monitor
-
-The bridge reads all 4 printers (A1, P2S, X2D, H2C) over LAN. It then sends their status up to the cloud (Supabase project "data"), so you can watch them from anywhere.
+# Bambu Monitor: ดูเครื่องพิมพ์ Bambu ผ่าน LAN จากที่ไหนก็ได้
 
 ```
-เครื่องพิมพ์ x4 ──LAN MQTT──> ESP32-S3 Bridge ──HTTPS──> Supabase ──> เว็บ dashboard (มือถือ)
-                                                              ├──> จอ CYD ที่ไหนก็ได้
-                                                              └──> LINE แจ้งเตือน
+เครื่องพิมพ์ 16 เครื่อง ──LAN──> Bridge ESP32-S3 x4 ──HTTPS──> Supabase ──> เว็บ dashboard (มือถือ)
+                                  (บอร์ดละ 4 เครื่อง)                     ├──> จอ CYD ที่ไหนก็ได้
+                                                                         └──> แจ้งเตือน LINE
 ```
 
-## Files in firmware/
+**1 บอร์ดดูแลได้ 4 เครื่อง** ถ้ามี 16 เครื่องให้ใช้ 4 บอร์ด แฟลชไฟล์เดียวกันทุกบอร์ด
+ทุกบอร์ดใช้ key เดียวกันอยู่แล้ว ข้อมูลทั้งหมดจึงรวมอยู่ใน dashboard, จอ CYD และ LINE ชุดเดียว
+(ESP32 ตัวเดียวต่อค้างกับ 16 เครื่องพร้อมกันไม่ได้ เพราะ socket และ RAM ของชิปไม่พอ)
 
-| File | Board | Use |
+## ไฟล์ใน firmware/
+
+| ไฟล์ | บอร์ด | ใช้ทำอะไร |
 |---|---|---|
-| `BAMBU_BRIDGE_S3_INSTALL.bin` | Any ESP32-S3 | Bridge (sits at home, same network as the printers) |
-| `BAMBU_SCREEN_CYD28_INSTALL.bin` | ESP32-2432S028 (2.8") | Remote screen |
-| `BAMBU_SCREEN_CYD35_INSTALL.bin` | ESP32-3248S035 (3.5") | Remote screen |
-| `*_APP_UPDATE.bin` | — | Update without erasing settings (use the UPDATE_*.bat files) |
+| `BAMBU_BRIDGE_S3_INSTALL.bin` | ESP32-S3 รุ่นไหนก็ได้ | Bridge วางในร้าน/บ้าน วง LAN เดียวกับเครื่องพิมพ์ |
+| `BAMBU_SCREEN_CYD28_INSTALL.bin` | ESP32-2432S028 (2.8") | จอแสดงผลระยะไกล |
+| `BAMBU_SCREEN_CYD35_INSTALL.bin` | ESP32-3248S035 (3.5") | จอแสดงผลระยะไกล |
+| `*_APP_UPDATE.bin` | | อัปเดตโดยไม่ล้างค่า (ใช้กับไฟล์ UPDATE_*.bat) |
+| `screens/` | | ภาพตัวอย่างหน้าจอ CYD ทุกหน้า |
 
-## Step 1: Prepare the printers
+## 1. เตรียมเครื่องพิมพ์ (ทุกเครื่อง)
 
-On every printer: **Settings → Network**, turn on **LAN Only** and **Developer Mode** (H2C, X2D, P2S and A1 on new firmware won't let an external device read data until Developer Mode is on).
-Write down 3 values from each printer: **IP address**, **Serial number** and **Access Code**.
+- ที่จอเครื่อง: **Settings → Network** เปิด **LAN Only** และ **Developer Mode**
+  (A1 ที่เฟิร์มแวร์ใหม่, P2S, X2D และ H2C จะไม่ยอมให้อุปกรณ์ภายนอกอ่านข้อมูลถ้ายังไม่เปิด Developer Mode)
+- จดค่า 3 อย่างของแต่ละเครื่อง: **IP**, **Serial** และ **Access Code**
+- แนะนำให้ล็อก IP ของเครื่องพิมพ์ใน router (DHCP reservation) จะได้ไม่เปลี่ยน
 
-> Set the printer IPs as fixed addresses (DHCP reservation in the router) so they don't change.
+## 2. ติดตั้ง Bridge (ทำทีละบอร์ด)
 
-## Step 2: Install the bridge (ESP32-S3)
+1. ดับเบิลคลิก `FLASH_BRIDGE_S3_WINDOWS.bat` แล้วใส่ COM port
+2. ใช้มือถือต่อ Wi-Fi **BAMBU-BRIDGE-XXXX** (XXXX คือรหัสของบอร์ดนั้น) หน้าตั้งค่าจะเด้งขึ้นมาเอง ถ้าไม่ขึ้นให้เปิด http://192.168.4.1
+3. ที่หัวข้อ Wi-Fi เลือก Wi-Fi ร้าน ใส่รหัส แล้วกดบันทึก บอร์ดจะรีสตาร์ต
+4. ต่อมือถือกลับเข้า Wi-Fi ร้าน แล้วเปิด **http://bambubridge-xxxx.local** (ชื่ออยู่บนหัวหน้าเว็บ หรือดู IP จาก router)
+5. ใส่เครื่องพิมพ์ไม่เกิน 4 เครื่อง (ชื่อ, รุ่น, IP, Serial, Access code) แล้วกด **บันทึกเครื่องพิมพ์**
+   - ตั้งชื่อไม่ให้ซ้ำกัน เช่น A1-01 … A1-08, P2S-01 … เพราะใช้ชื่อนี้เรียงในหน้าจอ
+   - แต่ละเครื่องใส่ไว้ในบอร์ดเดียวเท่านั้น
+   - หัวข้อ **ทุกบอร์ดในระบบ** บอกว่าบอร์ดไหนดูแลเครื่องไหน และบอร์ดไหนออฟไลน์
+6. ทำแบบเดียวกันกับบอร์ดที่ 2, 3 และ 4
 
-1. Double-click `FLASH_BRIDGE_S3_WINDOWS.bat` and enter the COM port.
-2. Connect your phone to the Wi-Fi network **BAMBU-BRIDGE**. The setup page opens by itself (or go to http://192.168.4.1).
-3. Wi-Fi section: pick your home Wi-Fi, enter the password, and press save. The board restarts.
-4. Connect your phone back to your home Wi-Fi and open **http://bambubridge.local** (or the board's IP from your router).
-5. Fill in all 4 printers (name, model, IP, serial, access code) and press **Save printers**.
-   Within a few seconds the status card should turn green.
-6. The top of the page shows the **dashboard link** and the **View key** for the CYD screen.
+## 3. ดูจากนอกบ้าน
 
-## Step 3: Watch from outside
+เปิด https://nakon1122.github.io/battlab-cloud/bambu/ แล้วใส่ View key `bv_bab6c8bcad9d32f9aa2c9e71`
+ถ้าใช้มือถือ กด "เพิ่มไปยังหน้าจอหลัก" แล้วจะใช้งานได้เหมือนแอป
 
-Open https://nakon1122.github.io/battlab-cloud/bambu/ and enter the View key (starts with `bv_`).
-On a phone, choose "Add to Home Screen" and it works like an app.
+- ปุ่มกรอง: ทั้งหมด / กำลังพิมพ์ / มีปัญหา / เสร็จ-ว่าง / ออฟไลน์
+- เลือกดูแบบ **รายการ** (สะดวกสำหรับ 16 เครื่อง) หรือแบบ **การ์ด** (รายละเอียดเต็ม) ได้ กดที่แถวเพื่อเปิดการ์ดของเครื่องนั้น
+- เครื่องที่มีปัญหาจะขึ้นก่อน ถัดมาเป็นเครื่องที่ใกล้เสร็จ
 
-## Step 4: LINE alerts
+## 4. แจ้งเตือน LINE
 
-LINE Notify has shut down, so this uses the LINE Messaging API (free, with a monthly message limit):
+LINE Notify ปิดบริการไปแล้ว ระบบนี้จึงใช้ LINE Messaging API แทน (ฟรี แต่จำกัดจำนวนข้อความต่อเดือน)
 
-1. Go to https://developers.line.biz → Create a Provider → Create a channel of type **Messaging API**.
-2. **Messaging API** tab: press Issue **Channel access token (long-lived)** and copy it.
-3. **Basic settings** tab: copy **Your user ID** (starts with `U`).
-4. Scan the channel's QR code to add the bot as a friend.
-5. On the bridge page → LINE alerts → paste the token and user ID → choose which events to send → **Save LINE** → **Send test message**.
+1. เข้า https://developers.line.biz แล้วสร้าง Provider จากนั้นสร้าง channel แบบ **Messaging API**
+2. ที่แท็บ **Messaging API** กด Issue **Channel access token (long-lived)** แล้วคัดลอกไว้
+3. ที่แท็บ **Basic settings** คัดลอก **Your user ID** (ขึ้นต้นด้วย `U`)
+4. สแกน QR ของ channel เพื่อเพิ่มบอทเป็นเพื่อน
+5. ที่หน้าเว็บของบอร์ด**ไหนก็ได้** (ทุกบอร์ดใช้ค่านี้ร่วมกัน) ไปที่แจ้งเตือน LINE วาง token กับ user ID เลือกเหตุการณ์ที่ต้องการ แล้วกด **บันทึก LINE** และ **ส่งข้อความทดสอบ**
 
-The default is to alert on: print finished, failed, paused, error and lost connection.
+ค่าเริ่มต้นจะแจ้งเมื่อ พิมพ์เสร็จ ล้มเหลว หยุดพัก มี error และขาดการเชื่อมต่อ
+ถ้า 16 เครื่องพิมพ์งานเสร็จหลายรอบต่อวัน อาจเกินโควตาข้อความฟรีของเดือน ให้เอา "พิมพ์เสร็จ" ออก เหลือไว้แค่การแจ้งปัญหา
 
-## Step 5: CYD screen (optional)
+## 5. จอ CYD (ถ้าใช้)
 
-1. Run `FLASH_SCREEN_CYD28_WINDOWS.bat` (2.8") or `FLASH_SCREEN_CYD35_WINDOWS.bat` (3.5").
-2. The screen shows the Wi-Fi setup page. Connect your phone to **BAMBU-SCREEN** → pick Wi-Fi → Save.
-3. The View key is already set. To change it, open the screen's IP in a browser.
+1. รัน `FLASH_SCREEN_CYD28_WINDOWS.bat` (จอ 2.8") หรือ `FLASH_SCREEN_CYD35_WINDOWS.bat` (จอ 3.5")
+2. จอจะขึ้นหน้าตั้ง Wi-Fi ให้ต่อมือถือเข้า **BAMBU-SCREEN** เลือก Wi-Fi แล้วกดบันทึก
+3. View key ใส่มาให้แล้ว ถ้าต้องการเปลี่ยนให้เปิด IP ของจอในเบราว์เซอร์
 
-Screen tabs: **ALL** (all printers) · **PRINTER** (one printer, swipe left/right or tap the arrows) · **EVENTS** · **SETUP** (brightness, rotate, calibrate touch, change Wi-Fi).
-If the colors look wrong, go to the screen's web page → choose Type B / Invert / BGR.
+แท็บบนจอ:
+- **ALL**: แสดงทุกเครื่อง ถ้ามี 4 เครื่องจะเป็นการ์ดใหญ่ ถ้ามี 5 ถึง 16 เครื่องจะเป็นตาราง 3x3 หรือ 4x4 แตะที่ช่องเพื่อดูรายละเอียดเครื่องนั้น
+- **PRINTER**: ดูทีละเครื่อง ปัดซ้าย/ขวาหรือแตะลูกศรเพื่อเปลี่ยนเครื่อง
+- **EVENTS**: เหตุการณ์ล่าสุด
+- **SETUP**: ความสว่าง หมุนจอ ตั้งค่าทัช เปลี่ยน Wi-Fi และสถานะบอร์ด Bridge (เช่น 4/4 ออนไลน์)
 
-## Troubleshooting
+ถ้าสีจอเพี้ยน ให้เปิดหน้าเว็บของจอ แล้วเลือก Type B, Invert หรือ BGR
 
-| Problem | Fix |
+## แก้ปัญหา
+
+| อาการ | วิธีแก้ |
 |---|---|
-| `wrong access code` | The access code changes when you toggle LAN mode. Read it again from the printer screen. |
-| `no MQTT answer` | Developer Mode is not on yet. |
-| `cannot connect` | Wrong IP, or the printer is off. |
-| Dashboard says Bridge offline | The bridge has no internet or has lost power. |
-| Nozzle temperatures on the dual-nozzle models (X2D/H2C) are swapped left/right | Report it and it will be fixed in the next build. |
+| `wrong access code` | Access code เปลี่ยนทุกครั้งที่เปิด/ปิด LAN mode ให้ดูค่าใหม่ที่จอเครื่อง |
+| `no MQTT answer` | ยังไม่ได้เปิด Developer Mode |
+| `cannot connect` | IP ผิด หรือเครื่องพิมพ์ปิดอยู่ |
+| dashboard ขึ้นว่าบอร์ด Bridge ไม่ส่งข้อมูล | บอร์ดนั้นไม่มีไฟหรือไม่มีเน็ต เครื่องพิมพ์ 4 เครื่องของบอร์ดนั้นจะขึ้นออฟไลน์ |
+| เลิกใช้บอร์ดใดบอร์ดหนึ่ง | หน้าเว็บบอร์ดอื่น → ทุกบอร์ดในระบบ → **ลบบอร์ดนี้ออก** (ปุ่มจะขึ้นเมื่อบอร์ดนั้นออฟไลน์อยู่) |
+| อุณหภูมิหัวฉีดซ้าย/ขวาของ X2D/H2C สลับกัน | แจ้งมาได้ แก้ให้ในบิลด์ถัดไป |
