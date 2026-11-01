@@ -443,7 +443,7 @@ static void calibrate() {
   tft.drawString("Touch calibration", SW / 2, SH / 2 - 20);
   tft.setFont(&fonts::DejaVu12);
   tft.drawString("Tap the tip of each corner arrow", SW / 2, SH / 2 + 10);
-  tft.calibrateTouch(cal, TFT_GREEN, uiBg(), 20);
+  tft.calibrateTouch(cal, (uint16_t)TFT_GREEN, uiBg(), 20);
   tft.setTouchCalibrate(cal);
   Preferences p;
   p.begin("bbscreen", false);
