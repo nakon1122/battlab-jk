@@ -75,10 +75,14 @@
 ใช้ Raspberry Pi 4/5 (หรือ PC Linux เครื่องไหนก็ได้) ที่อยู่ในวง LAN เดียวกับเครื่องพิมพ์ ติดตั้ง Raspberry Pi OS 64-bit แล้ว:
 
 ```
-# ก๊อปโฟลเดอร์ hub/ จาก zip ไปไว้บน Pi แล้ว
-cd hub
-sudo bash install.sh
+curl -fsSL https://nakon1122.github.io/battlab-cloud/bambu/hub/install.sh | sudo bash -s bw_2c7860d45bdd19a44eccf069985b73eddcf9
 ```
+
+ไม่ต้องต่อจอกับ Pi (ตั้งค่าแบบ headless):
+1. ที่คอม ลงโปรแกรม **Raspberry Pi Imager** → เลือก Raspberry Pi OS Lite (64-bit) → กดรูปเฟือง (Edit settings)
+   ตั้ง hostname `bambuhub`, username/password, Wi-Fi ร้าน และเปิด **SSH** → เขียนลง SD card / SSD
+2. เสียบ Pi เข้าไฟและสาย LAN รอ 2 นาที
+3. ที่คอม เปิด PowerShell: `ssh ชื่อผู้ใช้@bambuhub.local` แล้ววางคำสั่งด้านบน จบ
 
 - ติดตั้ง go2rtc และ Cloudflare Tunnel ให้อัตโนมัติ ไม่ต้องเปิด port ที่ router
 - Pi อ่านรายชื่อเครื่อง, IP และ access code จาก cloud เอง (บอร์ด Bridge เป็นตัวส่งขึ้นไป) จึงไม่ต้องตั้งค่าอะไรเพิ่ม

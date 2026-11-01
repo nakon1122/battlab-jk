@@ -33,7 +33,7 @@ CONF_PATH = os.environ.get("BAMBU_HUB_CONF", os.path.join(HERE, "config.json"))
 DEFAULT_CONF = {
     "cloud_url": "https://zpsxcdzkayqhzbdcdoed.supabase.co",
     "anon_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpwc3hjZHprYXlxaHpiZGNkb2VkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0NTMyODgsImV4cCI6MjEwOTAyOTI4OH0.aAXESY_MJ1IHlvF_8CVdVAGWdfz5ZM6ysoOki7kUv08",
-    "write_key": "bw_2c7860d45bdd19a44eccf069985b73eddcf9",
+    "write_key": "",  # set by install.sh in config.json (never published)
     "go2rtc": os.path.join(HERE, "go2rtc"),
     "cloudflared": os.path.join(HERE, "cloudflared"),
     "go2rtc_port": 1984,
@@ -60,6 +60,8 @@ def load_conf():
 
 
 CONF = load_conf()
+if not CONF.get("write_key") and __name__ == "__main__" and "inspect" not in sys.argv:
+    sys.exit("no write_key in " + CONF_PATH + " - run install.sh with the key")
 
 
 # ------------------------------------------------------------------ cloud --
@@ -277,7 +279,7 @@ class Video:
 
         def reader(pr):
             for line in pr.stdout:
-                m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+                m = re.search(r"https://(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com", line)
                 if m:
                     with self.lock:
                         self.public = m.group(0)
