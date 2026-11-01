@@ -8,8 +8,8 @@
 #include <ArduinoJson.h>
 
 struct TrayS {
-  String type, color;
-  int remain = -1;
+  String type, color, idx;  // idx = filament preset id (tray_info_idx)
+  int remain = -1, tmin = 0, tmax = 0;
   bool present = false;
 };
 struct AmsS {
@@ -32,6 +32,20 @@ struct PState {
   int nams = 0;
   AmsS ams[4];
   int trayNow = 255;
+  // settings shown / changed from the dashboard
+  int light = -1;                       // chamber light 0/1, -1 unknown
+  int spaghetti = -1, firstLayer = -1, plateMarker = -1, printHalt = -1;
+  String haltSens;
+  long homeFlag = -1;                   // bit field (auto recovery, sound, ...)
+  int sd = -1;                          // SD card present
+  String rtsp;                          // "disable" or the RTSP url (X/H/P2 series)
+  float nozzleDia = 0;
+  String nozzleType;
+};
+
+struct CmdAck {
+  long id;
+  String status, result;
 };
 
 struct PrinterCfg {
@@ -55,11 +69,21 @@ class BambuPrinter {
   void loop();               // call often
   void requestPushall();
   void toJson(JsonObject o) const;
+  // send a raw MQTT request (JSON); `id` is the cloud command id used as sequence_id
+  bool publish(long id, JsonObject payload);
+  bool popAck(CmdAck &a);
+  bool hasJpegCamera() const;  // A1 / P1: JPEG stream on port 6000
 
  private:
   WiFiClientSecure tls_;
   uint32_t nextTryMs_ = 0, backoffMs_ = 3000, lastPingMs_ = 0, lastPushallMs_ = 0;
   uint16_t pid_ = 1;
+  struct Pend { long id = 0; uint32_t at = 0; };
+  Pend pend_[8];
+  CmdAck acks_[8];
+  int nAcks_ = 0;
+  void pushAck_(long id, const String &status, const String &result);
+  void checkResult_(JsonObject o);
   bool connect_();
   void drop_(const char *why);
   bool readByte_(uint8_t &b, uint32_t timeoutMs);

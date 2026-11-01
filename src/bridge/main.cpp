@@ -13,9 +13,13 @@
 #include "bb_config.h"
 #include "cloud_ca_bundle.h"
 #include "bambu.h"
+#include "camera.h"
+#include <mbedtls/base64.h>
 #include "web_page.h"
 
 static BambuPrinter printers[BB_MAX_PRINTERS];
+static JpegCamera cam;
+static bool camOk = false;
 static WebServer web(80);
 static DNSServer dns;
 
@@ -118,6 +122,140 @@ static void pushCloud() {
   }
 }
 
+// ---------------------------------------------------- remote control ----
+static bool fastMode = false;            // someone has the dashboard open
+static uint32_t lastPollMs = 0, lastFrameUpMs = 0;
+static String pollErr;
+static String watchSerial;
+static uint32_t cmdsDone = 0, framesUp = 0;
+static DynamicJsonDocument *pendingAcks = nullptr;
+
+static int findPrinter(const String &serial) {
+  for (int i = 0; i < BB_MAX_PRINTERS; i++)
+    if (used(i) && cfg.p[i].serial == serial) return i;
+  return -1;
+}
+
+static void addAck(long id, const String &status, const String &result) {
+  if (!pendingAcks) pendingAcks = new DynamicJsonDocument(4096);
+  if (!pendingAcks->is<JsonArray>()) pendingAcks->to<JsonArray>();
+  if (pendingAcks->size() >= 20) return;
+  JsonObject a = pendingAcks->as<JsonArray>().createNestedObject();
+  a["id"] = id;
+  a["status"] = status;
+  a["result"]["msg"] = result;
+  cmdsDone++;
+}
+
+static void runCommand(long id, const String &serial, JsonObject cmd) {
+  int i = findPrinter(serial);
+  if (i < 0) return addAck(id, "error", "printer not on this board");
+  String type = cmd["type"] | "mqtt";
+  if (type == "mqtt") {
+    JsonObject pl = cmd["payload"];
+    if (pl.isNull()) return addAck(id, "error", "no payload");
+    printers[i].publish(id, pl);  // answer arrives through popAck()
+  } else if (type == "pushall") {
+    printers[i].requestPushall();
+    addAck(id, "ok", "refresh requested");
+  } else {
+    addAck(id, "error", "unknown command type");
+  }
+}
+
+static void pollCloud() {
+  for (int i = 0; i < BB_MAX_PRINTERS; i++) {
+    CmdAck a;
+    while (used(i) && printers[i].popAck(a)) addAck(a.id, a.status, a.result);
+  }
+  DynamicJsonDocument body(6144);
+  body["p_key"] = cfg.wkey;
+  body["p_device"] = devId;
+  if (pendingAcks && pendingAcks->size()) body["p_acks"] = pendingAcks->as<JsonArray>();
+  else body.createNestedArray("p_acks");
+  String b, resp;
+  serializeJson(body, b);
+  lastPollMs = millis();
+  int code = rpc("bambu_poll", b, resp);
+  if (code != 200) {
+    pollErr = "poll " + String(code);
+    return;
+  }
+  pollErr = "";
+  if (pendingAcks) pendingAcks->clear();
+  DynamicJsonDocument d(16384);
+  if (deserializeJson(d, resp)) return;
+  fastMode = d["fast"] | false;
+  for (JsonObject c : d["cmds"].as<JsonArray>()) runCommand(c["id"] | 0L, String(c["serial"] | ""), c["cmd"].as<JsonObject>());
+  // camera: first watched printer of this board that has a JPEG camera
+  String w;
+  for (JsonVariant v : d["watch"].as<JsonArray>()) {
+    int i = findPrinter(v.as<String>());
+    if (i >= 0 && printers[i].hasJpegCamera()) {
+      w = v.as<String>();
+      break;
+    }
+  }
+  if (w != watchSerial) {
+    watchSerial = w;
+    if (!w.length()) cam.stop();
+    else {
+      int i = findPrinter(w);
+      cam.watch(w, cfg.p[i].ip, cfg.p[i].code);
+    }
+  }
+}
+
+static void uploadFrame() {
+  size_t olen = 0;
+  size_t need = ((cam.len() + 2) / 3) * 4 + 1;
+  static char *body = nullptr;
+  static size_t cap = 0;
+  String pre = "{\"p_key\":\"" + cfg.wkey + "\",\"p_serial\":\"" + cam.serial() + "\",\"p_b64\":\"";
+  size_t total = pre.length() + need + 4;
+  if (total > cap) {
+    if (body) free(body);
+    body = (char *)ps_malloc(total);
+    cap = body ? total : 0;
+    if (!body) return;
+  }
+  memcpy(body, pre.c_str(), pre.length());
+  if (mbedtls_base64_encode((unsigned char *)body + pre.length(), need, &olen, cam.frame(), cam.len())) return;
+  size_t n = pre.length() + olen;
+  body[n++] = '"';
+  body[n++] = '}';
+  WiFiClientSecure tls;
+  tls.setCACertBundle(CLOUD_CA_BUNDLE);
+  tls.setTimeout(15);
+  HTTPClient http;
+  http.setTimeout(15000);
+  if (!http.begin(tls, String(BB_CLOUD_URL) + "/rest/v1/rpc/bambu_frame_put")) return;
+  http.addHeader("apikey", BB_CLOUD_ANON);
+  http.addHeader("Authorization", String("Bearer ") + BB_CLOUD_ANON);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST((uint8_t *)body, n);
+  String resp = code > 0 ? http.getString() : String();
+  http.end();
+  lastFrameUpMs = millis();
+  if (code == 200) {
+    framesUp++;
+    if (resp.indexOf("\"watching\": false") >= 0 || resp.indexOf("\"watching\":false") >= 0) {
+      watchSerial = "";
+      cam.stop();
+    }
+  } else cam.lastErr = "upload " + String(code);
+}
+
+static void remoteLoop() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  uint32_t every = (fastMode || watchSerial.length()) ? 2000 : 10000;
+  if (millis() - lastPollMs > every) pollCloud();
+  if (camOk && watchSerial.length()) {
+    bool fresh = cam.loop();
+    if (cam.len() && (fresh || millis() - lastFrameUpMs > 5000) && millis() - lastFrameUpMs > 1500) uploadFrame();
+  }
+}
+
 static void cloudLoop() {
   if (WiFi.status() != WL_CONNECTED) return;
   bool urgent = false, dirty = false;
@@ -128,7 +266,8 @@ static void cloudLoop() {
     }
   uint32_t since = millis() - lastPushMs;
   uint32_t retry = cloudErr.length() && lastPushOkMs ? 10000 : 0;
-  if (!lastPushMs || (urgent && since > 2000 + retry) || (dirty && since > 15000) || since > 30000) pushCloud();
+  uint32_t dirtyEvery = fastMode ? 4000 : 15000;
+  if (!lastPushMs || (urgent && since > 2000 + retry) || (dirty && since > dirtyEvery) || since > 30000) pushCloud();
 }
 
 // ---------------------------------------------------------------- Wi-Fi ----
@@ -172,6 +311,12 @@ static void apiStatus() {
   d["cloud_err"] = cloudErr;
   d["cloud_age"] = lastPushOkMs ? (long)((millis() - lastPushOkMs) / 1000) : -1;
   d["pushes"] = pushes;
+  d["psram"] = psramFound() ? (long)ESP.getPsramSize() : 0;
+  d["camera"] = camOk ? (watchSerial.length() ? "watching " + watchSerial + " (" + String(cam.frames) + " frames)" : String("ready")) : cam.lastErr;
+  d["cam_err"] = cam.lastErr;
+  d["remote"] = pollErr.length() ? pollErr : String(fastMode ? "dashboard open" : "idle");
+  d["cmds_done"] = cmdsDone;
+  d["frames_up"] = framesUp;
   d["push_fails"] = pushFails;
   d["wkey_tail"] = cfg.wkey.length() > 4 ? cfg.wkey.substring(cfg.wkey.length() - 4) : "";
   d["view_key"] = BB_DEFAULT_VIEW_KEY;
@@ -320,6 +465,16 @@ static void apiForget() {
   web.send(code == 200 ? 200 : 502, "application/json", code == 200 ? resp : String("{\"error\":\"cloud\"}"));
 }
 
+static void apiCtl() {
+  DynamicJsonDocument in(512);
+  deserializeJson(in, web.arg("plain"));
+  String k = in["key"] | "";
+  k.trim();
+  String resp;
+  int code = rpc("bambu_set_ctl", "{\"p_key\":\"" + cfg.wkey + "\",\"p_new\":\"" + k + "\"}", resp);
+  web.send(code == 200 ? 200 : 400, "application/json", code == 200 ? String("{\"ok\":true}") : String("{\"error\":\"รหัสต้องยาว 6 ตัวขึ้นไป\"}"));
+}
+
 static void apiScan() {
   int n = WiFi.scanComplete();
   if (n == WIFI_SCAN_RUNNING) {
@@ -349,6 +504,7 @@ static void webSetup() {
   web.on("/api/line", HTTP_POST, apiLine);
   web.on("/api/scan", apiScan);
   web.on("/api/site", apiSite);
+  web.on("/api/ctl", HTTP_POST, apiCtl);
   web.on("/api/forget", HTTP_POST, apiForget);
   web.on("/api/pushall", [] {
     for (auto &p : printers) p.requestPushall();
@@ -376,6 +532,7 @@ void setup() {
   makeIds();
   cfgLoad();
   bambuInitFilter();
+  camOk = cam.begin();
   WiFi.persistent(false);
   WiFi.setAutoReconnect(true);
   WiFi.setHostname(hostName.c_str());
@@ -406,6 +563,7 @@ void loop() {
       web.handleClient();
     }
     cloudLoop();
+    remoteLoop();
   }
   if (millis() - lastLog > 30000) {
     lastLog = millis();

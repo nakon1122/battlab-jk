@@ -19,7 +19,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          pio run -e bridge-s3 -e screen-cyd28 -e screen-cyd35 2>&1 | tee out/build.log
+          pio run -e bridge-s3 -e bridge-s3-r8 -e bridge-s3-r2 -e screen-cyd28 -e screen-cyd35 2>&1 | tee out/build.log
       - name: Render screen previews (real UI code on the PC)
         if: always()
         run: |
@@ -29,11 +29,13 @@ jobs:
       - name: Make install images (flash at 0x0)
         run: |
           BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
-          B=.pio/build/bridge-s3
-          python -m esptool --chip esp32s3 merge_bin -o out/BAMBU_BRIDGE_S3_INSTALL.bin \
-            --flash_mode dio --flash_freq 80m --flash_size 4MB \
-            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
-          cp $B/firmware.bin out/BAMBU_BRIDGE_S3_APP_UPDATE.bin
+          for V in "bridge-s3:" "bridge-s3-r8:_N16R8" "bridge-s3-r2:_N8R2"; do
+            E=${V%%:*}; T=${V#*:}; B=.pio/build/$E
+            python -m esptool --chip esp32s3 merge_bin -o out/BAMBU_BRIDGE_S3${T}_INSTALL.bin \
+              --flash_mode keep --flash_freq keep --flash_size 4MB \
+              0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
+            cp $B/firmware.bin out/BAMBU_BRIDGE_S3${T}_APP_UPDATE.bin
+          done
           for S in cyd28 cyd35; do
             P=.pio/build/screen-$S
             U=$(echo $S | tr a-z A-Z)

@@ -9,8 +9,22 @@ void bambuInitFilter() {
   for (const char *k : {"command", "gcode_state", "mc_percent", "mc_remaining_time", "layer_num", "total_layer_num",
                         "subtask_name", "print_error", "nozzle_temper", "nozzle_target_temper", "bed_temper",
                         "bed_target_temper", "chamber_temper", "cooling_fan_speed", "big_fan1_speed", "big_fan2_speed",
-                        "spd_lvl", "wifi_signal"})
+                        "spd_lvl", "wifi_signal", "sequence_id", "result", "reason", "home_flag", "sdcard",
+                        "nozzle_diameter", "nozzle_type"})
     p[k] = true;
+  JsonObject lr = p["lights_report"].createNestedObject();
+  lr["node"] = true;
+  lr["mode"] = true;
+  JsonObject xc = p.createNestedObject("xcam");
+  for (const char *k : {"first_layer_inspector", "spaghetti_detector", "buildplate_marker_detector", "print_halt",
+                        "halt_print_sensitivity"})
+    xc[k] = true;
+  p["ipcam"]["rtsp_url"] = true;
+  // answers to our requests in the other top-level objects
+  for (const char *top : {"system", "xcam", "info", "pushing"}) {
+    JsonObject o = gFilter.createNestedObject(top);
+    for (const char *k : {"command", "sequence_id", "result", "reason"}) o[k] = true;
+  }
   JsonObject h = p["hms"].createNestedObject();
   h["attr"] = true;
   h["code"] = true;
@@ -19,7 +33,9 @@ void bambuInitFilter() {
   JsonObject u = ams["ams"].createNestedObject();
   for (const char *k : {"id", "humidity", "humidity_raw", "temp", "dry_time"}) u[k] = true;
   JsonObject t = u["tray"].createNestedObject();
-  for (const char *k : {"id", "tray_type", "tray_color", "remain", "tray_sub_brands"}) t[k] = true;
+  for (const char *k : {"id", "tray_type", "tray_color", "remain", "tray_sub_brands", "tray_info_idx",
+                        "nozzle_temp_min", "nozzle_temp_max"})
+    t[k] = true;
   // H2D / H2C / X2D style (dual nozzle, packed temperatures)
   JsonObject dev = p.createNestedObject("device");
   JsonObject ex = dev.createNestedObject("extruder");
@@ -299,8 +315,13 @@ void BambuPrinter::handlePublish_(uint32_t rem, uint8_t flags) {
     if (e == DeserializationError::IncompleteInput && !tls_.connected()) return drop_("connection lost");
     return;  // not JSON we care about
   }
+  for (const char *top : {"system", "xcam", "info", "pushing"}) {
+    JsonObject o = (*gDoc)[top];
+    if (!o.isNull()) checkResult_(o);
+  }
   JsonObject p = (*gDoc)["print"];
   if (p.isNull()) return;
+  checkResult_(p);
   merge_(p);
   reports++;
 }
@@ -417,12 +438,32 @@ void BambuPrinter::merge_(JsonObject p) {
             }
             if (t.containsKey("tray_color")) x.color = String(t["tray_color"].as<const char *>()).substring(0, 6);
             if (t.containsKey("remain")) x.remain = toL(t["remain"], x.remain);
+            if (t.containsKey("tray_info_idx")) x.idx = t["tray_info_idx"].as<const char *>();
+            if (t.containsKey("nozzle_temp_min")) x.tmin = toL(t["nozzle_temp_min"], x.tmin);
+            if (t.containsKey("nozzle_temp_max")) x.tmax = toL(t["nozzle_temp_max"], x.tmax);
           }
           if (trays.size() > 1) a.ntray = 4;
         }
       }
     }
   }
+  // settings
+  if (p.containsKey("lights_report"))
+    for (JsonObject l : p["lights_report"].as<JsonArray>())
+      if (String(l["node"] | "") == "chamber_light") s.light = String(l["mode"] | "") == "on" ? 1 : 0;
+  JsonObject xc = p["xcam"];
+  if (!xc.isNull()) {
+    if (xc.containsKey("spaghetti_detector")) s.spaghetti = xc["spaghetti_detector"].as<bool>();
+    if (xc.containsKey("first_layer_inspector")) s.firstLayer = xc["first_layer_inspector"].as<bool>();
+    if (xc.containsKey("buildplate_marker_detector")) s.plateMarker = xc["buildplate_marker_detector"].as<bool>();
+    if (xc.containsKey("print_halt")) s.printHalt = xc["print_halt"].as<bool>();
+    if (xc.containsKey("halt_print_sensitivity")) s.haltSens = xc["halt_print_sensitivity"].as<const char *>();
+  }
+  if (p.containsKey("home_flag")) s.homeFlag = toL(p["home_flag"], s.homeFlag);
+  if (p.containsKey("sdcard")) s.sd = p["sdcard"].as<bool>();
+  if (p["ipcam"].containsKey("rtsp_url")) s.rtsp = p["ipcam"]["rtsp_url"].as<const char *>();
+  if (p.containsKey("nozzle_diameter")) s.nozzleDia = toF(p["nozzle_diameter"], s.nozzleDia);
+  if (p.containsKey("nozzle_type")) s.nozzleType = p["nozzle_type"].as<const char *>();
   dirty = true;
   if (s.gcode != oldG || s.err != oldE || s.nhms != oldH) urgent = true;
 }
@@ -432,6 +473,8 @@ void BambuPrinter::toJson(JsonObject o) const {
   o["name"] = cfg.name.length() ? cfg.name : cfg.serial;
   o["model"] = cfg.model;
   o["connected"] = connected && st.have;
+  o["ip"] = cfg.ip;     // for the Raspberry Pi hub (camera / files)
+  o["code"] = cfg.code;
   JsonObject s = o.createNestedObject("state");
   if (!st.have) return;
   s["gcode_state"] = st.gcode;
@@ -462,6 +505,18 @@ void BambuPrinter::toJson(JsonObject o) const {
   JsonArray h = s.createNestedArray("hms");
   for (int i = 0; i < st.nhms; i++) h.add(st.hms[i]);
   s["tray_now"] = st.trayNow;
+  if (st.light >= 0) s["light"] = st.light;
+  JsonObject xs = s.createNestedObject("xcam");
+  if (st.spaghetti >= 0) xs["spaghetti"] = st.spaghetti;
+  if (st.firstLayer >= 0) xs["first_layer"] = st.firstLayer;
+  if (st.plateMarker >= 0) xs["plate_marker"] = st.plateMarker;
+  if (st.printHalt >= 0) xs["halt"] = st.printHalt;
+  if (st.haltSens.length()) xs["sens"] = st.haltSens;
+  if (st.homeFlag >= 0) s["home_flag"] = st.homeFlag;
+  if (st.sd >= 0) s["sd"] = st.sd;
+  s["cam"] = hasJpegCamera() ? "jpeg" : (st.rtsp.length() && st.rtsp != "disable") ? "rtsp" : (st.rtsp == "disable" ? "rtsp_off" : "");
+  if (st.nozzleDia > 0) s["nozzle_dia"] = st.nozzleDia;
+  if (st.nozzleType.length()) s["nozzle_type"] = st.nozzleType;
   JsonArray am = s.createNestedArray("ams");
   for (int i = 0; i < st.nams; i++) {
     const AmsS &a = st.ams[i];
@@ -479,6 +534,78 @@ void BambuPrinter::toJson(JsonObject o) const {
       x["t"] = t.type;
       x["c"] = t.color.length() ? t.color : String("808080");
       if (t.remain >= 0) x["r"] = t.remain;
+      if (t.idx.length()) x["i"] = t.idx;
+      if (t.tmin) x["lo"] = t.tmin;
+      if (t.tmax) x["hi"] = t.tmax;
     }
   }
+}
+
+// ---------------------------------------------------------- commands ----
+bool BambuPrinter::hasJpegCamera() const {
+  String m = cfg.model;
+  m.toUpperCase();
+  return m.startsWith("A1") || m.startsWith("P1");
+}
+
+void BambuPrinter::pushAck_(long id, const String &status, const String &result) {
+  if (nAcks_ >= 8) return;
+  acks_[nAcks_++] = {id, status, result};
+}
+
+bool BambuPrinter::popAck(CmdAck &a) {
+  // commands the printer never answered count as sent after 8 s
+  for (auto &p : pend_)
+    if (p.id && millis() - p.at > 8000) {
+      pushAck_(p.id, "ok", "sent (no reply)");
+      p.id = 0;
+    }
+  if (!nAcks_) return false;
+  a = acks_[--nAcks_];
+  return true;
+}
+
+void BambuPrinter::checkResult_(JsonObject o) {
+  if (!o.containsKey("sequence_id") || !o.containsKey("result")) return;
+  long seq = toL(o["sequence_id"], 0);
+  if (!seq) return;
+  for (auto &p : pend_)
+    if (p.id == seq) {
+      String r = o["result"] | "";
+      String why = o["reason"] | "";
+      r.toLowerCase();
+      bool ok = r == "success" || r == "ok" || r == "";
+      pushAck_(p.id, ok ? "ok" : "error", why.length() ? why : r);
+      p.id = 0;
+    }
+}
+
+bool BambuPrinter::publish(long id, JsonObject payload) {
+  if (!connected) {
+    pushAck_(id, "error", lastErr.length() ? "printer offline: " + lastErr : "printer offline");
+    return false;
+  }
+  // every top-level object gets our id as sequence_id so the answer can be matched
+  for (JsonPair kv : payload)
+    if (kv.value().is<JsonObject>()) kv.value()["sequence_id"] = String(id);
+  String body;
+  serializeJson(payload, body);
+  std::string b;
+  putStr(b, "device/" + cfg.serial + "/request");
+  b.append(body.c_str(), body.length());
+  writePacket_(0x30, (const uint8_t *)b.data(), b.size());
+  Pend *slot = nullptr;
+  for (auto &p : pend_)
+    if (!p.id) { slot = &p; break; }
+  if (!slot) {  // all busy: reuse the oldest
+    slot = &pend_[0];
+    for (auto &p : pend_)
+      if (p.at < slot->at) slot = &p;
+  }
+  if (slot->id) pushAck_(slot->id, "ok", "sent");
+  slot->id = id;
+  slot->at = millis();
+  // fresh state shortly after a change
+  lastPushallMs_ = millis() - 15UL * 60 * 1000 + 1500;
+  return true;
 }

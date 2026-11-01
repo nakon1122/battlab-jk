@@ -47,7 +47,8 @@ button.sec{background:#2a3442}a{color:var(--b)}code{background:#0f141b;padding:2
 <input id=ssid style="margin-top:6px" placeholder="หรือพิมพ์ชื่อ"><label>รหัสผ่าน</label><input id=pass type=password placeholder="(ไม่เปลี่ยนถ้าเว้นว่าง)">
 <div style="display:flex;gap:10px;margin-top:12px"><button onclick=saveWifi()>บันทึกและรีสตาร์ต</button><button class=sec onclick=scan()>สแกน</button></div></div>
 
-<details class=card><summary>ขั้นสูง</summary><label>Cloud write key (ปกติไม่ต้องแก้)</label><input id=wkey placeholder="(ไม่เปลี่ยนถ้าเว้นว่าง)">
+<details class=card><summary>ขั้นสูง</summary><label>รหัสควบคุมออนไลน์ (ใช้ใน dashboard เวลาสั่งเครื่อง) — ตั้งใหม่ได้ที่นี่</label><input id=ctl placeholder="อย่างน้อย 6 ตัวอักษร">
+<div style="margin-top:10px"><button onclick="post('/api/ctl',{key:ctl.value}).then(d=>toast(d.error||'ตั้งรหัสควบคุมแล้ว'))">ตั้งรหัสควบคุม</button></div><label>Cloud write key (ปกติไม่ต้องแก้)</label><input id=wkey placeholder="(ไม่เปลี่ยนถ้าเว้นว่าง)">
 <div style="display:flex;gap:10px;margin-top:12px"><button onclick="post('/api/save',{wkey:wkey.value}).then(()=>toast('บันทึกแล้ว'))">บันทึก key</button>
 <button class=sec onclick="fetch('/api/pushall').then(()=>toast('ขอข้อมูลใหม่จากเครื่องพิมพ์แล้ว'))">ดึงข้อมูลใหม่</button>
 <button class=sec onclick="fetch('/api/restart');toast('กำลังรีสตาร์ต')">รีสตาร์ต</button></div></details>
@@ -72,7 +73,9 @@ ${p.used?`<label style="display:flex;gap:6px;align-items:center;margin-top:10px"
 function render(d){$('fw').textContent='v'+d.fw;$('dev').textContent=d.device+' · '+d.host;
  $('sys').innerHTML=`<div>Wi-Fi</div><div>${d.wifi?esc(d.ssid)+' ('+d.rssi+' dBm) · '+d.ip:'<span class="pill bad">ยังไม่ได้ต่อ</span>'}${d.ap?' · เปิด hotspot '+esc(d.ap_name):''}</div>
  <div>Cloud</div><div>${d.cloud_ok?'<span class="pill ok">OK</span> ส่งล่าสุด '+d.cloud_age+' วินาทีที่แล้ว':'<span class="pill bad">'+esc(d.cloud_err)+'</span>'}</div>
- <div>หน่วยความจำ</div><div>${Math.round(d.heap/1024)} KB ว่าง · ทำงาน ${Math.floor(d.uptime/3600)} ชม. ${Math.floor(d.uptime/60)%60} นาที</div>`;
+ <div>สั่งงานออนไลน์</div><div>${esc(d.remote)} · ทำคำสั่งแล้ว ${d.cmds_done}</div>
+ <div>กล้อง A1/P1</div><div>${esc(d.camera)}</div>
+ <div>หน่วยความจำ</div><div>${Math.round(d.heap/1024)} KB ว่าง${d.psram?' · PSRAM '+Math.round(d.psram/1048576)+' MB':' · ไม่มี PSRAM'} · ทำงาน ${Math.floor(d.uptime/3600)} ชม. ${Math.floor(d.uptime/60)%60} นาที</div>`;
  const url=d.dashboard+'#'+d.view_key;$('dash').href=url;$('dash').textContent=url;$('vkey').textContent=d.view_key;
  const used=d.printers.filter(p=>p.used);
  $('live').innerHTML=used.length?used.map(p=>`<div class=card><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(p.name||p.serial)}</b>${stPill(p)}</div>

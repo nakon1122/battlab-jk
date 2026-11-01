@@ -1,6 +1,6 @@
 #pragma once
 // Bambu LAN -> Cloud bridge / remote screen: shared settings.
-#define BB_FW_VERSION "1.1.0"
+#define BB_FW_VERSION "1.2.0"
 
 // Supabase project "data". The anon key is public by design: the tables are
 // closed to it, and the bambu_push / bambu_get functions check the bridge's
