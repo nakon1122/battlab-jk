@@ -70,12 +70,16 @@ h2{font-size:16px;margin:26px 0 10px;color:var(--muted);font-weight:600}
 .num{font-variant-numeric:tabular-nums;text-align:right}
 .devs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.dev{font-size:12px;color:var(--muted);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:5px 9px}
 .card.hl{box-shadow:0 0 0 2px var(--bambu)}
+.ctlbtn{display:block;width:100%;margin-top:12px;padding:9px;border-radius:9px;border:1px solid var(--line);background:var(--card2);color:var(--text);font:inherit;font-size:14px;cursor:pointer}
+.ctlbtn:hover{border-color:var(--bambu)}
 @media (max-width:700px){.li{grid-template-columns:6px minmax(0,1fr) 78px 40px 84px;gap:8px}.li .tk,.li .hide{display:none}.li .num{white-space:nowrap;font-size:13px}.li .st{font-size:11px}}
 @media (max-width:420px){.grid{grid-template-columns:1fr}.ev{grid-template-columns:70px 74px 1fr}}
 </style>
 </head>
 <body>
 <main id="app"></main>
+<div id="panel" hidden></div>
+<div id="toast"></div>
 <script>
 const CLOUD = "https://zpsxcdzkayqhzbdcdoed.supabase.co";
 const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpwc3hjZHprYXlxaHpiZGNkb2VkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM0NTMyODgsImV4cCI6MjEwOTAyOTI4OH0.aAXESY_MJ1IHlvF_8CVdVAGWdfz5ZM6ysoOki7kUv08";
@@ -138,6 +142,7 @@ function card(p){
   const spd={1:'Silent',2:'Standard',3:'Sport',4:'Ludicrous'}[s.spd]; if(spd&&busy(p)) fans.push('ความเร็ว '+spd);
   return `<div class="card ${p.online?'':'off'}" data-s="${esc(p.serial)}" style="--sc:var(${col})">
    <div class="top"><span class="name">${esc(p.name)}</span><span class="model">${esc(p.model||'')}</span><span class="pill">${txt}</span></div>
+   <button class="ctlbtn" data-open="${esc(p.serial)}">ควบคุม · กล้อง · ไฟล์</button>
    <div class="mid">${ring(p,col)}<div>
      <div class="task">${esc(s.subtask_name||'ไม่มีงาน')}</div>
      <div class="nums">
@@ -204,8 +209,8 @@ function render(){
   document.getElementById('chg').onclick = ev => { ev.preventDefault(); key=''; data=null; render(); };
   $app.querySelectorAll('[data-f]').forEach(x=>x.onclick=()=>{ filt=x.dataset.f; store.set('bambu_filter',filt); render(); });
   $app.querySelectorAll('[data-v]').forEach(x=>x.onclick=()=>{ view=x.dataset.v; store.set('bambu_view',view); render(); });
-  $app.querySelectorAll('.li').forEach(x=>x.onclick=()=>{ focusSerial=x.dataset.s; view='cards'; filt='all'; render();
-    const c=$app.querySelector(`.card[data-s="${CSS.escape(focusSerial)}"]`); if(c){ c.classList.add('hl'); c.scrollIntoView({behavior:'smooth',block:'center'}); } });
+  $app.querySelectorAll('.li,[data-open]').forEach(x=>x.onclick=()=>openPanel(x.dataset.s||x.dataset.open));
+  if (typeof panelRefresh==='function') panelRefresh();
 }
 function askKey(){
   $app.innerHTML = `<div class="keybox"><h1 style="margin:0 0 6px;font-size:20px"><b style="color:var(--bambu)">Bambu</b> Monitor</h1>
@@ -228,5 +233,6 @@ async function load(){
 render(); load(); setInterval(load, 5000);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
 </script>
+<script src="control.js"></script>
 </body>
 </html>
