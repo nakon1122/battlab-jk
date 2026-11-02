@@ -46,8 +46,8 @@ void radioSetMaxPower(bool on); // MAX: BLE chip maximum + Wi-Fi 19.5 dBm
 
 // BMS writes (validated, then queued to the Bluetooth task). Return nullptr
 // when accepted, otherwise a short reason.
-const char *bmsWriteParam(int idx, float value);
-const char *bmsSetSwitch(int which, bool on);
+const char *bmsWriteParam(int idx, float value, int addr = -1);
+const char *bmsSetSwitch(int which, bool on, int addr = -1);
 
 // Actions shared by the web API and the on-screen UI (main.cpp).
 void bmsScan();

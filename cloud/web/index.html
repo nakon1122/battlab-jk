@@ -79,6 +79,13 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 .info div{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}.info div span{color:var(--muted)}
 .steps{margin:8px 0 0;padding-left:20px}.steps li{margin:4px 0}
 /* cells */
+.pkg{display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:10px;margin-top:10px}
+.pk{background:var(--card2);border:1px solid var(--line);border-radius:16px;padding:12px;cursor:pointer;transition:transform .15s}
+.pk:hover{transform:translateY(-2px)}.pk.stale{opacity:.5}
+.pk .hd{display:flex;justify-content:space-between;align-items:center;font-weight:800}.pk .hd small{font-weight:600;color:var(--muted);font-size:11px}
+.pk .bar{height:8px;border-radius:6px;background:var(--line);overflow:hidden;margin:8px 0 6px}.pk .bar i{display:block;height:100%;border-radius:6px}
+.pk .big2{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}.pk .kv2{font-size:12.5px;color:var(--muted);line-height:1.55;font-variant-numeric:tabular-nums}
+.pk .kv2 b{color:var(--text)}.pk .mos{display:flex;gap:4px;margin-top:6px}.pk .mos span{font-size:10.5px;padding:2px 7px;border-radius:10px;background:var(--line);color:var(--muted);font-weight:700}.pk .mos span.on{background:color-mix(in srgb,var(--good) 22%,transparent);color:var(--good)}
 .cells{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
 .cell{border-radius:12px;padding:8px 10px;border:1px solid var(--line);font-variant-numeric:tabular-nums}
 .cell span{font-size:12px;color:var(--muted)}.cell b{display:block;font-size:17px}.cell em{font-style:normal;font-size:12px;color:var(--muted)}
@@ -237,7 +244,7 @@ input:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 60%,t
  <div id="tab_ov"></div>
  <div id="tab_cells" class="hide"></div>
  <div id="tab_hist" class="hide">
-  <div class="card"><div class="chips" id="rangeChips"></div><div class="chips" id="metricChips" style="margin-top:10px"></div></div>
+  <div class="card"><div class="chips hide" id="packHChips" style="margin-bottom:10px;flex-wrap:wrap;overflow:visible"></div><div class="chips" id="rangeChips"></div><div class="chips" id="metricChips" style="margin-top:10px"></div></div>
   <div id="charts"></div>
   <div class="card" id="energyCard"></div>
   <div class="card"><div class="row wrap"><button class="soft" id="btnCsv">ส่งออก CSV</button><button class="soft" id="btnTable">ดูเป็นตาราง</button></div><div id="tbl" class="tblwrap hide" style="margin-top:12px"></div></div>
@@ -284,6 +291,7 @@ function dset(d){const s=(d&&d.settings)||{};const o={...DSET_DEF,...s,alerts:{.
 async function saveDset(dev,s){dev.settings=s;if(dev.demo){ls.set('bl_demo_set',s);return true}const {error}=await sb.from('devices').update({settings:s}).eq('id',dev.id);if(error){toast('บันทึกไม่สำเร็จ: '+error.message);return false}return true}
 
 // ---------- state
+let packSel=null,packH=null;
 let demo=false,devs=[],latest={},cur=null,tab='ov',pollT=null,listT=null,rt=null,rtOn=false,hist=[],charts=[],energyToday=null,energyAt=0,showTable=false;
 const ROUTE=()=>location.hash.replace(/^#\/?/,'').split('/');
 function go(h){if(location.hash!=='#'+h)location.hash=h;else route()}
@@ -303,7 +311,7 @@ function demoAt(t){// t seconds
 function demoExtra(){const S=demoState();return {chg:S.chg,dsg:S.dsg,jk:{v:S.jk,sw:[S.chg,S.dsg,S.bal]},devs:S.devs||undefined,wscan:S.wscan||undefined,cfg:{board:'cyd35',remote:1,ota:1,led:S.led,ap:S.ap,tx:S.tx,ssid:S.ssid,ip:'192.168.1.57',wrssi:-55,note:S.note||undefined,mac:'c8:47:80:12:34:56',proto:'AUTO',auto:true,atype:0,fam:1,scanning:false,lw:'',disp:S.disp}}}
 function demoHist(from,to,b){const out=[];for(let t=Math.ceil(from/1000/b)*b;t<to/1000;t+=b){const d=demoAt(t);out.push({t:new Date(t*1000).toISOString(),soc:d.soc,voltage:d.v,current:d.i,power:d.p,temp:d.t1,mos:d.mos,cell_min:d.cmin,cell_max:d.cmax,n:Math.max(1,Math.round(b/60))})}return out}
 async function fetchLatest(dev){if(dev.ble)return latest[BLE_ID]||null;if(dev.demo)return {ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};const {data}=await sb.from('latest').select('ts,data').eq('device_id',dev.id).maybeSingle();return data}
-async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);const {data,error}=await sb.rpc('history_buckets',{p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}
+async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);if(packH!=null){const {data,error}=await sb.rpc('pack_history',{p_device:dev.id,p_addr:packH,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return (data||[]).map(r=>({...r,power:num(r.voltage)&&num(r.current)?r.voltage*r.current:null,mos:null}))}const {data,error}=await sb.rpc('history_buckets',{p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}
 
 // ---------- derived values
 function chem(s,x){if(s.chem!=='auto')return s.chem;if(!num(x.cmax))return 'LFP';return x.cmax<2.9?'LTO':x.cmax<3.75?'LFP':'NMC'}
@@ -311,11 +319,28 @@ const CHEM={LFP:{lo:2.8,hi:3.65,n:'LiFePO4'},NMC:{lo:3.0,hi:4.2,n:'Li-ion NMC'},
 function derive(l,s){const d=(l&&l.data)||{},x={live:false};if(!l)return x;
  x.age=(Date.now()-new Date(l.ts))/1000;x.online=x.age<150;x.live=x.online&&num(d.v);
  const c=(d.cells||[]).filter(v=>v>0);if(c.length){x.cells=c;x.cmin=Math.min(...c);x.cmax=Math.max(...c);x.cavg=c.reduce((a,b)=>a+b,0)/c.length;x.delta=Math.round((x.cmax-x.cmin)*1000);x.imin=c.indexOf(x.cmin)+1;x.imax=c.indexOf(x.cmax)+1}
+ else if(num(d.cmin)&&num(d.cmax)&&d.cmax>0){x.cmin=d.cmin;x.cmax=d.cmax;x.delta=Math.round((d.cmax-d.cmin)*1000)}
  x.chem=chem(s,x);
  x.full=s.capAh>0?s.capAh:(num(d.cap)&&num(d.soc)&&d.soc>3?d.cap/(d.soc/100):null);
  const I=d.i;x.mode=!num(I)?'idle':I>0.3?'chg':I<-0.3?'dsg':'idle';
  if(x.full&&num(d.cap)){if(x.mode==='chg')x.eta=Math.max(0,x.full-d.cap)/I;else if(x.mode==='dsg')x.eta=d.cap/-I}
  return x}
+function packsOf(d){return Array.isArray(d&&d.packs)&&d.packs.length?d.packs.slice().sort((a,b)=>a.a-b.a):null}
+function packL(l,p){return {ts:new Date(new Date(l.ts).getTime()-(p.age||0)*1000).toISOString(),data:{...p,p:num(p.v)&&num(p.i)?p.v*p.i:null}}}
+function packName(p,d){return 'ลูก #'+p.a+(p.a===0&&d.busm===1?' (หลัก)':'')}
+function packChips(PK,d,sel,attr){return '<div class="chips" style="margin-bottom:10px;flex-wrap:wrap;overflow:visible">'+PK.map(p=>'<span class="chip'+(p.a===sel?' on':'')+'" '+attr+'="'+p.a+'">'+esc(packName(p,d))+'</span>').join('')+'</div>'}
+function bankHtml(d,l){const PK=packsOf(d);if(!PK)return '';const s=dset(cur);let lo=null,hi=null;
+ const cards=PK.map(p=>{const x=derive(packL(l,p),s),soc=num(p.soc)?p.soc:0,stale=(p.age||0)>90;
+  if(x.cells){if(!lo||x.cmin<lo.v)lo={v:x.cmin,a:p.a,k:x.imin};if(!hi||x.cmax>hi.v)hi={v:x.cmax,a:p.a,k:x.imax}}
+  return '<div class="pk'+(stale?' stale':'')+'" data-pk="'+p.a+'"><div class="hd"><span>🔋 '+esc(packName(p,d))+'</span><small>'+(stale?'ไม่อัปเดต '+dur(p.age):x.mode==='chg'?'⚡ ชาร์จ':x.mode==='dsg'?'🔻 จ่าย':'พัก')+'</small></div>'+
+  '<div class="bar"><i style="width:'+Math.max(2,Math.min(100,soc))+'%;background:'+socColor(soc)+'"></i></div>'+
+  '<div class="big2">'+Math.round(soc)+'<span class="muted" style="font-size:13px">%</span> <span style="font-size:15px">'+fmt(p.v,2)+' V</span></div>'+
+  '<div class="kv2"><b>'+fmt(p.i,1)+'</b> A · <b>'+fmt(num(p.v)&&num(p.i)?p.v*p.i:null,0)+'</b> W<br>'+(x.cells?x.cells.length+'S · Δ <b>'+x.delta+'</b> mV<br>':'')+'🌡 <b>'+fmtT(p.t1)+'</b>'+tU()+' · MOS <b>'+fmtT(p.mos)+'</b>'+tU()+(num(p.cyc)?'<br>'+p.cyc+' รอบ':'')+'</div>'+
+  '<div class="mos"><span class="'+(p.chg?'on':'')+'">CHG</span><span class="'+(p.dsg?'on':'')+'">DSG</span></div></div>'}).join('');
+ const socs=PK.filter(p=>num(p.soc)).map(p=>p.soc);
+ return '<div class="card"><div class="row"><h3 style="margin:0">แบตแต่ละลูก · '+PK.length+' ลูก</h3><span class="nf tiny muted">'+(d.busm===1?'ฟังจากลูกหลัก DIP 0':'บอร์ดถามผ่าน RS485')+'</span></div>'+
+  '<div class="info" style="margin-top:10px"><div><span>SOC ต่ำสุด–สูงสุด</span><b>'+(socs.length?Math.round(Math.min(...socs))+'–'+Math.round(Math.max(...socs))+' %':'--')+'</b></div><div><span>เซลล์ต่ำสุด</span><b>'+(lo?lo.v.toFixed(3)+' V (#'+lo.a+' เซลล์ '+lo.k+')':'--')+'</b></div><div><span>เซลล์สูงสุด</span><b>'+(hi?hi.v.toFixed(3)+' V (#'+hi.a+' เซลล์ '+hi.k+')':'--')+'</b></div><div><span>ความจุคงเหลือรวม</span><b>'+(num(d.cap)?fmt(d.cap,0)+' Ah':'--')+'</b></div></div>'+
+  '<div class="pkg">'+cards+'</div><div class="tiny muted" style="margin-top:8px">แตะการ์ดเพื่อดูเซลล์ทุกก้อนของลูกนั้น</div></div>'}
 function evalAlerts(dev,l){const a=dset(dev).alerts,out=[];if(!a.on||!l)return out;const d=l.data||{},x=derive(l,dset(dev));
  if(a.offlineMin>0&&x.age>a.offlineMin*60)out.push({k:'off',t:'ออฟไลน์เกิน '+a.offlineMin+' นาที',lv:'bad'});
  if(!x.live)return out;
@@ -377,7 +402,7 @@ function renderList(){
  devs.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
  $('fleet').innerHTML='<div class="row wrap"><div><div class="big">อุปกรณ์ของฉัน</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b></div>':'')+'</div>';
  const cards=devs.map(d=>{const l=latest[d.id],s=dset(d),[st,txt]=statusOf(l),al=evalAlerts(d,l);trackAlerts(d,al);const x=l&&l.data||{};const live=st==='on';
-  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)?'<span class="abadge" style="background:var(--s1)">มีอัปเดต</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?'<span class="batt" style="--bc:'+socColor(x.soc)+'"><i style="width:calc('+Math.max(4,Math.min(100,x.soc))+'% - 4px)"></i></span><span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
+  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)?'<span class="abadge" style="background:var(--s1)">มีอัปเดต</span>':'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?'<span class="batt" style="--bc:'+socColor(x.soc)+'"><i style="width:calc('+Math.max(4,Math.min(100,x.soc))+'% - 4px)"></i></span><span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
   (live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span><b>'+fmt(x.p,0)+'</b> W</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'});
  if(!demo)cards.push('<div class="card dcard" data-id="'+DEMO_ID+'" style="border-style:dashed"><div class="row"><span class="ic nf">✨</span><div><b>ดูตัวอย่างแดชบอร์ด</b><div class="small muted">ข้อมูลจำลอง ให้เห็นทุกฟังก์ชัน</div></div></div></div>');
  $('devList').innerHTML=devs.length||!demo?cards.join(''):'';
@@ -395,7 +420,7 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
-function openDev(dev,t){if(dev.ble&&!['ov','cells','ctl'].includes(t))t='ctl';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!dev.ble&&!['ov','cells','ctl'].includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;energyAt=0;energyToday=null;hist=[]}tab=t;show('vDev');
+function openDev(dev,t){if(dev.ble&&!['ov','cells','ctl'].includes(t))t='ctl';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!dev.ble&&!['ov','cells','ctl'].includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
  ctlKey='';renderDev();if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
@@ -441,11 +466,12 @@ function renderOv(){const l=latest[cur.id],s=dset(cur),d=l&&l.data||{},x=derive(
    '<div><div class="status"><span class="flow '+x.mode+'"></span>'+st+(x.mode!=='idle'&&num(d.p)?' '+Math.abs(d.p).toFixed(0)+' W':'')+'</div>'+
    '<div class="muted" style="margin-top:4px">'+(x.mode==='chg'&&num(x.eta)?'เต็มในอีกประมาณ <b style="color:var(--text)">'+hm(x.eta)+'</b>':x.mode==='dsg'&&num(x.eta)?'ใช้ได้อีกประมาณ <b style="color:var(--text)">'+hm(x.eta)+'</b>':'')+'</div>'+
    '<div style="margin-top:10px;font-size:28px;font-weight:800;font-variant-numeric:tabular-nums">'+fmt(d.v,2)+' <span class="muted" style="font-size:16px">V</span> &nbsp; '+fmt(d.i,1)+' <span class="muted" style="font-size:16px">A</span></div>'+
-   '<div class="pills"><span class="pill '+(d.chg?'on':'off')+'">ชาร์จ '+(d.chg?'เปิด':'ปิด')+'</span><span class="pill '+(d.dsg?'on':'off')+'">จ่ายไฟ '+(d.dsg?'เปิด':'ปิด')+'</span><span class="pill">'+esc(CHEM[x.chem].n)+'</span>'+(x.cells?'<span class="pill">'+x.cells.length+'S</span>':'')+'</div>'+flowHtml(x.mode,d)+'</div></div>';
+   '<div class="pills"><span class="pill '+(d.chg?'on':'off')+'">ชาร์จ '+(d.chg?'เปิด':'ปิด')+'</span><span class="pill '+(d.dsg?'on':'off')+'">จ่ายไฟ '+(d.dsg?'เปิด':'ปิด')+'</span><span class="pill">'+esc(CHEM[x.chem].n)+'</span>'+(x.cells?'<span class="pill">'+x.cells.length+'S</span>':'')+(packsOf(d)?'<span class="pill on">ทั้งแบงก์ '+packsOf(d).length+' ลูก</span>':'')+'</div>'+flowHtml(x.mode,d)+'</div></div>';
   const tiles=s.order.filter(k=>!s.hidden.includes(k)).map(k=>tileHtml(k,d,x,s)).join('');
   h+='<div class="card"><div class="row"><h3 style="margin:0">ค่าทั้งหมด</h3><button class="ghost nf" style="padding:6px 12px;font-size:13px" onclick="go(\'d/'+esc(cur.id)+'/set\')">ปรับแต่ง</button></div><div class="tiles" style="margin-top:10px">'+tiles+'</div></div>';
   if(x.cells)h+='<div class="card" style="cursor:pointer" onclick="go(\'d/'+esc(cur.id)+'/cells\')"><div class="row"><h3 style="margin:0">เซลล์ '+x.cells.length+' ก้อน</h3><span class="nf small muted">ดูทั้งหมด ›</span></div>'+cellDevSvg(x,120)+'<div class="small muted">ต่ำสุด '+x.cmin.toFixed(3)+' V (#'+x.imin+') · สูงสุด '+x.cmax.toFixed(3)+' V (#'+x.imax+') · Δ '+x.delta+' mV · '+balanceTxt(x.delta)+'</div></div>'}
- h+=infoHtml(d,l);$('tab_ov').innerHTML=h}
+ if(x.live)h+=bankHtml(d,l);
+ h+=infoHtml(d,l);$('tab_ov').innerHTML=h;$('tab_ov').querySelectorAll('[data-pk]').forEach(e=>e.onclick=()=>{packSel=+e.dataset.pk;go('d/'+cur.id+'/cells')})}
 const IC_SUN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>',IC_BAT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/></svg>',IC_LOAD='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>';
 function flowHtml(mode,d){const w=num(d.p)?Math.abs(d.p).toFixed(0)+' W':'';return mode==='chg'?'<div class="pflow chg">'+IC_BAT+'<i></i>'+IC_SUN+'<span>ชาร์จเข้า '+w+'</span></div>':mode==='dsg'?'<div class="pflow dsg">'+IC_BAT+'<i></i>'+IC_LOAD+'<span>จ่ายออก '+w+'</span></div>':'<div class="pflow idle">'+IC_BAT+'<i></i><span>พัก</span></div>'}
 function balanceTxt(dm){return dm<=10?'สมดุลดีมาก':dm<=30?'สมดุลดี':dm<=60?'พอใช้':'ควรบาลานซ์'}
@@ -453,20 +479,23 @@ function balanceTxt(dm){return dm<=10?'สมดุลดีมาก':dm<=30?'�
 function cellDevSvg(x,H){const c=x.cells,dev=c.map(v=>(v-x.cavg)*1000),m=Math.max(5,...dev.map(Math.abs)),half=H/2-6;
  return '<div class="cdev" style="height:'+H+'px" role="img" aria-label="ความต่างแรงดันแต่ละเซลล์จากค่าเฉลี่ย"><div class="ax"><span>+'+m.toFixed(0)+'</span><span>เฉลี่ย</span><span>−'+m.toFixed(0)+'</span></div><div class="bars">'+
   dev.map((d,k)=>{const h=Math.max(2,Math.abs(d)/m*half);return '<div class="b" title="เซลล์ '+(k+1)+': '+c[k].toFixed(3)+' V ('+(d>=0?'+':'')+d.toFixed(1)+' mV)"><i style="height:'+h+'px;'+(d>=0?'bottom:50%;background:var(--s2);border-radius:4px 4px 0 0':'top:50%;background:var(--s1);border-radius:0 0 4px 4px')+'"></i></div>'}).join('')+'</div></div>'}
-function renderCells(){const l=latest[cur.id],s=dset(cur),x=derive(l,s);
- if(!x.cells){$('tab_cells').innerHTML='<div class="card empty"><div class="e">🔋</div><b>ยังไม่มีข้อมูลเซลล์</b><div class="small muted">ต้องเชื่อม BMS ก่อน</div></div>';return}
+function renderCells(){let l=latest[cur.id];const s=dset(cur),d0=l&&l.data||{},PK=packsOf(d0);let pre='';
+ if(PK){if(packSel==null||!PK.some(p=>p.a===packSel))packSel=PK[0].a;pre='<div class="card"><h3>เลือกลูก</h3>'+packChips(PK,d0,packSel,'data-cp')+'</div>';l=packL(l,PK.find(p=>p.a===packSel))}
+ const x=derive(l,s);
+ if(!x.cells){$('tab_cells').innerHTML=pre+'<div class="card empty"><div class="e">🔋</div><b>ยังไม่มีข้อมูลเซลล์</b><div class="small muted">ต้องเชื่อม BMS ก่อน</div></div>';return}
  const ch=CHEM[x.chem],m=Math.max(5,...x.cells.map(v=>Math.abs(v-x.cavg)*1000));
  const stats=[['จำนวน',x.cells.length+' เซลล์'],['ต่ำสุด',x.cmin.toFixed(3)+' V (#'+x.imin+')'],['สูงสุด',x.cmax.toFixed(3)+' V (#'+x.imax+')'],['เฉลี่ย',x.cavg.toFixed(3)+' V'],['ส่วนต่าง Δ',x.delta+' mV'],['ความสมดุล',balanceTxt(x.delta)]];
- let h='<div class="card"><div class="info">'+stats.map(r=>'<div><span>'+r[0]+'</span><b>'+r[1]+'</b></div>').join('')+'</div></div>';
+ let h=pre+'<div class="card"><div class="info">'+stats.map(r=>'<div><span>'+r[0]+'</span><b>'+r[1]+'</b></div>').join('')+'</div></div>';
  h+='<div class="card"><h3>ความต่างจากค่าเฉลี่ย (mV)</h3><div class="leg"><span><i style="background:var(--s2)"></i>สูงกว่าเฉลี่ย</span><span><i style="background:var(--s1)"></i>ต่ำกว่าเฉลี่ย</span></div>'+cellDevSvg(x,170)+'</div>';
  h+='<div class="card"><div class="row"><h3 style="margin:0">แรงดันแต่ละเซลล์</h3><span class="nf tiny muted">'+ch.n+' · ช่วง '+ch.lo+'–'+ch.hi+' V</span></div><div class="cells" style="margin-top:10px">'+x.cells.map((v,k)=>{const dv=(v-x.cavg)*1000,a=Math.min(.45,Math.abs(dv)/m*.45),bg=dv>=0?'rgba(217,89,38,'+a+')':'rgba(57,135,229,'+a+')',fill=Math.max(0,Math.min(100,(v-ch.lo)/(ch.hi-ch.lo)*100));
   return '<div class="cell'+(k+1===x.imax?' mx':k+1===x.imin?' mn':'')+'" style="background:linear-gradient(0deg,'+bg+','+bg+'),var(--card2)"><span>#'+(k+1)+(k+1===x.imax?' ▲ สูงสุด':k+1===x.imin?' ▼ ต่ำสุด':'')+'</span><b>'+v.toFixed(3)+'</b><em>'+(dv>=0?'+':'')+dv.toFixed(0)+' mV · '+fill.toFixed(0)+'%</em></div>'}).join('')+'</div></div>';
- $('tab_cells').innerHTML=h}
+ $('tab_cells').innerHTML=h;$('tab_cells').querySelectorAll('[data-cp]').forEach(e=>e.onclick=()=>{packSel=+e.dataset.cp;renderCells()})}
 
 // ---------- history
 const RANGES=[[1,'1 ชม.',60],[6,'6 ชม.',60],[24,'24 ชม.',120],[168,'7 วัน',900],[720,'30 วัน',3600]];
 const METRICS={soc:{n:'SOC',u:'%',dec:0},v:{n:'แรงดัน',u:'V',dec:2},i:{n:'กระแส',u:'A',dec:1},p:{n:'กำลังไฟ',u:'W',dec:0},t:{n:'อุณหภูมิ',u:'',dec:1},d:{n:'เซลล์ต่างกัน',u:'mV',dec:0}};
-function chips(){if(!RANGES.some(r=>r[0]===P.range))P.range=24;$('rangeChips').innerHTML=RANGES.map(r=>'<span class="chip'+(r[0]===P.range?' on':'')+'" data-r="'+r[0]+'">'+r[1]+'</span>').join('');
+function chips(){if(!RANGES.some(r=>r[0]===P.range))P.range=24;
+ {const l=cur&&latest[cur.id],PK=packsOf(l&&l.data),e=$('packHChips');e.classList.toggle('hide',!PK);if(PK){if(packH!=null&&!PK.some(p=>p.a===packH))packH=null;e.innerHTML='<span class="chip'+(packH==null?' on':'')+'" data-ph="">ทั้งแบงก์</span>'+PK.map(p=>'<span class="chip'+(p.a===packH?' on':'')+'" data-ph="'+p.a+'">'+esc(packName(p,l.data))+'</span>').join('');e.querySelectorAll('[data-ph]').forEach(c=>c.onclick=()=>{packH=c.dataset.ph===''?null:+c.dataset.ph;loadHistory()})}else packH=null}$('rangeChips').innerHTML=RANGES.map(r=>'<span class="chip'+(r[0]===P.range?' on':'')+'" data-r="'+r[0]+'">'+r[1]+'</span>').join('');
  $('metricChips').innerHTML=Object.entries(METRICS).map(([k,m])=>'<span class="chip'+(P.metrics.includes(k)?' on':'')+'" data-m="'+k+'">'+m.n+'</span>').join('');
  $('rangeChips').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{P.range=+c.dataset.r;ls.set('bl_prefs',P);loadHistory()});
  $('metricChips').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{const k=c.dataset.m;P.metrics=P.metrics.includes(k)?P.metrics.filter(x=>x!==k):[...P.metrics,k];ls.set('bl_prefs',P);chips();drawCharts()})}
@@ -580,18 +609,22 @@ function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length
 function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
 function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>🔵 '+esc(c.name||'')+'</b><div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
 function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
- const key=JSON.stringify([c,d.jk,d.pa,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit,d.fw,!!MAN]);const ae=document.activeElement;
+ const PK=packsOf(d);let pkS=null;if(PK){if(packSel==null||!PK.some(p=>p.a===packSel))packSel=PK[0].a;pkS=PK.find(p=>p.a===packSel)}
+ const RO=!!PK&&d.busm===1,J=pkS?pkS.jk:d.jk,PA=pkS?{a:pkS.a}:{};
+ const key=JSON.stringify([c,J,pkS&&[pkS.a,pkS.chg,pkS.dsg],PK&&PK.map(p=>p.a),d.busm,d.pa,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit,d.fw,!!MAN]);const ae=document.activeElement;
  if(key===ctlKey&&$('cmdLog'))return;if(ae&&$('tab_ctl').contains(ae)&&/INPUT|SELECT/.test(ae.tagName)&&$('cmdLog'))return;ctlKey=key;
  if(!l||!c){$('tab_ctl').innerHTML='<div class="card empty"><div class="e">🛰️</div><b>'+(!l?'บอร์ดยังไม่เคยส่งข้อมูลขึ้น cloud':'ต้องอัปเดตเฟิร์มแวร์เป็น 2.1.0 ขึ้นไปก่อน')+'</b><div class="small muted">'+(!l?'ตั้ง Wi-Fi บ้านบนบอร์ดก่อน':'เฟิร์มแวร์ตอนนี้: '+esc(d.fw||'--')+' · ใช้ไฟล์ UPDATE_*.bat เพื่ออัปเดตโดยไม่ลบการตั้งค่า')+'</div></div><div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';renderCmdLog();return}
  const off=!x.online,fam=c.fam||0,famN=['ยังไม่รู้จัก','JK','ANT','JBD'][fam]||'?',isCyd=c.board==='cyd35';
  let h=bleInfoHtml(c)+'<div class="card"><div class="row"><div><b>'+(off?'⛔ บอร์ดออฟไลน์ คำสั่งจะรอจนบอร์ดกลับมา (หมดอายุใน 5 นาที)':'🟢 พร้อมรับคำสั่ง')+'</b><div class="small muted">'+(isCyd?'ESP32 CYD 3.5"':'ESP32-S3')+(cur.ble?' · เชื่อมตรงผ่านบลูทูธ':' · ตอบสนองภายใน ~'+(isCyd?'5':'3')+' วินาทีขณะเปิดหน้านี้')+' · เฟิร์มแวร์ '+esc(d.fw||'')+'</div>'+(c.note?'<div class="small" style="color:var(--warn);margin-top:4px">'+esc(c.note)+'</div>':'')+'</div><button class="ghost nf" id="cPing" style="padding:8px 12px">ทดสอบ</button></div></div>';
  // MOS
- const sw=d.jk&&d.jk.sw,chg=sw?sw[0]:d.chg,dsg=sw?sw[1]:d.dsg,bal=sw?sw[2]:null,noBms=!fam||!x.live;
- h+='<div class="card"><h3>สวิตช์ MOS · BMS '+famN+'</h3>'+(noBms?'<div class="small muted" style="margin-bottom:6px">ต้องเชื่อม BMS ก่อน</div>':'')+
+ const sw=J&&J.sw,chg=sw?sw[0]:pkS?pkS.chg:d.chg,dsg=sw?sw[1]:pkS?pkS.dsg:d.dsg,bal=sw?sw[2]:null,noBms=!fam||!x.live||RO;
+ if(PK)h+='<div class="card"><h3>เลือกลูกที่จะดู/ตั้งค่า</h3>'+packChips(PK,d,packSel,'data-sp')+(RO?'<div class="small" style="color:var(--warn)">🔒 อ่านอย่างเดียว: มีลูกหลัก (DIP 0) คุมสาย RS485 อยู่ บอร์ดจึงแค่ฟังเพื่อไม่ให้ชนกัน · ตั้งค่าแต่ละลูกผ่านแอป JK หรือเปลี่ยนเป็นโหมด "บอร์ดถามเอง" (ต้องไม่มีลูกไหนตั้ง DIP 0)</div>':'<div class="small muted">คำสั่งด้านล่างจะส่งไปที่ '+esc(packName(pkS,d))+' เท่านั้น</div>')+'</div>';
+ h+='<div class="card"><h3>สวิตช์ MOS · BMS '+famN+(pkS?' · '+esc(packName(pkS,d)):'')+'</h3>'+(noBms&&!RO?'<div class="small muted" style="margin-bottom:6px">ต้องเชื่อม BMS ก่อน</div>':'')+
   tgl('cChg','ชาร์จ (Charge)','ตัด/ต่อการชาร์จเข้าแบต',chg,noBms)+tgl('cDsg','จ่ายไฟ (Discharge)','ปิดแล้วไฟออกโหลดจะดับทันที',dsg,noBms)+(fam===3?'':tgl('cBal','บาลานซ์ (Balancer)',bal==null?'สถานะปัจจุบันไม่ทราบ (ANT)':'บาลานซ์เซลล์อัตโนมัติ',bal,noBms))+'</div>';
  // JK params
- h+='<div class="card"><div class="row"><h3 style="margin:0">พารามิเตอร์ BMS</h3><button class="ghost nf" id="cRead" style="padding:6px 12px;font-size:13px" '+(noBms?'disabled':'')+'>อ่านค่าใหม่</button></div>';
- if(fam===1&&d.jk&&d.jk.v){h+=(c.lw?'<div class="small muted" style="margin-top:6px">เขียนล่าสุด: '+esc(c.lw)+'</div>':'')+JKP.map((p,i)=>{const v=d.jk.v[i];return '<div class="prm"><div>'+p[1]+'<small>'+p[0]+' · '+p[4]+'–'+p[5]+' '+p[2]+'</small></div><input type="number" id="pv'+i+'" step="'+p[3]+'" min="'+p[4]+'" max="'+p[5]+'" value="'+(num(v)?v.toFixed(p[6]):'')+'"><button class="soft" data-p="'+i+'">ตั้ง</button></div>'}).join('')}
+ h+='<div class="card"><div class="row"><h3 style="margin:0">พารามิเตอร์ BMS'+(pkS?' · '+esc(packName(pkS,d)):'')+'</h3><button class="ghost nf" id="cRead" style="padding:6px 12px;font-size:13px" '+(noBms?'disabled':'')+'>อ่านค่าใหม่</button></div>';
+ if(fam===1&&J&&J.v){h+=(c.lw?'<div class="small muted" style="margin-top:6px">เขียนล่าสุด: '+esc(c.lw)+'</div>':'')+JKP.map((p,i)=>{const v=J.v[i];return '<div class="prm"><div>'+p[1]+'<small>'+p[0]+' · '+p[4]+'–'+p[5]+' '+p[2]+'</small></div><input type="number" id="pv'+i+'" step="'+p[3]+'" min="'+p[4]+'" max="'+p[5]+'" value="'+(num(v)?v.toFixed(p[6]):'')+'" '+(RO?'disabled':'')+'><button class="soft" data-p="'+i+'" '+(RO?'disabled':'')+'>ตั้ง</button></div>'}).join('')}
+ else if(fam===1&&PK)h+='<div class="small muted" style="margin-top:8px">ยังไม่ได้รับค่าตั้งของลูกนี้'+(RO?' (ลูกหลักส่งค่าตั้งเป็นระยะ รอสักครู่)':' (กด "อ่านค่าใหม่")')+'</div>';
  else if((fam===2||fam===3)&&d.pa&&Array.isArray(d.pa.v)&&typeof BMS_PARAMS!=='undefined'){const T=BMS_PARAMS[fam]||[];
   h+=(fam===2?'<div class="small" style="color:var(--warn);margin-top:8px">⚠️ ANT: อ่านค่าได้ครบ ส่วนการเขียนเป็นโหมดทดลอง ทุกครั้งที่ตั้งค่า บอร์ดจะอ่านกลับมาตรวจว่า BMS รับค่าจริงไหม (ดูผลที่บรรทัด "เขียนล่าสุด")</div>':'<div class="small muted" style="margin-top:8px">JBD / Xiaoxiang: เขียนลง EEPROM ของ BMS แล้วอ่านกลับมาตรวจทุกครั้ง</div>')+(c.lw?'<div class="small muted" style="margin-top:6px">เขียนล่าสุด: '+esc(c.lw)+'</div>':'');
   h+=T.map((p,i)=>{const v=d.pa.v[i],has=v!==null&&v!==undefined;return '<div class="prm"><div>'+esc(p[2])+'<small>'+esc(p[1])+' · '+p[5]+'–'+p[6]+' '+esc(p[3])+'</small></div><input type="number" id="qv'+i+'" step="'+p[4]+'" min="'+p[5]+'" max="'+p[6]+'" value="'+(has?(+v).toFixed(p[7]):'')+'" '+(has?'':'disabled placeholder="ยังไม่ได้อ่าน"')+'><button class="soft" data-q="'+i+'" '+(has?'':'disabled')+'>ตั้ง</button></div>'}).join('')}
@@ -601,7 +634,9 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  const devs=Array.isArray(d.devs)?d.devs:[];
  if(c.link){const rs=c.link==='rs485';h+='<div class="card"><h3>ช่องทางเชื่อม BMS</h3><div class="chips" style="margin:4px 0 10px"><span class="chip'+(rs?'':' on')+'" data-lk="ble">🔵 บลูทูธ</span><span class="chip'+(rs?' on':'')+'" data-lk="rs485">🔌 สาย RS485</span></div>'+
   '<div id="rsBox" class="'+(rs?'':'hide')+'"><div class="small muted" style="margin-bottom:8px">JK ที่มีพอร์ต RS485 (JK-PB / Inverter BMS อ่าน+ตั้งค่าได้ · JK รุ่นเก่าผ่านอะแดปเตอร์ RS485 อ่านได้) ต่อผ่านบอร์ด RS485-to-TTL: TXD→ขา RX, RXD→ขา TX, VCC→3.3V, GND→GND, A+/B− เข้าพอร์ต BMS · ถ้าต่อ RX/TX สลับกัน บอร์ดลองสลับให้เอง</div>'+
-  '<div class="th3"><label>ขา RX ของ ESP32 (ต่อกับ TXD)<input type="number" id="lkRx" min="0" max="48" value="'+(c.lrx??18)+'"></label><label>ขา TX ของ ESP32 (ต่อกับ RXD)<input type="number" id="lkTx" min="0" max="48" value="'+(c.ltx??17)+'"></label><label>ความเร็ว (baud)<select id="lkBaud">'+[115200,57600,38400,19200,9600].map(b=>'<option'+(b==(c.lbaud||115200)?' selected':'')+'>'+b+'</option>').join('')+'</select></label><label>Address ของ BMS (DIP switch, ปกติ 1)<input type="number" id="lkAddr" min="0" max="15" value="'+(c.laddr??1)+'"></label></div>'+
+  '<div class="th3"><label>ขา RX ของ ESP32 (ต่อกับ TXD)<input type="number" id="lkRx" min="0" max="48" value="'+(c.lrx??18)+'"></label><label>ขา TX ของ ESP32 (ต่อกับ RXD)<input type="number" id="lkTx" min="0" max="48" value="'+(c.ltx??17)+'"></label><label>ความเร็ว (baud)<select id="lkBaud">'+[115200,57600,38400,19200,9600].map(b=>'<option'+(b==(c.lbaud||115200)?' selected':'')+'>'+b+'</option>').join('')+'</select></label><label>Address ของ BMS (DIP switch · หลายลูก = address ลูกแรก)<input type="number" id="lkAddr" min="0" max="15" value="'+(c.laddr??1)+'"></label>'+
+  (c.lbus?'<label>แบตหลายลูกบนสายเดียว<select id="lkBus">'+[['auto','อัตโนมัติ (แนะนำ)'],['listen','ฟังอย่างเดียว · มีลูกหลัก DIP 0'],['poll','บอร์ดถามเอง · ไม่มีลูกหลัก']].map(o=>'<option value="'+o[0]+'"'+(c.lbus===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></label><label>จำนวนลูก (เฉพาะโหมดบอร์ดถามเอง)<input type="number" id="lkCnt" min="1" max="15" value="'+(c.lcnt||1)+'"></label>':'')+'</div>'+
+  (c.lbus?'<div class="small muted" style="margin:-2px 0 10px">อัตโนมัติ: บอร์ดฟังสายก่อน 16 วินาที ถ้ามีลูกหลัก (DIP 0) ถามข้อมูลอยู่ จะฟังอย่างเดียวและเก็บข้อมูลทุกลูก (ลูกหลักยังคุย CAN กับอินเวอร์เตอร์ได้ปกติ) ถ้าไม่มี บอร์ดจะถามเองตาม address และจำนวนลูก'+(rs&&d.bank?' · <b style="color:var(--text)">ตอนนี้พบ '+d.bank+' ลูก'+(d.busm===1?' (ฟังลูกหลัก)':'')+'</b>':'')+'</div>':'')+
   '<button id="lkSave">บันทึกและเชื่อมผ่าน RS485</button></div></div>'}
  h+='<div class="card"><h3>การเชื่อมต่อ BMS</h3><div class="info" style="margin-bottom:10px"><div><span>สถานะ</span><b>'+esc(d.state||'--')+'</b></div><div><span>MAC</span><b>'+esc(c.mac||'—')+'</b></div><div><span>โปรโตคอล</span><b>'+esc(c.auto?'อัตโนมัติ':c.proto||'—')+'</b></div><div><span>ตรวจพบ</span><b>'+esc(d.bms||'—')+'</b></div></div>'+
   '<div class="row wrap"><button id="cScan">'+(c.scanning?'กำลังค้นหา…':'ค้นหา BMS')+'</button><button class="soft" id="cAuto">เชื่อมอัตโนมัติ</button><button class="danger" id="cDisc">ตัดการเชื่อม</button></div>'+
@@ -628,14 +663,15 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  bind('cOta',()=>{const up=fwUpdate(d);if(!up)return;if(!confirm('อัปเดตเฟิร์มแวร์เป็น '+up.version+'?\nบอร์ดจะหยุดอ่าน BMS ประมาณ 1 นาทีระหว่างดาวน์โหลด แล้วรีสตาร์ทเอง'))return;sendCmd('ota',{url:FW_BASE+up.url});toast('ส่งคำสั่งอัปเดตแล้ว รอบอร์ดดาวน์โหลด…')});
  bind('bForget',()=>{if(confirm('ลบ Wi-Fi บ้านออกจากบอร์ด? บอร์ดจะหลุดจาก cloud จนกว่าจะตั้งใหม่'))sendCmd('forget_wifi')});
  bind('bClaim',async()=>{const {data}=await sb.auth.getSession();if(!data.session){toast('เข้าสู่ระบบก่อน แล้วกดอีกครั้ง');return}const {error}=await sb.rpc('claim_device',{p_pair:c.pair,p_name:c.name});toast(error?(error.message.includes('not found')?'บอร์ดต้องต่อ Wi-Fi บ้านและขึ้น online ก่อน':error.message):'เพิ่มเข้าบัญชีแล้ว');if(!error)loadDevices()});
- bind('cChg',()=>{const t=!on('cChg');if(!t&&!confirm('ปิด MOS ชาร์จ? แบตจะไม่รับไฟชาร์จ'))return;sendCmd('bms_switch',{which:0,on:t})});
- bind('cDsg',()=>{const t=!on('cDsg');if(!t&&!confirm('ปิด MOS จ่ายไฟ? ไฟที่ออกไปยังโหลดจะดับทันที'))return;sendCmd('bms_switch',{which:1,on:t})});
- bind('cBal',()=>{const t=bal==null?confirm('เปิดบาลานซ์? (กด ยกเลิก = ปิด)'):!on('cBal');sendCmd('bms_switch',{which:2,on:t})});
+ bind('cChg',()=>{const t=!on('cChg');if(!t&&!confirm('ปิด MOS ชาร์จ? แบตจะไม่รับไฟชาร์จ'))return;sendCmd('bms_switch',{which:0,on:t,...PA})});
+ bind('cDsg',()=>{const t=!on('cDsg');if(!t&&!confirm('ปิด MOS จ่ายไฟ? ไฟที่ออกไปยังโหลดจะดับทันที'))return;sendCmd('bms_switch',{which:1,on:t,...PA})});
+ bind('cBal',()=>{const t=bal==null?confirm('เปิดบาลานซ์? (กด ยกเลิก = ปิด)'):!on('cBal');sendCmd('bms_switch',{which:2,on:t,...PA})});
  bind('cRead',()=>sendCmd('bms_read'));
  $('tab_ctl').querySelectorAll('[data-q]').forEach(b=>b.onclick=()=>{const i=+b.dataset.q,p=BMS_PARAMS[fam][i],v=parseFloat($('qv'+i).value),old=d.pa.v[i];if(!num(v)||v<p[5]||v>p[6]){toast('ค่าต้องอยู่ระหว่าง '+p[5]+'–'+p[6]+' '+p[3]);return}if(!confirm(p[2]+'\n'+(+old).toFixed(p[7])+' → '+v.toFixed(p[7])+' '+p[3]+(fam===2?'\n\n(ANT: โหมดทดลอง ระบบจะอ่านกลับมาตรวจ)':'')+'\n\nตรวจให้แน่ใจว่าเหมาะกับเซลล์ของคุณ'))return;sendCmd('bms_param',{index:i,value:v})});
- $('tab_ctl').querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{const i=+b.dataset.p,p=JKP[i],v=parseFloat($('pv'+i).value),old=d.jk.v[i];if(!num(v)||v<p[4]||v>p[5]){toast('ค่าต้องอยู่ระหว่าง '+p[4]+'–'+p[5]+' '+p[2]);return}if(!confirm(p[1]+'\n'+(num(old)?old.toFixed(p[6]):'?')+' → '+v.toFixed(p[6])+' '+p[2]+'\n\nตรวจให้แน่ใจว่าเหมาะกับเซลล์ของคุณ'))return;sendCmd('bms_param',{index:i,value:v})});
+ $('tab_ctl').querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{const i=+b.dataset.p,p=JKP[i],v=parseFloat($('pv'+i).value),old=J.v[i];if(!num(v)||v<p[4]||v>p[5]){toast('ค่าต้องอยู่ระหว่าง '+p[4]+'–'+p[5]+' '+p[2]);return}if(!confirm(p[1]+'\n'+(num(old)?old.toFixed(p[6]):'?')+' → '+v.toFixed(p[6])+' '+p[2]+'\n\nตรวจให้แน่ใจว่าเหมาะกับเซลล์ของคุณ'))return;sendCmd('bms_param',{index:i,value:v,...PA})});
+ $('tab_ctl').querySelectorAll('[data-sp]').forEach(e=>e.onclick=()=>{packSel=+e.dataset.sp;ctlKey='';renderCtl()});
  $('tab_ctl').querySelectorAll('[data-lk]').forEach(e=>e.onclick=()=>{if(e.dataset.lk==='rs485'){$('rsBox').classList.remove('hide');e.parentNode.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on',x===e))}else{if(confirm('กลับไปเชื่อม BMS ผ่านบลูทูธ?'))sendCmd('link',{mode:'ble'})}});
- bind('lkSave',()=>{const a={mode:'rs485',rx:+$('lkRx').value,tx:+$('lkTx').value,baud:+$('lkBaud').value,addr:+$('lkAddr').value};if(a.rx===a.tx){toast('ขา RX กับ TX ต้องไม่ซ้ำกัน');return}sendCmd('link',a)});
+ bind('lkSave',()=>{const a={mode:'rs485',rx:+$('lkRx').value,tx:+$('lkTx').value,baud:+$('lkBaud').value,addr:+$('lkAddr').value};if($('lkBus')){a.bus=$('lkBus').value;a.count=Math.max(1,Math.min(15,+$('lkCnt').value||1));if(a.addr+a.count>16){toast('address สุดท้ายต้องไม่เกิน 15');return}}if(a.rx===a.tx){toast('ขา RX กับ TX ต้องไม่ซ้ำกัน');return}sendCmd('link',a)});
  bind('cScan',()=>sendCmd('bms_scan'));bind('cAuto',()=>sendCmd('bms_auto'));bind('cDisc',()=>{if(confirm('ตัดการเชื่อม BMS?'))sendCmd('bms_disconnect')});
  $('tab_ctl').querySelectorAll('[data-mac]').forEach(b=>b.onclick=()=>sendCmd('bms_connect',{mac:b.dataset.mac,type:+b.dataset.type,protocol:$('dp'+b.dataset.j).value}));
  bind('cLed',()=>sendCmd('led',{on:!on('cLed')}));

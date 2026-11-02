@@ -294,7 +294,7 @@ static const char *queueCmd(const BmsCmd &c, uint8_t addr = 0xFF) {
   return nullptr;
 }
 // Returns nullptr when queued, otherwise the reason it was refused.
-const char *bmsWriteParam(int idx, float value, int addr = -1) {
+const char *bmsWriteParam(int idx, float value, int addr) {
   if (addr >= 0) { // one pack of an RS485 bank
     Guard g;
     if (!linkRs485 || addr > 15) return "pack address 0-15 on RS485 only";
@@ -320,7 +320,7 @@ const char *bmsWriteParam(int idx, float value, int addr = -1) {
   }
   return queueCmd({false, uint8_t(idx), value, false}, addr >= 0 ? uint8_t(addr) : 0xFF);
 }
-const char *bmsSetSwitch(int which, bool on, int addr = -1) {
+const char *bmsSetSwitch(int which, bool on, int addr) {
   if (which < 0 || which >= bmsw::SW_COUNT) return "unknown switch";
   if (addr >= 0) {
     Guard g;
