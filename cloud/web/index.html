@@ -638,7 +638,16 @@ function onResume(){if(document.visibilityState!=='visible')return;resumedAt=Dat
  if(cur)refresh();else if(!$('vList').classList.contains('hide')&&!demo)loadDevices().then(renderList);else if(!$('vGrp').classList.contains('hide'))renderGroup()}
 document.addEventListener('visibilitychange',onResume);window.addEventListener('focus',onResume);window.addEventListener('pageshow',onResume);
 function statusOf(l){if(!l)return ['off','ยังไม่เคยส่งข้อมูล'];const x=(Date.now()-new Date(l.ts))/1000;if(x>180){if(Date.now()-fetchOkAt>45000||Date.now()-resumedAt<10000)return ['wait','กำลังอัปเดตข้อมูล…'];return ['off','ออฟไลน์ · '+ago(l.ts)]}if(!num(l.data&&l.data.v))return ['wait','ออนไลน์ · ยังไม่ได้เชื่อม BMS'];return ['on','ออนไลน์']}
-function showList(){show('vList');renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
+// ---------- keep a monitoring page live: worker tick (not throttled like page timers) + realtime push
+let tickW=null,listRT=null,listDirty=0;
+function liveTick(){if(document.visibilityState==='hidden'&&Date.now()-fetchOkAt<25000)return;
+ if(share){shareLoad(true).then(()=>{if(!$('vList').classList.contains('hide'))renderList();else if(!$('vGrp').classList.contains('hide'))renderGroup();else if(cur)renderDev()});return}
+ if(demo)return;if(cur){if(Date.now()-fetchOkAt>12000)refresh()}else if(!$('vList').classList.contains('hide')&&Date.now()-fetchOkAt>12000)loadDevices().then(renderList)}
+function startTicker(){if(tickW)return;try{const src='setInterval(()=>postMessage(1),10000)';tickW=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));tickW.onmessage=liveTick}catch(e){setInterval(liveTick,10000)}}
+function subListRT(){if(demo||share||listRT)return;listRT=sb.channel('latest-all').on('postgres_changes',{event:'*',schema:'public',table:'latest'},p=>{const n=p.new;if(!n||!n.device_id||!devs.some(d=>d.id===n.device_id))return;latest[n.device_id]={ts:n.ts,data:n.data};fetchOkAt=Date.now();
+  if(!listDirty){listDirty=setTimeout(()=>{listDirty=0;if(!$('vList').classList.contains('hide'))renderList();else if(!$('vGrp').classList.contains('hide'))renderGroup()},1000)}})
+ .subscribe(st=>{if(st==='CHANNEL_ERROR'||st==='TIMED_OUT'||st==='CLOSED'){const c=listRT;listRT=null;try{sb.removeChannel(c)}catch(e){}setTimeout(subListRT,5000)}})}
+function showList(){show('vList');startTicker();subListRT();renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
 function groupTotals(ds){const t={n:ds.length,live:0,vs:0,vn:0,ia:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
  ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
   if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.v)){t.vs+=x.v;t.vn++}if(num(x.i))t.ia+=x.i;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.full)&&x.full>0?+x.full:(num(x.cap)&&num(x.soc)&&x.soc>3?x.cap*100/x.soc:1);if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
@@ -684,7 +693,7 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
-function openDev(dev,t){const AL=dev.ble?['ov','cells','ctl']:dev.shared?['ov','cells','hist']:null;if(AL&&!AL.includes(t))t=AL[0]==='ov'&&dev.ble?'ctl':'ov';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!AL&&!AL.includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
+function openDev(dev,t){startTicker();const AL=dev.ble?['ov','cells','ctl']:dev.shared?['ov','cells','hist']:null;if(AL&&!AL.includes(t))t=AL[0]==='ov'&&dev.ble?'ctl':'ov';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!AL&&!AL.includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
  ctlKey='';renderDev(true);if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
