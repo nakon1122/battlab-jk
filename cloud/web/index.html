@@ -562,9 +562,9 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
-function openDev(dev,t){if(dev.ble&&!['ov','cells','ctl'].includes(t))t='ctl';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!dev.ble&&!['ov','cells','ctl'].includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
+function openDev(dev,t){if(dev.ble&&!['ov','cells','ctl'].includes(t))t='ctl';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!dev.ble&&!['ov','cells','ctl'].includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
- ctlKey='';renderDev();if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
+ ctlKey='';renderDev(true);if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
 function subRT(){if(cur.demo||cur.ble)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
 async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(dev).catch(()=>null);if(cur!==dev)return;if(l)latest[dev.id]=l;
@@ -575,7 +575,17 @@ async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(
 function energyOf(rows){let i=0,o=0;for(const r of rows){if(!num(r.power))continue;const wh=r.power*(r.n||1)/60;if(wh>0)i+=wh;else o-=wh}return {in:i/1000,out:o/1000}}
 function renderHeader(){const l=latest[cur.id],s=dset(cur),[st,txt]=statusOf(l),d=l&&l.data||{};$('dName').textContent=s.icon+' '+cur.name;
  $('dSub').innerHTML='<span class="dot '+st+'"></span> '+esc(txt)+(l?' · อัปเดต '+ago(l.ts):'')+(rtOn||cur.ble?' · <b style="color:var(--good)">'+(cur.ble?(ble&&ble.dev&&ble.dev.usb?'🔌 USB':'🔵 บลูทูธ'):'สด')+'</b>':'')+(d.bms?' · '+esc(d.bms):'')}
-function renderDev(){if(!cur)return;renderHeader();if(tab==='ov')renderOv();else if(tab==='cells')renderCells();else if(tab==='alert')renderAlert();else if(tab==='set')renderSet();else if(tab==='ctl')renderCtl()}
+// background updates (realtime, polling, BLE) must not rebuild a form the user is typing in
+function typingIn(id){const a=document.activeElement,c=$(id);return !!(a&&c&&c.contains(a)&&(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)||a.isContentEditable))}
+let formFor='';
+// what the user typed on the control tab survives the periodic rebuilds (scan results, live values)
+let ctlTyped={};
+['input','change'].forEach(ev=>document.addEventListener(ev,e=>{const t=e.target;if(t&&t.id&&t.closest&&t.closest('#tab_ctl')&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))ctlTyped[t.id]=t.type==='checkbox'?t.checked:t.value},true));
+function restoreTyped(){const root=$('tab_ctl');for(const id in ctlTyped){const el=document.getElementById(id);if(!el||!root.contains(el))continue;if(el.type==='checkbox')el.checked=ctlTyped[id];else if(el.value!==ctlTyped[id]){el.value=ctlTyped[id]}}}
+function renderDev(force){if(!cur)return;renderHeader();const k=tab+':'+cur.id;
+ if(!force&&typingIn('tab_'+tab))return;
+ if((tab==='set'||tab==='alert')&&!force&&formFor===k)return;
+ formFor=k;if(tab==='ov')renderOv();else if(tab==='cells')renderCells();else if(tab==='alert')renderAlert();else if(tab==='set')renderSet();else if(tab==='ctl')renderCtl()}
 
 function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
  switch(k){
@@ -798,7 +808,8 @@ function renderPicker(){if(!pick||!cur)return;const ae=document.activeElement;if
   if(!cur.ble&&!confirm('เปลี่ยนบอร์ดไปใช้ Wi-Fi "'+ss+'"?\nถ้าต่อไม่ได้ภายใน 90 วินาทีจะกลับไปใช้ "'+(c.ssid||'')+'"'))return;
   sendCmd('home_wifi',{ssid:ss,pass:pw});toast('กำลังเปลี่ยนไปใช้ '+ss+' …');closePicker()};
  if(scanning)clearTimeout(pick.tm),pick.tm=setTimeout(renderPicker,1500)}
-function renderCtl(){if(pick)setTimeout(renderPicker,0);const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
+function renderCtl(){const k0=ctlKey;renderCtl0();if(ctlKey!==k0)restoreTyped()}
+function renderCtl0(){if(pick)setTimeout(renderPicker,0);const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
  const PK=packsOf(d);let pkS=null;if(PK){if(packSel==null||!PK.some(p=>p.a===packSel))packSel=PK[0].a;pkS=PK.find(p=>p.a===packSel)}
  const BT=c&&c.bt||{},BTM=pkS?BT[pkS.a]:null,RO=!!PK&&d.busm===1&&!BTM,J=pkS?pkS.jk:d.jk,PA=pkS?{a:pkS.a}:{};
  const key=JSON.stringify([c,J,PK&&PK.map(p=>p.bt),pkS&&[pkS.a,pkS.chg,pkS.dsg],PK&&PK.map(p=>p.a),d.busm,d.pa,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit,d.fw,!!MAN]);const ae=document.activeElement;
