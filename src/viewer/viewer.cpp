@@ -24,7 +24,7 @@
 #include "improv_serial.h"
 #include <string>
 
-#define BATTLAB_FW "2.8.1-cloudscreen"
+#define BATTLAB_FW "2.8.2-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -147,6 +147,8 @@ struct DevSum {
   String id, name, state, bms, fw;
   float soc = NAN, v = NAN, i = NAN, p = NAN, t1 = NAN, t2 = NAN, mos = NAN, cmin = NAN, cmax = NAN, cap = NAN;
   int cyc = -1, bank = 0; // bank = packs on the RS485 bus of this board
+  String group;            // group set on the website ("" = none)
+  float ein = NAN, eout = NAN; // energy today kWh, counted on the board
   uint8_t pf = 0;          // usage profile from the website: 0 solar, 1 EV bike, 2 EV car, 3 UPS, 4 camp
   int whkm = 0, rangeAlarm = 10;
   long age = -1;
@@ -430,6 +432,9 @@ static void parseSync(JsonDocument &d) {
     s.chg = x["chg"] | false;
     s.dsg = x["dsg"] | false;
     s.bank = x["bank"] | 0;
+    s.group = o["g"] | "";
+    s.ein = jf(x["ein"]);
+    s.eout = jf(x["eout"]);
     JsonObjectConst pf = o["pf"].as<JsonObjectConst>();
     if (!pf.isNull()) {
       String t = pf["type"] | "solar";
@@ -821,6 +826,7 @@ static void evalAlarm(const Model &m) {
 // ------------------------------------------------------ header + tabs ----
 static const Btn B_PREV = {372, 4, 50, 32}, B_NEXT = {426, 4, 50, 32};
 static int allPage = 0;
+static void allView(const Model &m, std::vector<int> &idx, bool &grouped, int &per);
 static void header(const Model &m, int page) {
   LGFX_Sprite s(&tft);
   s.setColorDepth(8);
@@ -843,7 +849,11 @@ static void header(const Model &m, int page) {
   s.setFont(&fonts::FreeSans9pt7b);
   s.setTextDatum(textdatum_t::middle_left);
   bool nav = page != P_ALL && page != P_SETUP && m.devs.size() > 1;
-  bool pager = page == P_ALL && m.devs.size() > 6;
+  std::vector<int> vidx;
+  bool vgrp;
+  int vper;
+  allView(m, vidx, vgrp, vper);
+  bool pager = page == P_ALL && (int)vidx.size() > vper;
   int right = nav || pager ? 364 : 420;
   String txt;
   if (millis() < toastUntil) txt = toast;
@@ -920,6 +930,30 @@ static void tabs(int page) {
 // --------------------------------------------------------- ALL page ----
 static String allKey;
 static Btn cardBtn(int k) { return {8 + (k % 2) * 236, 46 + (k / 2) * 76, 228, 72}; }
+// ---- groups (set on the website): chips on top, totals line, 4 cards per page
+static int gSel = -1; // -1 = every battery
+static std::vector<String> groupsOf(const Model &m) {
+  std::vector<String> g;
+  for (auto &d : m.devs)
+    if (d.group.length() && std::find(g.begin(), g.end(), d.group) == g.end()) g.push_back(d.group);
+  return g;
+}
+static String groupLabel(const String &g, int i) { // the screen font has no Thai: fall back to G1, G2...
+  for (unsigned k = 0; k < g.length(); k++)
+    if ((uint8_t)g[k] >= 128 || (uint8_t)g[k] < 32) return String("G") + (i + 1);
+  return g.length() > 9 ? g.substring(0, 9) : g;
+}
+static void allView(const Model &m, std::vector<int> &idx, bool &grouped, int &per) {
+  auto G = groupsOf(m);
+  grouped = !G.empty();
+  if (gSel >= int(G.size())) gSel = -1;
+  idx.clear();
+  for (size_t i = 0; i < m.devs.size(); i++)
+    if (!grouped || gSel < 0 || m.devs[i].group == G[gSel]) idx.push_back(i);
+  per = grouped ? 4 : 6;
+}
+static Btn cardBtnG(int k, bool grouped) { return grouped ? Btn{8 + (k % 2) * 236, 104 + (k / 2) * 86, 228, 80} : cardBtn(k); }
+static Btn gChip(int i, int n) { int w = std::min(116, 464 / (n + 1)); return {8 + i * w, 44, w - 4, 28}; }
 static void card(const Btn &b, const DevSum &d, bool sel) {
   LGFX_Sprite s(&tft);
   s.setColorDepth(16);
@@ -981,8 +1015,8 @@ static void pairScreen(const Model &m) {
   tft.drawString(String("Cloud: ") + m.status, 32, 241);
 }
 static void allPageDraw(const Model &m, bool force) {
-  String key = String(B(m.paired)) + m.status + allPage + focusId + int(dcfg.lowSoc) + int(dcfg.hiTemp);
-  for (auto &d : m.devs) key += d.id + d.name + d.age / 30 + fmt(d.soc, 0) + fmt(d.v, 1) + fmt(d.i, 1) + fmt(d.t1, 0) + d.state;
+  String key = String(B(m.paired)) + m.status + allPage + focusId + int(dcfg.lowSoc) + int(dcfg.hiTemp) + gSel;
+  for (auto &d : m.devs) key += d.id + d.name + d.group + d.age / 30 + fmt(d.soc, 0) + fmt(d.v, 1) + fmt(d.i, 1) + fmt(d.t1, 0) + d.state + fmt(d.ein, 1) + fmt(d.eout, 1);
   if (!force && key == allKey) return;
   allKey = key;
   if (!m.paired) {
@@ -995,14 +1029,43 @@ static void allPageDraw(const Model &m, bool force) {
     label(16, 118, "Add a BattLab board on the website with its pair code.");
     return;
   }
-  int pages = (m.devs.size() + 5) / 6;
-  if (allPage >= pages) allPage = pages - 1;
-  for (int k = 0; k < 6; k++) {
-    size_t i = allPage * 6 + k;
-    if (i >= m.devs.size()) break;
-    card(cardBtn(k), m.devs[i], m.devs[i].id == focusId);
+  std::vector<int> idx;
+  bool grouped;
+  int per;
+  allView(m, idx, grouped, per);
+  if (grouped) {
+    auto G = groupsOf(m);
+    int n = std::min<int>(G.size(), 6);
+    button(gChip(0, n), "ALL", gSel < 0, 0, &fonts::FreeSansBold9pt7b);
+    for (int i = 0; i < n; i++) button(gChip(i + 1, n), groupLabel(G[i], i), gSel == i, 0, &fonts::FreeSansBold9pt7b);
+    // totals of the shown group
+    float pw = 0, kwh = 0, ei = 0, eo = 0;
+    int live = 0;
+    bool haveE = false;
+    for (int i : idx) {
+      const DevSum &d = m.devs[i];
+      if (!d.live()) continue;
+      live++;
+      if (!std::isnan(d.p)) pw += d.p;
+      if (!std::isnan(d.cap) && !std::isnan(d.v)) kwh += d.cap * d.v / 1000;
+      if (!std::isnan(d.ein)) { ei += d.ein; eo += d.eout; haveE = true; }
+    }
+    tft.fillRoundRect(8, 76, 464, 24, 8, C_CARD);
+    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setTextDatum(textdatum_t::middle_left);
+    tft.setTextColor(C_TEXT, C_CARD);
+    String t = String(idx.size()) + " bat  " + (pw > 0 ? "+" : "") + fmt(pw / 1000, 2) + "kW  " + fmt(kwh, 1) + "kWh left";
+    if (haveE) t += "  today +" + fmt(ei, 1) + "/-" + fmt(eo, 1);
+    tft.drawString(t, 16, 89);
   }
-  if (pages > 1) {
+  int pages = std::max<int>(1, (idx.size() + per - 1) / per);
+  if (allPage >= pages) allPage = pages - 1;
+  for (int k = 0; k < per; k++) {
+    size_t j = allPage * per + k;
+    if (j >= idx.size()) break;
+    card(cardBtnG(k, grouped), m.devs[idx[j]], m.devs[idx[j]].id == focusId);
+  }
+  if (pages > 1 && !grouped) {
     tft.setFont(&fonts::FreeSans9pt7b);
     tft.setTextDatum(textdatum_t::bottom_right);
     tft.setTextColor(C_MUTED, C_BG);
@@ -2321,10 +2384,15 @@ static void splash() {
 // --------------------------------------------------------- screen task ----
 static void moveFocus(const Model &m, int dir) {
   if (m.devs.empty()) return;
-  int idx = 0;
-  for (size_t i = 0; i < m.devs.size(); i++)
-    if (m.devs[i].id == focusId) idx = i;
-  idx = (idx + dir + m.devs.size()) % m.devs.size();
+  std::vector<int> L;
+  bool grouped;
+  int per;
+  allView(m, L, grouped, per); // the group picked on ALL (or every battery)
+  if (L.empty()) for (size_t i = 0; i < m.devs.size(); i++) L.push_back(i);
+  int pos = 0;
+  for (size_t k = 0; k < L.size(); k++)
+    if (m.devs[L[k]].id == focusId) pos = k;
+  int idx = L[(pos + dir + L.size()) % L.size()];
   {
     Lock l;
     focusId = m.devs[idx].id;
@@ -2429,21 +2497,35 @@ static void uiTask(void *) {
         if (overlay != OV_NONE) { overlay = OV_NONE; drawnPage = -1; }
       } else if (tp.y < 40) {
         bool nav = page != P_ALL && page != P_SETUP && m.devs.size() > 1;
-        bool pager = page == P_ALL && m.devs.size() > 6;
+        std::vector<int> idx;
+        bool grouped;
+        int per;
+        allView(m, idx, grouped, per);
+        bool pager = page == P_ALL && (int)idx.size() > per;
         if (hit(B_PREV, tp.x, tp.y) || hit(B_NEXT, tp.x, tp.y)) {
           int dir = hit(B_NEXT, tp.x, tp.y) ? 1 : -1;
           if (nav) { moveFocus(m, dir); drawnPage = -1; }
           else if (pager) {
-            int pages = (m.devs.size() + 5) / 6;
+            int pages = (idx.size() + per - 1) / per;
             allPage = (allPage + dir + pages) % pages;
             drawnPage = -1;
           }
         }
       } else {
         if (page == P_ALL && m.paired) {
-          for (int k = 0; k < 6; k++) {
-            size_t i = allPage * 6 + k;
-            if (i < m.devs.size() && hit(cardBtn(k), tp.x, tp.y)) {
+          std::vector<int> idx;
+          bool grouped;
+          int per;
+          allView(m, idx, grouped, per);
+          if (grouped) {
+            int n = std::min<int>(groupsOf(m).size(), 6);
+            for (int c = 0; c <= n; c++)
+              if (hit(gChip(c, n), tp.x, tp.y)) { gSel = c - 1; allPage = 0; allKey = ""; }
+          }
+          for (int k = 0; k < per; k++) {
+            size_t j = allPage * per + k;
+            size_t i = j < idx.size() ? idx[j] : m.devs.size();
+            if (i < m.devs.size() && hit(cardBtnG(k, grouped), tp.x, tp.y)) {
               {
                 Lock l;
                 focusId = m.devs[i].id;

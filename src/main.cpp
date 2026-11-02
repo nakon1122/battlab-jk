@@ -4,6 +4,7 @@
 #include "bms_settings.h"
 #include "jk_rs485.h"
 #include "improv_serial.h"
+#include <algorithm>
 #include "bms_daly.h"
 #include <mbedtls/sha256.h>
 #include <Update.h>
@@ -29,9 +30,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.1-cyd35"
+#define BATTLAB_FW "2.8.2-cyd35"
 #else
-#define BATTLAB_FW "2.8.1-s3"
+#define BATTLAB_FW "2.8.2-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -130,6 +131,7 @@ int otaProgress() { return otaPct; }
 static String devName = "BATTLAB"; // BATTLAB-XXXXXX: hotspot + Bluetooth name = last 6 hex digits of the chip MAC
 static String hwMac;                // chip MAC (the "MAC:" line shown while flashing)
 static volatile uint32_t serialSetupAt = 0; // a computer is setting the board up over USB (website)
+void energyGet(float &in, float &out);       // energy today, kWh (defined further down)
 void bleSetupStart();               // Bluetooth setup service (defined below)
 class Guard {
 public:
@@ -229,6 +231,32 @@ void stateApi() {
           a.add(nullptr);
       }
     }
+#ifndef BATTLAB_DISPLAY
+    if (linkRs485 && (shared.bankN > 1 || shared.busMode == 1)) { // RS485 bank = one group
+      auto b = d.createNestedObject("bank");
+      b["n"] = shared.bankN;
+      b["master"] = shared.busMode == 1;
+      auto pa = b.createNestedArray("packs");
+      uint32_t now = millis();
+      for (int a = 0; a < 16; a++) {
+        const auto &pk = shared.packs[a];
+        if (!pk.stamp || now - pk.stamp > 600000) continue;
+        auto o = pa.createNestedObject();
+        o["a"] = a;
+        o["age"] = (now - pk.stamp) / 1000;
+        o["soc"] = pk.s.soc;
+        o["v"] = pk.s.voltage;
+        o["i"] = pk.s.current;
+        o["t"] = std::max(pk.s.temp1, pk.s.temp2);
+        o["cap"] = pk.s.capacity;
+        o["chg"] = pk.s.charge;
+        o["dsg"] = pk.s.discharge;
+        float mn = 9, mx = 0;
+        for (float c : pk.s.cells) if (c > 0) { mn = std::min(mn, c); mx = std::max(mx, c); }
+        if (mx > 0) { o["cmin"] = mn; o["cmax"] = mx; }
+      }
+    }
+#endif
     d["parameters_valid"] = shared.linked && shared.haveParams;
     if (shared.haveParams && shared.linked) {
       auto p = d.createNestedObject("parameters");
@@ -241,6 +269,13 @@ void stateApi() {
       p["discharge_limit"] = shared.params.discharge;
       d["parameter_age_ms"] = uint32_t(millis() - shared.paramStamp);
     }
+  }
+  {
+    float ei, eo;
+    energyGet(ei, eo);
+    d["energy_in"] = ei;   // kWh today (charge)
+    d["energy_out"] = eo;  // kWh today (discharge)
+    d["energy_day_ok"] = time(nullptr) > 1700000000;
   }
   d["heap"] = ESP.getFreeHeap();
   d["heap_min"] = ESP.getMinFreeHeap();
@@ -2243,6 +2278,12 @@ static void cloudTask(void *) {
         auto sw = jo.createNestedArray("sw");
         for (int i = 0; i < bmsw::SW_COUNT; i++) sw.add(shared.jk.sw[i]);
       }
+      {
+        float ei, eo;
+        energyGet(ei, eo);
+        d["ein"] = serialized(String(ei, 3));
+        d["eout"] = serialized(String(eo, 3));
+      }
       if (live) {
         const auto &s = shared.sample;
         d["v"] = s.voltage;
@@ -2500,6 +2541,47 @@ class BleOtaData : public NimBLECharacteristicCallbacks {
 };
 static SemaphoreHandle_t bleQmx = nullptr;
 static std::vector<std::string> bleQ;
+// BMS / Wi-Fi scan lists over the Bluetooth / USB setup link: one value holds at
+// most 512 bytes, so the list is split into pages; every read returns the next page
+// {"p":page,"pp":pages,"t":total,"d":[[...],...]} and the website reads until it has all.
+static SemaphoreHandle_t listMx = nullptr;
+static std::vector<String> listPages[2];
+static uint8_t listCur[2] = {0, 0};
+static String listNext(int k) {
+  String v = "{\"p\":0,\"pp\":1,\"t\":0,\"d\":[]}";
+  if (!listMx) return v;
+  xSemaphoreTake(listMx, portMAX_DELAY);
+  if (!listPages[k].empty()) {
+    if (listCur[k] >= listPages[k].size()) listCur[k] = 0;
+    v = listPages[k][listCur[k]];
+    listCur[k] = (listCur[k] + 1) % listPages[k].size();
+  }
+  xSemaphoreGive(listMx);
+  return v;
+}
+static void listSet(int k, const std::vector<String> &items) { // items = compact JSON arrays
+  std::vector<String> pages;
+  String cur;
+  std::vector<String> chunks;
+  for (auto &it : items) {
+    if (cur.length() && cur.length() + it.length() + 1 > 440) { chunks.push_back(cur); cur = ""; }
+    cur += (cur.length() ? "," : "") + it;
+  }
+  if (cur.length() || chunks.empty()) chunks.push_back(cur);
+  for (size_t i = 0; i < chunks.size(); i++)
+    pages.push_back(String("{\"p\":") + i + ",\"pp\":" + chunks.size() + ",\"t\":" + items.size() + ",\"d\":[" + chunks[i] + "]}");
+  if (!listMx) return;
+  xSemaphoreTake(listMx, portMAX_DELAY);
+  listPages[k] = pages;
+  if (listCur[k] >= pages.size()) listCur[k] = 0;
+  xSemaphoreGive(listMx);
+}
+class BleListCb : public NimBLECharacteristicCallbacks {
+  int k;
+public:
+  explicit BleListCb(int kk) : k(kk) {}
+  void onRead(NimBLECharacteristic *c) override { String v = listNext(k); c->setValue((const uint8_t *)v.c_str(), v.length()); }
+};
 static volatile bool bleClient = false;
 class BleSrvCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *) override { bleClient = true; }
@@ -2529,6 +2611,9 @@ void bleSetupStart() {
     bChr[i]->setValue("{}");
   }
   bChr[5]->setCallbacks(new BleCmdCb());
+  listMx = xSemaphoreCreateMutex();
+  bChr[3]->setCallbacks(new BleListCb(0));
+  bChr[4]->setCallbacks(new BleListCb(1));
   bChr[7]->setCallbacks(new BleOtaCtl());
   bChr[8]->setCallbacks(new BleOtaData());
   svc->start();
@@ -2541,15 +2626,6 @@ void bleSetupStart() {
 }
 static void bleSet(int i, const String &s) {
   if (bChr[i] && s.length() <= 512) bChr[i]->setValue((const uint8_t *)s.c_str(), s.length());
-}
-static String fitJsonArray(JsonArray a) { // drop items from the end until it fits one value
-  String out;
-  for (;;) {
-    out = "";
-    serializeJson(a, out);
-    if (out.length() <= 512 || a.size() == 0) return out;
-    a.remove(a.size() - 1);
-  }
 }
 static void bleRefresh(bool slow) {
   LedCfg led = ledGet();
@@ -2650,34 +2726,46 @@ static void bleRefresh(bool slow) {
   bleSet(1, conf);
   if (!slow) return;
   bleSet(2, jk);
-  {
-    DynamicJsonDocument in(6144), out(2048);
-    auto a = out.to<JsonArray>();
+  { // BMS scan: batteries first, then strongest signal; up to 30, paged
+    DynamicJsonDocument in(8192);
+    std::vector<std::pair<int, String>> L;
     if (!deserializeJson(in, devs))
       for (JsonObject o : in.as<JsonArray>()) {
-        if (a.size() >= 8) break;
-        auto x = a.createNestedObject();
-        x["name"] = String((const char *)(o["name"] | "")).substring(0, 20);
-        x["mac"] = o["mac"];
-        x["type"] = o["type"];
-        x["rssi"] = o["rssi"];
-        x["candidate"] = o["candidate"];
+        StaticJsonDocument<192> x;
+        auto a = x.to<JsonArray>();
+        a.add(String((const char *)(o["name"] | "")).substring(0, 16));
+        a.add(o["mac"]);
+        a.add(o["rssi"]);
+        a.add(o["type"]);
+        a.add(o["candidate"] ? 1 : 0);
+        String t;
+        serializeJson(a, t);
+        L.push_back({(o["candidate"] ? 1000 : 0) + int(o["rssi"] | -100) + 200, t});
       }
-    bleSet(3, fitJsonArray(a));
+    std::stable_sort(L.begin(), L.end(), [](const std::pair<int, String> &a, const std::pair<int, String> &b) { return a.first > b.first; });
+    std::vector<String> items;
+    for (auto &e : L) { if (items.size() >= 30) break; items.push_back(e.second); }
+    listSet(0, items);
   }
   String ws = netScanJson();
-  if (ws.length()) {
-    DynamicJsonDocument in(4096), out(2048);
-    auto a = out.to<JsonArray>();
+  if (ws.length()) { // Wi-Fi scan: strongest first, up to 30, paged
+    DynamicJsonDocument in(6144);
+    std::vector<std::pair<int, String>> L;
     if (!deserializeJson(in, ws))
       for (JsonObject o : in.as<JsonArray>()) {
-        if (a.size() >= 10) break;
-        auto x = a.createNestedObject();
-        x["ssid"] = o["ssid"];
-        x["rssi"] = o["rssi"];
-        x["lock"] = o["lock"];
+        StaticJsonDocument<128> x;
+        auto a = x.to<JsonArray>();
+        a.add(String((const char *)(o["ssid"] | "")).substring(0, 32));
+        a.add(o["rssi"]);
+        a.add(o["lock"] ? 1 : 0);
+        String t;
+        serializeJson(a, t);
+        L.push_back({int(o["rssi"] | -100), t});
       }
-    bleSet(4, fitJsonArray(a));
+    std::stable_sort(L.begin(), L.end(), [](const std::pair<int, String> &a, const std::pair<int, String> &b) { return a.first > b.first; });
+    std::vector<String> items;
+    for (auto &e : L) { if (items.size() >= 30) break; items.push_back(e.second); }
+    listSet(1, items);
   }
 }
 static void bleSetupTick() {
@@ -3121,6 +3209,7 @@ void bmsDisconnect() {
   pr.end();
 }
 void takeDisplaySnapshot(DisplaySnap &o) {
+  energyGet(o.eIn, o.eOut);
   {
     Guard g;
     o.state = shared.state;
@@ -3166,6 +3255,68 @@ void takeDisplaySnapshot(DisplaySnap &o) {
   o.uptimeMs = millis();
   o.stations = WiFi.softAPgetStationNum();
 }
+// ---- energy today (kWh in / out), counted on the board, reset at midnight ----
+struct EnergyDay { float in = 0, out = 0; int day = -1; uint32_t lastMs = 0, savedAt = 0; bool dirty = false; };
+static EnergyDay energy;
+static SemaphoreHandle_t energyMx = nullptr;
+static void energySave() {
+  Preferences p;
+  p.begin("battlab-en", false);
+  p.putInt("day", energy.day);
+  p.putFloat("in", energy.in);
+  p.putFloat("out", energy.out);
+  p.end();
+  energy.dirty = false;
+  energy.savedAt = millis();
+}
+static void energyLoad() {
+  Preferences p;
+  p.begin("battlab-en", true);
+  energy.day = p.getInt("day", -1);
+  energy.in = p.getFloat("in", 0);
+  energy.out = p.getFloat("out", 0);
+  p.end();
+}
+void energyGet(float &in, float &out) {
+  if (energyMx) xSemaphoreTake(energyMx, portMAX_DELAY);
+  in = energy.in; out = energy.out;
+  if (energyMx) xSemaphoreGive(energyMx);
+}
+static void energyTick() {
+  uint32_t now = millis();
+  if (now - energy.lastMs < 1000) return;
+  float hours = energy.lastMs ? (now - energy.lastMs) / 3600000.f : 0;
+  energy.lastMs = now;
+  time_t t = time(nullptr);
+  bool timeOk = t > 1700000000;
+  bool live;
+  float pw = 0;
+  {
+    Guard g;
+    live = shared.linked && shared.have && uint32_t(now - shared.stamp) < 15000;
+    if (live) pw = shared.sample.voltage * shared.sample.current;
+  }
+  if (energyMx) xSemaphoreTake(energyMx, portMAX_DELAY);
+  if (timeOk) {
+    struct tm tm;
+    localtime_r(&t, &tm);
+    int day = (tm.tm_year + 1900) * 400 + tm.tm_yday;
+    if (day != energy.day) { // a new day (or first clock after boot on another day)
+      energy.in = energy.out = 0;
+      energy.day = day;
+      energy.dirty = true;
+    }
+  }
+  if (live && hours > 0 && hours < 0.01f) {
+    if (pw > 0) energy.in += pw * hours / 1000;
+    else energy.out += -pw * hours / 1000;
+    energy.dirty = true;
+  }
+  bool save = timeOk && energy.dirty && now - energy.savedAt > 600000;
+  if (energyMx) xSemaphoreGive(energyMx);
+  if (save) energySave();
+}
+
 // ---- setup from a computer over USB (website "Set up over USB") ----------
 //  "@BL get N"      -> "@BL N <json>"  (N = the Bluetooth setup values 0..4)
 //  "@BL cmd {json}" -> same commands as Bluetooth; reply "@BL R <json>"
@@ -3233,7 +3384,8 @@ static void serialSetupTask(void *) {
           if (line.startsWith("@BL get ")) {
             int i = line.substring(8).toInt();
             String v = "{}";
-            if (i >= 0 && i < 9 && bChr[i]) { NimBLEAttValue a = bChr[i]->getValue(); v = String((const char *)a.data(), a.length()); }
+            if (i == 3 || i == 4) v = listNext(i - 3);
+            else if (i >= 0 && i < 9 && bChr[i]) { NimBLEAttValue a = bChr[i]->getValue(); v = String((const char *)a.data(), a.length()); }
             Serial.printf("\n@BL %d %s\n", i, v.c_str());
           } else if (line.startsWith("@BL cmd ") && bleQmx) {
             std::string m = line.substring(8).c_str();
@@ -3315,6 +3467,8 @@ void setup() {
   profCfg.whkm = prefs.getUShort("pwhkm", 0);
   profCfg.rangeAlarm = prefs.getUChar("prange", 10);
   netLoad();
+  energyMx = xSemaphoreCreateMutex();
+  energyLoad();
   xTaskCreatePinnedToCore(serialSetupTask, "usbsetup", 6144, nullptr, 1, nullptr, 1);
   wifiApply();
   configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com"); // Thailand time for the screen clock
@@ -3566,6 +3720,7 @@ void loop() {
   }
   ledPersist();
   bleSetupTick();
+  energyTick();
   static bool bootOk = false;
   if (!bootOk && millis() > 60000) {
     bootOk = true;

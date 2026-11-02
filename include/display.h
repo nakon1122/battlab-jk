@@ -30,6 +30,7 @@ struct DisplaySnap {
   uint8_t prof = 0;       // usage profile: 0 solar, 1 EV motorbike, 2 EV car, 3 UPS, 4 camp
   uint16_t whkm = 0;      // EV: average Wh per km (0 = not set)
   uint8_t rangeAlarm = 10; // EV: warn below this many km
+  float eIn = 0, eOut = 0; // energy today, kWh (counted on the board)
 };
 // Home Wi-Fi + cloud (main.cpp)
 struct NetInfo {

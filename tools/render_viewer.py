@@ -245,6 +245,24 @@ def alarm_frame():
     for k in range(4): s.d.rectangle((k*S, k*S, (480-k)*S-1, (320-k)*S-1), outline=BAD, width=S)
     return s
 
+def all_groups(sel=0):
+    s = Scr(); header(s, '5 batteries  3 live  +665W', nav=False)
+    G = ['ALL', 'HOME', 'EV']
+    w = min(116, 464 // len(G))
+    for i, g in enumerate(G): s.button((8 + i * w, 44, w - 4, 28), g, i == sel + 1)
+    s.rr(8, 76, 464, 24, 8, fill=CARD)
+    s.text('2 bat  +1.83kW  21.4kWh left  today +6.2/-2.9', 16, 89, F9, TEXT)
+    pick = [FLEET[1], FLEET[0]]
+    for k, d in enumerate(pick):
+        x, y, wc, hc = 8 + (k % 2) * 236, 104 + (k // 2) * 86, 228, 80
+        s.rr(x, y, wc, hc, 10, fill=CARD)
+        s.circle(x + 14, y + 15, 5, GOOD); s.text(d['n'], x + 26, y + 15, F9B, TEXT)
+        s.text(f"{d['soc']}%", x + wc - 10, y + 16, F12B, TEXT, 'rm')
+        s.text(f"{d['v']:.1f}V  {d['i']:.1f}A  {d['v']*d['i']:.0f}W", x + 10, y + 37, F9, TEXT)
+        s.text(f"{'CHG' if d['i'] > 0 else 'DSG'}  {d['t']}C  d{d['d']}mV", x + 10, y + 54, F9, MUTED)
+        s.rr(x + 10, y + hc - 6, wc - 20, 3, 1, fill=LINE); s.rr(x + 10, y + hc - 6, int((wc - 20) * d['soc'] / 100), 3, 1, fill=soc_col(d['soc']))
+    tabs(s, 0); return s
+
 def graph(metric=0):
     s = Scr(); header(s, 'Solar 48V 280Ah  CHARGING', nav=True)
     for i, t in enumerate(['SOC', 'VOLT', 'AMP', 'WATT', 'TEMP']): s.button((8 + i * 77, 46, 73, 34), t, i == metric)
@@ -389,6 +407,7 @@ shots = [
     ('cloudscreen_01_boot.png', 'Boot logo', boot()),
     ('cloudscreen_02_pair.png', 'First start: pair code to add on the website', pairing()),
     ('cloudscreen_03_all.png', 'ALL: every battery of the account (tap = open)', all_page()),
+    ('cloudscreen_03b_all_groups.png', 'ALL by group: chips on top, group totals + energy today', all_groups(0)),
     ('cloudscreen_04_all_alarm.png', 'ALL: alarm when a battery is low / hot / offline', all_page('E-bike 60V LOW 12%')),
     ('cloudscreen_05_home.png', 'HOME: one battery, < > switches battery', home()),
     ('cloudscreen_16_update.png', 'Firmware update from BattLab Cloud (no USB)', ota_screen()),

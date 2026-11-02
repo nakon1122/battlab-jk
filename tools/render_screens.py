@@ -85,7 +85,7 @@ def pill(s, x, y, t, on):
     s.rr(x, y, 72, 26, 13, fill=GOOD if on else LINE)
     s.text(t, x + 36, y + 14, F9B, BG if on else MUTED, 'mm')
 
-def home(soc=72, alarm=None, live=True, flowdir=None, arc_soc=None, roll=None, border=None):
+def home(soc=72, alarm=None, live=True, flowdir=None, arc_soc=None, roll=None, border=None, line2='empty in 2h17'):
     s = Scr(); header(s, 'JK02_24S  LIVE' if live else 'CONNECTING', GOOD if live else WARN, alarm=alarm)
     cx, cy = 106, 150
     col = BAD if soc <= 15 else WARN if soc <= 35 else GOOD
@@ -106,7 +106,7 @@ def home(soc=72, alarm=None, live=True, flowdir=None, arc_soc=None, roll=None, b
     s.rr(9, 228, 462, 46, 10, fill=CARD)
     mn, mx = min(CELLS20), max(CELLS20)
     s.text(f"20S  d{round((mx-mn)*1000)}mV", 21, 242, F9, TEXT)
-    s.text("empty in 2h17", 21, 261, F9, MUTED)
+    s.text(line2, 21, 261, F9, MUTED)
     sx, sw, sy, sh = 159, 140, 234, 34
     s.text('10 min W', sx, 229, ImageFont.truetype(FF + 'FreeMono.ttf', 9 * S), MUTED, 'lt')
     s.rect(sx, sy + 10, sw, 1, LINE)
@@ -397,6 +397,7 @@ shots = [
     ('01_boot.png', 'Boot: BattLab logo, 5 s', boot()),
     ('02_touch_calibration.png', 'First start: touch calibration', calib()),
     ('03_home.png', 'HOME: SOC gauge + live values', home()),
+    ('03b_home_energy.png', 'HOME line 2 alternates every 4 s: time left <-> energy today (+in / -out kWh, counted on the board)', home(line2='+3.42/-1.87kWh')),
     ('04_home_alarm.png', 'HOME with low-SOC alarm', home(soc=12, alarm='LOW SOC 12%')),
     ('05_cells_20s.png', 'CELLS: 20S pack', cells(CELLS20)),
     ('06_cells_32s.png', 'CELLS: dense 32S layout', cells([round(3.300 + random.choice([-6,-3,0,2,4,7])/1000, 3) for _ in range(32)], 'JK02_32S  LIVE')),

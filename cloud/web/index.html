@@ -113,6 +113,9 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 .pk .bar{height:8px;border-radius:6px;background:var(--line);overflow:hidden;margin:8px 0 6px}.pk .bar i{display:block;height:100%;border-radius:6px}
 .pk .big2{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}.pk .kv2{font-size:12.5px;color:var(--muted);line-height:1.55;font-variant-numeric:tabular-nums}
 .pk .kv2 b{color:var(--text)}.pk .mos{display:flex;gap:4px;margin-top:6px}.pk .mos span{font-size:10.5px;padding:2px 7px;border-radius:10px;background:var(--line);color:var(--muted);font-weight:700}.pk .mos span.on{background:color-mix(in srgb,var(--good) 22%,transparent);color:var(--good)}
+.gview{margin-left:8px;color:var(--accent);font-weight:700;cursor:pointer;white-space:nowrap}
+.gtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.gtiles>div{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px}.gtiles span{font-size:12px;color:var(--muted)}.gtiles b{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:2px}
 .cells{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
 .cell{border-radius:12px;padding:8px 10px;border:1px solid var(--line);font-variant-numeric:tabular-nums}
 .cell span{font-size:12px;color:var(--muted)}.cell b{display:block;font-size:17px}.cell em{font-style:normal;font-size:12px;color:var(--muted)}
@@ -295,6 +298,7 @@ esp-web-install-button button{width:100%}
 </section>
 <!-- device -->
 <section id="vFw" class="hide"></section>
+<section id="vGrp" class="hide"></section>
 <section id="vDev" class="hide">
  <div class="row" style="margin-bottom:4px"><div><div class="big" id="dName">—</div><div class="small muted" id="dSub">—</div></div></div>
  <div class="dtabs"><div class="chips" id="dTabs">
@@ -357,7 +361,7 @@ let demo=false,devs=[],latest={},cur=null,tab='ov',pollT=null,listT=null,rt=null
 const ROUTE=()=>location.hash.replace(/^#\/?/,'').split('/');
 function go(h){if(location.hash!=='#'+h)location.hash=h;else route()}
 window.addEventListener('hashchange',route);
-function show(v){['vLogin','vList','vDev','vFw'].forEach(x=>$(x).classList.toggle('hide',x!==v));$('btnBack').classList.toggle('hide',v!=='vDev'&&v!=='vFw');$('btnSet').classList.toggle('hide',v==='vLogin');updInstall();$('btnLogin').classList.toggle('hide',!demo);$('demoBadge').classList.toggle('hide',!demo)}
+function show(v){['vLogin','vList','vDev','vFw','vGrp'].forEach(x=>$(x).classList.toggle('hide',x!==v));$('btnBack').classList.toggle('hide',v!=='vDev'&&v!=='vFw'&&v!=='vGrp');$('btnSet').classList.toggle('hide',v==='vLogin');updInstall();$('btnLogin').classList.toggle('hide',!demo);$('demoBadge').classList.toggle('hide',!demo)}
 $('btnBack').onclick=()=>go('');$('btnFw').onclick=()=>go('fw/install');$('btnFwL').onclick=()=>go('fw/guide');$('logo').onclick=()=>{if(demo||devs.length)go('')};
 $('btnLogin').onclick=()=>{demo=false;devs=[];stopAll();show('vLogin');history.replaceState(null,'',location.pathname)};
 
@@ -487,31 +491,63 @@ async function route(){const [a,id,t]=ROUTE();
  if(a==='fw'){stopAll();fwShow(id||'install',t);return}
  if(!demo&&!(id===BLE_ID&&ble)){const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');return}}
  if(a==='d'&&id){const dev=devs.find(d=>d.id===id);if(!dev){go('');return}openDev(dev,t||'ov');return}
+ if(a==='g'&&id){stopAll();openGroup(decodeURIComponent(id));return}
  stopAll();showList()}
 
+// ---------- group overview: totals, combined power, daily energy, members
+let grpView=null;
+async function openGroup(g){packH=null;const ds=devs.filter(d=>(dset(d).group||'')===g);if(!ds.length){go('');return}grpView={g,hist:null};show('vGrp');renderGroup();
+ const to=Date.now(),from=to-7*86400e3;
+ try{const parts=await Promise.all(ds.map(d=>fetchHist(d,from,to,d.demo?1800:900).catch(()=>[])));if(!grpView||grpView.g!==g)return;
+  const sum={};parts.forEach(rows=>rows.forEach(r=>{const k=new Date(r.t).getTime();const e=sum[k]||(sum[k]={t:k,p:0,n:0});if(num(r.power)){e.p+=r.power;e.n=Math.max(e.n,r.n||1)}}));
+  grpView.hist=Object.values(sum).sort((a,b)=>a.t-b.t);renderGroup()}catch(e){grpView.err=e.message;renderGroup()}}
+function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(dset(d).group||'')===g),T=groupTotals(ds),ev=ds.every(d=>isEvP(dset(d)));
+ let h='<div class="big" style="margin-bottom:4px">'+(ev?'🛵 ':'☀️ ')+esc(g)+'</div><div class="small muted" style="margin-bottom:10px">'+ds.length+' แบต · ออนไลน์ '+T.live+'</div>';
+ h+='<div class="card"><div class="gtiles">'+[['กำลังไฟรวม',T.live?kw(T.pw):'--'],['SOC เฉลี่ย',T.soc!=null?Math.round(T.soc)+' %':'--'],['พลังงานคงเหลือ',T.kwh?T.kwh.toFixed(1)+' kWh':'--'],['วันนี้ชาร์จเข้า',T.hasE?'+'+T.ei.toFixed(2)+' kWh':'--'],['วันนี้จ่ายออก',T.hasE?'−'+T.eo.toFixed(2)+' kWh':'--']].concat(T.hasKm?[['ระยะทางรวม',Math.round(T.km)+' กม.']]:[]).map(x=>'<div><span>'+x[0]+'</span><b>'+x[1]+'</b></div>').join('')+'</div><div class="tiny muted" style="margin-top:8px">พลังงานวันนี้นับบนบอร์ดแต่ละตัว (เฟิร์มแวร์ 2.8.2 ขึ้นไป) · กราฟด้านล่างคิดจากข้อมูลที่ส่งขึ้น cloud ทุก 1 นาที</div></div>';
+ const H=grpView.hist;
+ if(!H)h+='<div class="card"><i class="sk"></i><i class="sk" style="width:70%"></i></div>';
+ else if(!H.length)h+='<div class="card small muted">ยังไม่มีประวัติของกรุ๊ปนี้</div>';
+ else{const day=86400e3,now=Date.now(),last=H.filter(r=>r.t>now-day);
+  // combined power, last 24 h
+  const W=640,HH=170,P=last.length?last:H.slice(-96),t0=now-day,mx=Math.max(100,...P.map(r=>Math.abs(r.p)));
+  const X=t=>(t-t0)/day*W,Y=p=>HH/2-p/mx*(HH/2-8);
+  const path=P.map((r,i)=>(i?'L':'M')+X(r.t).toFixed(1)+' '+Y(r.p).toFixed(1)).join(' ');
+  h+='<div class="card"><h3>กำลังไฟรวมของกรุ๊ป · 24 ชม.</h3><div class="tiny muted">+'+(mx/1000).toFixed(1)+' kW ชาร์จ</div><svg viewBox="0 0 '+W+' '+HH+'" preserveAspectRatio="none" style="width:100%;height:180px;display:block"><line x1="0" x2="'+W+'" y1="'+HH/2+'" y2="'+HH/2+'" stroke="var(--line)" vector-effect="non-scaling-stroke"/>'+(path?'<path d="'+path+'" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>':'')+'</svg><div class="tiny muted">−'+(mx/1000).toFixed(1)+' kW จ่าย</div></div>';
+  // daily energy, 7 days
+  const days={};H.forEach(r=>{const k=new Date(r.t).toLocaleDateString('th-TH',{day:'numeric',month:'short'});const e=days[k]||(days[k]={i:0,o:0});const wh=r.p*(r.n||1)/60;if(wh>0)e.i+=wh/1000;else e.o-=wh/1000});
+  const D=Object.entries(days).slice(-7),dm=Math.max(.1,...D.map(([k,e])=>Math.max(e.i,e.o)));
+  h+='<div class="card"><h3>พลังงานรายวันของกรุ๊ป (kWh)</h3><div class="leg"><span><i style="background:var(--good)"></i>ชาร์จเข้า</span><span><i style="background:var(--warn)"></i>จ่ายออก</span></div><div style="display:flex;gap:8px;align-items:flex-end;height:150px;margin-top:8px">'+D.map(([k,e])=>'<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0"><div style="display:flex;gap:3px;align-items:flex-end;height:110px;width:100%;justify-content:center"><i style="display:block;width:40%;max-width:18px;border-radius:4px 4px 0 0;background:var(--good);height:'+(e.i/dm*100)+'%" title="+'+e.i.toFixed(2)+'"></i><i style="display:block;width:40%;max-width:18px;border-radius:4px 4px 0 0;background:var(--warn);height:'+(e.o/dm*100)+'%" title="−'+e.o.toFixed(2)+'"></i></div><span class="tiny muted" style="white-space:nowrap;font-size:11px">'+k+'</span><span class="tiny" style="font-variant-numeric:tabular-nums;line-height:1.25;text-align:center;font-size:11px">+'+e.i.toFixed(1)+'<br>−'+e.o.toFixed(1)+'</span></div>').join('')+'</div></div>'}
+ h+='<div class="card"><h3>แบตในกรุ๊ป</h3>'+ds.map(d=>{const l=latest[d.id],x=l&&l.data||{},[st,txt]=statusOf(l),live=st==='on';return '<div class="devrow" data-gd="'+esc(d.id)+'" style="cursor:pointer"><div class="l"><b>'+esc(dset(d).icon)+' '+esc(d.name)+'</b><span class="tiny muted"><span class="dot '+st+'"></span> '+esc(txt)+(num(x.ein)?' · วันนี้ +'+(+x.ein).toFixed(2)+' / −'+(+x.eout).toFixed(2)+' kWh':'')+'</span></div><b>'+(live?Math.round(x.soc)+'% · '+kw(x.p||0):'--')+'</b></div>'}).join('')+'</div>';
+ $('vGrp').innerHTML=h;enterAnim('vGrp');$('vGrp').querySelectorAll('[data-gd]').forEach(e=>e.onclick=()=>go('d/'+e.dataset.gd+'/ov'))}
 // ---------- list
 let viewers=[];
 async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}
  devs=data.map(d=>{const l=Array.isArray(d.latest)?d.latest[0]:d.latest;latest[d.id]=l||null;delete d.latest;return d})}
 function statusOf(l){if(!l)return ['off','ยังไม่เคยส่งข้อมูล'];const x=(Date.now()-new Date(l.ts))/1000;if(x>150)return ['off','ออฟไลน์ · '+ago(l.ts)];if(!num(l.data&&l.data.v))return ['wait','ออนไลน์ · ยังไม่ได้เชื่อม BMS'];return ['on','ออนไลน์']}
 function showList(){show('vList');renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
+function groupTotals(ds){const t={n:ds.length,live:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
+ ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
+  if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.cap)&&x.cap>0?x.cap:1;if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
+ t.soc=t.cw?t.sw/t.cw:null;return t}
+function kw(w){return (w>=0?'+':'−')+(Math.abs(w)>=1000?(Math.abs(w)/1000).toFixed(2)+' kW':Math.round(Math.abs(w))+' W')}
 function renderList(){
  const on=devs.filter(d=>statusOf(latest[d.id])[0]!=='off').length;let pw=0,socs=[];
  devs.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
- $('fleet').innerHTML='<div class="row wrap"><div><div class="big">อุปกรณ์ของฉัน</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b></div>':'')+'</div>';
+ $('fleet').innerHTML='<div class="row wrap"><div><div class="big">อุปกรณ์ของฉัน</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b>'+(()=>{const T=groupTotals(devs);return T.hasE||T.kwh?'<div class="tiny muted">'+(T.kwh?'คงเหลือ '+T.kwh.toFixed(1)+' kWh':'')+(T.hasE?' · วันนี้ +'+T.ei.toFixed(1)+' / −'+T.eo.toFixed(1)+' kWh':'')+'</div>':''})()+'</div>':'')+'</div>';
  const card=d=>{const l=latest[d.id],s=dset(d),[st,txt]=statusOf(l),al=evalAlerts(d,l);trackAlerts(d,al);const x=l&&l.data||{};const live=st==='on';const rk=live?evRange(x,s):null;
   return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)?'<span class="abadge" style="background:var(--s1)">มีอัปเดต</span>':'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?liqHtml(d.id,x.soc,num(x.i)&&x.i>0.3)+'<span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
   (live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span>'+(rk!=null?'<b>'+Math.round(rk)+'</b> กม.':'<b>'+fmt(x.p,0)+'</b> W')+'</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'};
  const grpOf=d=>dset(d).group||'',anyG=devs.some(d=>grpOf(d));let closed=new Set();try{closed=new Set(JSON.parse(localStorage.getItem('bl_grp_closed')||'[]'))}catch(e){}
  let cards=[];if(!anyG)cards=devs.map(card);else{const names=[...new Set(devs.map(grpOf))].sort((a,b)=>(a===''?1:0)-(b===''?1:0)||a.localeCompare(b,'th'));
-  for(const g of names){const ds=devs.filter(d=>grpOf(d)===g);let pw=0,soc=[],km=0,hasKm=false,live=0;ds.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){live++;const x=l.data;if(num(x.p))pw+=x.p;if(num(x.soc))soc.push(x.soc);const r=evRange(x,dset(d));if(r!=null){km+=r;hasKm=true}}});
+  for(const g of names){const ds=devs.filter(d=>grpOf(d)===g),T=groupTotals(ds);
    const ev=ds.every(d=>isEvP(dset(d))),ic=ev?'🛵':'☀️',key=g||'_',isC=closed.has(key);
-   cards.push('<div class="grp'+(isC?' closed':'')+'" data-g="'+esc(key)+'"><div>'+(isC?'▸ ':'▾ ')+ic+' '+esc(g||'อื่นๆ')+' · '+ds.length+'</div><span>'+(live?(hasKm&&ev?Math.round(km)+' กม.':(pw>=0?'+':'')+(Math.abs(pw)>=1000?(pw/1000).toFixed(1)+' kW':Math.round(pw)+' W'))+(soc.length?' · '+Math.round(soc.reduce((a,b)=>a+b,0)/soc.length)+'%':''):'ออฟไลน์')+'</span></div>');
+   cards.push('<div class="grp'+(isC?' closed':'')+'" data-g="'+esc(key)+'"><div>'+(isC?'▸ ':'▾ ')+ic+' '+esc(g||'อื่นๆ')+' · '+ds.length+'<div class="tiny muted" style="font-weight:500">'+(T.kwh?'คงเหลือ '+T.kwh.toFixed(1)+' kWh':'')+(T.hasE?(T.kwh?' · ':'')+'วันนี้ +'+T.ei.toFixed(1)+' / −'+T.eo.toFixed(1)+' kWh':'')+'</div></div><span>'+(T.live?(T.hasKm&&ev?Math.round(T.km)+' กม.':kw(T.pw))+(T.soc!=null?' · '+Math.round(T.soc)+'%':''):'ออฟไลน์')+(g?' <a class="gview" data-gv="'+esc(g)+'">ภาพรวม ›</a>':'')+'</span></div>');
    if(!isC)ds.forEach(d=>cards.push(card(d)))}}
  if(!demo)cards.push('<div class="card dcard" data-id="'+DEMO_ID+'" style="border-style:dashed"><div class="row"><span class="ic nf">✨</span><div><b>ดูตัวอย่างแดชบอร์ด</b><div class="small muted">ข้อมูลจำลอง ให้เห็นทุกฟังก์ชัน</div></div></div></div>');
  $('devList').innerHTML=devs.length||!demo?cards.join(''):'';
  if(!devs.length&&!demo)$('devList').insertAdjacentHTML('afterbegin','<div class="card empty"><div class="e">🔌</div><b>ยังไม่มีอุปกรณ์</b><div class="small muted">เพิ่มด้วยรหัสจับคู่ด้านล่าง</div></div>');
  runTweens($('devList'));
+ $('devList').querySelectorAll('[data-gv]').forEach(e=>e.onclick=ev=>{ev.stopPropagation();go('g/'+encodeURIComponent(e.dataset.gv))});
  $('devList').querySelectorAll('.grp').forEach(e=>e.onclick=()=>{const k=e.dataset.g;closed.has(k)?closed.delete(k):closed.add(k);try{localStorage.setItem('bl_grp_closed',JSON.stringify([...closed]))}catch(x){}renderList()});
  $('devList').querySelectorAll('.dcard').forEach(e=>e.onclick=()=>{const id=e.dataset.id;if(id===DEMO_ID&&!devs.find(d=>d.id===DEMO_ID)){devs.push(demoDev())}go('d/'+id+'/ov')})}
 function renderViewers(){const e=$('viewList');if(!e)return;e.classList.toggle('hide',demo||!viewers.length);e.innerHTML='<h3>จอ Cloud Screen</h3>'+viewers.map(v=>{const on=v.last_seen&&(Date.now()-new Date(v.last_seen))<60000;return '<div class="devrow"><div class="l"><b>🖥️ '+esc(v.name)+'</b><span class="tiny muted"><span class="dot '+(on?'on':'off')+'"></span> '+(on?'ออนไลน์':v.last_seen?'ออฟไลน์ · '+ago(v.last_seen):'ยังไม่เคยเชื่อมต่อ')+' · '+esc(v.pair_code)+(v.fw?' · '+esc(v.fw):'')+'</span></div>'+(MAN&&MAN.boards&&MAN.boards.cloudscreen&&verNum(MAN.boards.cloudscreen.version)>verNum(v.fw)?'<button data-vu="'+esc(v.id)+'">⬆ '+esc(MAN.boards.cloudscreen.version)+'</button>':'')+'<button class="ghost" data-vr="'+esc(v.id)+'">เปลี่ยนชื่อ</button><button class="danger" data-vd="'+esc(v.id)+'">ลบ</button></div>'}).join('')+'<div class="tiny muted" style="margin-top:8px">จอนี้แสดงแบตทุกก้อนในบัญชีนี้ และสั่งงานได้เหมือนหน้าเว็บ</div>';
@@ -555,7 +591,7 @@ function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
   case 't2':n='อุณหภูมิ 2';v=fmtT(d.t2);u=tU();if(a.tempHigh>0&&d.t2>=a.tempHigh)cls='bad';break;
   case 'mos':n='อุณหภูมิ MOS';v=fmtT(d.mos);u=tU();if(a.mosHigh>0&&d.mos>=a.mosHigh)cls='bad';break;
   case 'cyc':n='รอบการชาร์จ';v=num(d.cyc)?d.cyc:'--';u='รอบ';break;
-  case 'energy':n='พลังงานวันนี้';v=energyToday?energyToday.in.toFixed(2):'--';u='kWh เข้า';sub=energyToday?'จ่ายออก '+energyToday.out.toFixed(2)+' kWh':'คำนวณจากประวัติ';break;
+  case 'energy':{n='พลังงานวันนี้';const bd=num(d.ein),E=bd?{in:+d.ein,out:+(d.eout||0)}:energyToday;v=E?E.in.toFixed(2):'--';u='kWh เข้า';sub=E?'จ่ายออก '+E.out.toFixed(2)+' kWh'+(bd?' · นับบนบอร์ด':''):'คำนวณจากประวัติ';break}
   case 'rssi':n='สัญญาณ Bluetooth';v=num(d.rssi)&&d.rssi?d.rssi:'--';u='dBm';sub=!num(d.rssi)||!d.rssi?'':d.rssi>-70?'ดี':d.rssi>-85?'พอใช้':'อ่อน';break;
   case 'up':n='บอร์ดทำงานมา';v=dur(d.up);break}
  return '<div class="tile '+cls+'"><small>'+n+'</small><b>'+v+'</b><i>'+u+'</i>'+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div>'}
@@ -924,9 +960,13 @@ async function claimPending(){const c=ls.get('bl_claim',null);if(!c||Date.now()-
   if(i===0)toast('รอบอร์ดต่อ cloud ครั้งแรก (อาจใช้ถึง 1 นาที)…');await new Promise(r=>setTimeout(r,5000))}
  toast('บอร์ดยังไม่ขึ้น cloud · ตรวจว่าต่อ Wi-Fi บ้านได้ แล้วเปิดลิงก์นี้อีกครั้ง');return false}
 const bleRead=async i=>{try{return JSON.parse(new TextDecoder().decode(await ble.ch[i].readValue()))}catch(e){return null}};
+async function bleReadList(i){const f=await bleRead(i);if(!f||Array.isArray(f))return f;if(!Array.isArray(f.d))return null;
+ const pages={[f.p]:f.d};for(let k=0;k<(f.pp||1)*2&&Object.keys(pages).length<(f.pp||1);k++){const g=await bleRead(i);if(g&&Array.isArray(g.d))pages[g.p]=g.d}
+ const L=[];for(let p=0;p<(f.pp||1);p++)(pages[p]||[]).forEach(x=>L.push(x));
+ return i===3?L.map(x=>({name:x[0],mac:x[1],rssi:x[2],type:x[3],candidate:!!x[4]})):L.map(x=>({ssid:x[0],rssi:x[1],lock:!!x[2]}))}
 async function blePoll(all){if(!ble||ble.busy)return;ble.busy=true;try{
  const live=await bleRead(0),cfg=await bleRead(1);ble.n=(ble.n||0)+1;
- if(all||ble.n%2===0){ble.last.jk=await bleRead(2);ble.last.devs=await bleRead(3);ble.last.wscan=await bleRead(4)}
+ if(all||ble.n%2===0){ble.last.jk=await bleRead(2);ble.last.devs=await bleReadList(3);ble.last.wscan=await bleReadList(4)}
  if(live&&cfg){const data={...live,cfg,jk:ble.last.jk&&ble.last.jk.v&&!ble.last.jk.f?ble.last.jk:undefined,pa:ble.last.jk&&ble.last.jk.f?ble.last.jk:undefined,devs:Array.isArray(ble.last.devs)?ble.last.devs:undefined,wscan:Array.isArray(ble.last.wscan)&&ble.last.wscan.length?ble.last.wscan:undefined};
   latest[BLE_ID]={ts:new Date().toISOString(),data};const d=devs.find(x=>x.id===BLE_ID);if(d){d.pair_code=cfg.pair;d.name=cfg.name||d.name;d.blePaired=cfg.paired}
   if(cur&&cur.ble){if(tab==='ctl')renderCtl();else if(tab!=='hist')renderDev();else renderHeader()}}

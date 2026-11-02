@@ -535,7 +535,9 @@ static void home(const DisplaySnap &d, bool force) {
     b.drawString(String(s.count) + "S  d" + String(int((mx - mn) * 1000 + .5f)) + "mV", 12, 14);
     String e = etaText(s);
     b.setTextColor(C_MUTED, C_CARD);
-    b.drawString(e.length() ? e : String(s.cycles) + " cycles", 12, 33);
+    // second line alternates: time left <-> energy today (kWh, counted on the board)
+    bool showE = (millis() / 4000) % 2 && (d.eIn > 0.005f || d.eOut > 0.005f);
+    b.drawString(showE ? String("+") + fmt(d.eIn, 2) + "/-" + fmt(d.eOut, 2) + "kWh" : e.length() ? e : String(s.cycles) + " cycles", 12, 33);
   } else {
     b.drawString(d.linked ? "Waiting for BMS data" : "Not connected - open BMS tab", 12, 23);
   }
