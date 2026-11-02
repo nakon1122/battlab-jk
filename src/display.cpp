@@ -464,7 +464,7 @@ static void histPush(const DisplaySnap &d) {
   if (histCount < HIST_N) histCount++;
 }
 static String etaText(const jk::Sample &s) {
-  float full = s.soc > 3 ? s.capacity / (s.soc / 100.f) : 0;
+  float full = s.full > 0 ? s.full : s.soc > 3 ? s.capacity / (s.soc / 100.f) : 0;
   float h = -1;
   const char *w = "";
   if (s.current > 0.3f && full > 0) { h = (full - s.capacity) / s.current; w = "full in "; }

@@ -30,9 +30,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.6-cyd35"
+#define BATTLAB_FW "2.8.7-cyd35"
 #else
-#define BATTLAB_FW "2.8.6-s3"
+#define BATTLAB_FW "2.8.7-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -223,6 +223,7 @@ void stateApi() {
       v["current"] = s.current;
       v["power"] = s.voltage * s.current;
       v["capacity"] = s.capacity;
+      v["full"] = s.full;
       v["cycles"] = s.cycles;
       v["temp1"] = s.temp1;
       v["temp2"] = s.temp2;
@@ -255,6 +256,7 @@ void stateApi() {
         o["i"] = pk.s.current;
         o["t"] = std::max(pk.s.temp1, pk.s.temp2);
         o["cap"] = pk.s.capacity;
+        o["full"] = pk.s.full;
         o["chg"] = pk.s.charge;
         o["dsg"] = pk.s.discharge;
         float mn = 9, mx = 0;
@@ -2396,6 +2398,7 @@ static void cloudTask(void *) {
         d["p"] = s.voltage * s.current;
         d["soc"] = s.soc;
         d["cap"] = s.capacity;
+        if (s.full > 0) d["full"] = s.full;
         d["cyc"] = s.cycles;
         d["t1"] = s.temp1;
         d["t2"] = s.temp2;
@@ -2435,6 +2438,7 @@ static void cloudTask(void *) {
             o["i"] = serialized(String(x.current, 2));
             o["soc"] = x.soc;
             o["cap"] = serialized(String(x.capacity, 1));
+            if (x.full > 0) o["full"] = serialized(String(x.full, 1));
             o["cyc"] = x.cycles;
             o["t1"] = serialized(String(x.temp1, 1));
             o["t2"] = serialized(String(x.temp2, 1));
@@ -2786,6 +2790,7 @@ static void bleRefresh(bool slow) {
       d["p"] = roundf(s.voltage * s.current);
       d["soc"] = s.soc;
       d["cap"] = roundf(s.capacity * 10) / 10;
+      if (s.full > 0) d["full"] = roundf(s.full * 10) / 10;
       d["cyc"] = s.cycles;
       d["t1"] = s.temp1;
       d["t2"] = s.temp2;
@@ -2955,7 +2960,7 @@ static void rs485Recompute() {
   else {
     auto t = jk485::bankTotals(ss, fresh, 16);
     jk::Sample m = ss[first]; // cells of the first pack for the local page
-    m.voltage = t.v; m.current = t.i; m.soc = t.soc; m.capacity = t.cap;
+    m.voltage = t.v; m.current = t.i; m.soc = t.soc; m.capacity = t.cap; m.full = t.full;
     m.temp1 = t.tmax; m.temp2 = t.tmax; m.mos = t.mos; m.cycles = t.cycles;
     m.charge = t.chg; m.discharge = t.dsg;
     shared.sample = m;

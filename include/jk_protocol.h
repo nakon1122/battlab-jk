@@ -29,6 +29,7 @@ inline std::array<uint8_t, 20> request(uint8_t cmd) {
 struct Sample {
   float cells[32]{}, voltage = 0, current = 0, soc = 0, capacity = 0, temp1 = 0,
                      temp2 = 0, mos = 0;
+  float full = 0; // full / nominal capacity (Ah), 0 = unknown
   uint32_t cycles = 0;
   unsigned count = 0;
   bool charge = false, discharge = false;
@@ -58,7 +59,8 @@ inline bool decode(const uint8_t *b, bool s32, Sample &out) {
   s.voltage = u32(b + 118 + off) * .001f;
   s.current = int32_t(u32(b + 126 + off)) * .001f;
   s.soc = b[141 + off];
-  s.capacity = u32(b + 146 + off) * .001f;
+  s.capacity = u32(b + 142 + off) * .001f; // remaining Ah
+  s.full = u32(b + 146 + off) * .001f;     // full / nominal Ah
   s.cycles = u32(b + 150 + off);
   s.temp1 = int16_t(u16(b + 130 + off)) * .1f;
   s.temp2 = int16_t(u16(b + 132 + off)) * .1f;

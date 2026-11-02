@@ -113,6 +113,8 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 .pk .bar{height:8px;border-radius:6px;background:var(--line);overflow:hidden;margin:8px 0 6px}.pk .bar i{display:block;height:100%;border-radius:6px}
 .pk .big2{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}.pk .kv2{font-size:12.5px;color:var(--muted);line-height:1.55;font-variant-numeric:tabular-nums}
 .pk .kv2 b{color:var(--text)}.pk .mos{display:flex;gap:4px;margin-top:6px}.pk .mos span{font-size:10.5px;padding:2px 7px;border-radius:10px;background:var(--line);color:var(--muted);font-weight:700}.pk .mos span.on{background:color-mix(in srgb,var(--good) 22%,transparent);color:var(--good)}
+.shareban{background:rgba(54,196,168,.12);border:1px solid rgba(54,196,168,.3);color:var(--text);border-radius:12px;padding:8px 12px;font-size:13px;margin-bottom:10px}.shareban a{color:var(--accent);cursor:pointer;font-weight:700}
+body.shared #btnLogin,body.shared #btnBack{display:none!important}
 .gview{margin-left:8px;color:var(--accent);font-weight:700;cursor:pointer;white-space:nowrap}
 .gtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .gtiles>div{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px}.gtiles span{font-size:12px;color:var(--muted)}.gtiles b{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:2px}
@@ -394,7 +396,7 @@ async function saveDset(dev,s){dev.settings=s;if(dev.demo){ls.set('bl_demo_set',
 let packSel=null,packH=null;
 let demo=false,devs=[],latest={},cur=null,tab='ov',pollT=null,listT=null,rt=null,rtOn=false,hist=[],charts=[],energyToday=null,energyAt=0,showTable=false;
 const ROUTE=()=>location.hash.replace(/^#\/?/,'').split('/');
-function go(h){if(location.hash!=='#'+h)location.hash=h;else route()}
+function go(h){if(share&&!/^s\//.test(h))h='s/'+share.token+(h?'/'+h:'');if(location.hash!=='#'+h)location.hash=h;else route()}
 window.addEventListener('hashchange',route);
 function show(v){['vLogin','vList','vDev','vFw','vGrp'].forEach(x=>$(x).classList.toggle('hide',x!==v));$('btnBack').classList.toggle('hide',v!=='vDev'&&v!=='vFw'&&v!=='vGrp');$('btnSet').classList.toggle('hide',v==='vLogin');updInstall();$('btnLogin').classList.toggle('hide',!demo);$('demoBadge').classList.toggle('hide',!demo)}
 $('btnBack').onclick=()=>go('');$('btnFw').onclick=()=>go('fw/install');$('btnFwL').onclick=()=>go('fw/guide');$('logo').onclick=()=>{if(demo||devs.length)go('')};
@@ -410,8 +412,8 @@ function demoAt(t){// t seconds
  return {fw:'2.3.0-cyd35',state:'LIVE',bms:'JK02_32S',model:'JK-B2A24S20P',rssi:-61,up:Math.round(t%200000),heap:61440,blk:31744,v:+v.toFixed(2),i:cur,p:+(v*cur).toFixed(0),soc:+soc.toFixed(0),cap:+(soc/100*280).toFixed(1),cyc:37,t1:+t1.toFixed(1),t2:+(t1-0.8).toFixed(1),mos:+(t1+7).toFixed(1),chg:true,dsg:true,cells,cmin:Math.min(...cells),cmax:Math.max(...cells),...demoExtra()}}
 function demoExtra(){const S=demoState();return {chg:S.chg,dsg:S.dsg,jk:{v:S.jk,sw:[S.chg,S.dsg,S.bal]},devs:S.devs||undefined,wscan:S.wscan||undefined,cfg:{board:'cyd35',remote:1,ota:1,led:S.led,ap:S.ap,tx:S.tx,ssid:S.ssid,ip:'192.168.1.57',wrssi:-55,note:S.note||undefined,mac:'c8:47:80:12:34:56',proto:'AUTO',auto:true,atype:0,fam:1,scanning:false,lw:'',disp:S.disp}}}
 function demoHist(from,to,b){const out=[];for(let t=Math.ceil(from/1000/b)*b;t<to/1000;t+=b){const d=demoAt(t);out.push({t:new Date(t*1000).toISOString(),soc:d.soc,voltage:d.v,current:d.i,power:d.p,temp:d.t1,mos:d.mos,cell_min:d.cmin,cell_max:d.cmax,n:Math.max(1,Math.round(b/60))})}return out}
-async function fetchLatest(dev){if(dev.ble)return latest[BLE_ID]||null;if(dev.demo)return {ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};const {data}=await sb.from('latest').select('ts,data').eq('device_id',dev.id).maybeSingle();return data}
-async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);if(packH!=null){const {data,error}=await sb.rpc('pack_history',{p_device:dev.id,p_addr:packH,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return (data||[]).map(r=>({...r,power:num(r.voltage)&&num(r.current)?r.voltage*r.current:null,mos:null}))}const {data,error}=await sb.rpc('history_buckets',{p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}
+async function fetchLatest(dev){if(dev.ble)return latest[BLE_ID]||null;if(dev.shared){await shareLoad();return latest[dev.id]||null}if(dev.demo)return {ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};const {data}=await sb.from('latest').select('ts,data').eq('device_id',dev.id).maybeSingle();return data}
+async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);if(dev.shared){const {data,error}=await sb.rpc('share_history',{p_token:share.token,p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}if(packH!=null){const {data,error}=await sb.rpc('pack_history',{p_device:dev.id,p_addr:packH,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return (data||[]).map(r=>({...r,power:num(r.voltage)&&num(r.current)?r.voltage*r.current:null,mos:null}))}const {data,error}=await sb.rpc('history_buckets',{p_device:dev.id,p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:b});if(error)throw error;return data||[]}
 
 // ---------- derived values
 function chem(s,x){if(s.chem!=='auto')return s.chem;if(!num(x.cmax))return 'LFP';return x.cmax<2.9?'LTO':x.cmax<3.75?'LFP':'NMC'}
@@ -422,7 +424,7 @@ function derive(l,s){const d=(l&&l.data)||{},x={live:false};if(!l)return x;
  else if(num(d.cmin)&&num(d.cmax)&&d.cmax>0){x.cmin=d.cmin;x.cmax=d.cmax;x.delta=Math.round((d.cmax-d.cmin)*1000);x.imin=x.imax='?';
   if(Array.isArray(d.packs))for(const p of d.packs){const c=(p.cells||[]).map(Number);c.forEach((v,i)=>{if(Math.abs(v-d.cmin)<6e-4)x.imin='#'+p.a+'/'+(i+1);if(Math.abs(v-d.cmax)<6e-4)x.imax='#'+p.a+'/'+(i+1)})}}
  x.chem=chem(s,x);
- x.full=s.capAh>0?s.capAh:(num(d.cap)&&num(d.soc)&&d.soc>3?d.cap/(d.soc/100):null);
+ x.full=s.capAh>0?s.capAh:num(d.full)&&d.full>0?+d.full:(num(d.cap)&&num(d.soc)&&d.soc>3?d.cap/(d.soc/100):null);x.fullSrc=s.capAh>0?'set':num(d.full)&&d.full>0?'bms':'est';
  const I=d.i;x.mode=!num(I)?'idle':I>0.3?'chg':I<-0.3?'dsg':'idle';
  if(x.full&&num(d.cap)){if(x.mode==='chg')x.eta=Math.max(0,x.full-d.cap)/I;else if(x.mode==='dsg')x.eta=d.cap/-I}
  return x}
@@ -517,11 +519,15 @@ sb.auth.onAuthStateChange(async(e,s)=>{
  if(e==='PASSWORD_RECOVERY'){const np=prompt('ตั้งรหัสผ่านใหม่ (อย่างน้อย 8 ตัว)');if(np&&np.length>=8){const {error}=await sb.auth.updateUser({password:np});toast(error?thErr(error):'เปลี่ยนรหัสผ่านแล้ว')}afterLogin()}
  else if(e==='SIGNED_OUT'&&!demo){stopAll();show('vLogin')}});
 async function afterLogin(){demo=false;const {data}=await sb.auth.getUser();const up=data&&data.user&&data.user.user_metadata&&data.user.user_metadata.prefs;if(up){P={...PREF_DEF,...up};ls.set('bl_prefs',P);applyTheme()}await loadDevices();if(ls.get('bl_claim',null)){history.replaceState(null,'','#');if(await claimPending())return}route()}
-async function boot(){updInstall();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[0]==='fw'||ROUTE()[0]==='claim'||ROUTE()[0]==='claimv')route();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
+async function boot(){updInstall();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[0]==='fw'||ROUTE()[0]==='claim'||ROUTE()[0]==='claimv'||ROUTE()[0]==='s')route();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
 
 // ---------- routing
 function stopAll(){clearTimeout(cmdT);cmdT=null;cmds=[];clearInterval(pollT);clearInterval(listT);pollT=listT=null;if(rt){sb.removeChannel(rt);rt=null}rtOn=false;cur=null;destroyCharts()}
-async function route(){const [a,id,t]=ROUTE();
+async function route(){let [a,id,t]=ROUTE();
+ if(a==='s'&&id){const R=ROUTE();if(!share||share.token!==id){if(!await shareOpen(id))return}a=R[2]||'';id=R[3];t=R[4];
+  if(a==='d'&&id){const dev=devs.find(d=>d.id===id);if(dev){openDev(dev,t||'ov');shareBanner();return}}
+  stopAll();if(share.kind==='group')openGroup(share.group);else openDev(devs[0],'ov');shareBanner();return}
+ if(share){share=null;devs=[];latest={};document.body.classList.remove('shared')}
  if(a==='claim'||a==='claimv'){claimLater(a==='claimv'?'v':'d',id,decodeURIComponent(t||''));const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');msg('เข้าสู่ระบบ (หรือสมัคร) แล้วบอร์ดจะถูกเพิ่มเข้าบัญชีให้เอง',true);return}history.replaceState(null,'','#');if(await claimPending())return;go('');return}
  if(a==='fw'){stopAll();fwShow(id||'install',t);return}
  if(!demo&&!(id===BLE_ID&&ble)){const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');return}}
@@ -529,6 +535,22 @@ async function route(){const [a,id,t]=ROUTE();
  if(a==='g'&&id){stopAll();openGroup(decodeURIComponent(id));return}
  stopAll();showList()}
 
+// ---------- read-only share links (no account needed)
+let share=null,shareAt=0;
+async function shareLoad(force){if(!share||(!force&&Date.now()-shareAt<5000))return;shareAt=Date.now();const {data,error}=await sb.rpc('get_share',{p_token:share.token});if(error||!data)return;
+ share.kind=data.kind;share.group=data.group;const old=new Map(devs.map(d=>[d.id,d]));
+ devs=(data.devices||[]).map(x=>{const d=old.get(x.id)||{id:x.id,shared:true,pair_code:'',created_at:''};d.name=x.name;d.settings=x.settings||{};if(x.latest)latest[x.id]=x.latest;return d})}
+async function shareOpen(token){share={token};shareAt=0;demo=false;await shareLoad(true);if(!devs.length){share=null;show('vLogin');msg('ลิงก์นี้ถูกยกเลิกแล้ว หรือไม่มีอยู่',true);return false}document.body.classList.add('shared');
+ clearInterval(listT);listT=setInterval(async()=>{if(!share)return;await shareLoad(true);if(!$('vGrp').classList.contains('hide'))renderGroup()},20000);return true}
+function shareBanner(){if(!share)return;for(const v of ['vDev','vGrp']){const e=$(v);if(!e)continue;let b=e.querySelector('.shareban');if(!b){b=document.createElement('div');b.className='shareban';e.prepend(b)}b.innerHTML='👁 ดูอย่างเดียว · ลิงก์ที่เจ้าของแชร์ไว้'+(share.kind==='group'&&v==='vDev'?' · <a onclick="go(\'\')">กลับไปทั้งกรุ๊ป</a>':'')}}
+function shareUrl(t){return location.origin+location.pathname+'#s/'+t}
+async function shareCard(box,where){if(!box||demo)return;const q=sb.from('share_links').select('token,created_at');const {data,error}=await (where.device?q.eq('device_id',where.device):q.eq('group_name',where.group));
+ if(error){box.innerHTML='<div class="small muted">โหลดลิงก์ไม่ได้: '+esc(error.message)+'</div>';return}
+ box.innerHTML=(data||[]).map(r=>'<div class="row" style="gap:8px;padding:6px 0;border-top:1px solid var(--line)"><code style="font-size:12px;word-break:break-all;flex:1">'+esc(shareUrl(r.token))+'</code><span class="nf"><button class="ghost" style="padding:5px 10px;font-size:12px" data-scopy="'+r.token+'">คัดลอก</button> <button class="danger" style="padding:5px 10px;font-size:12px" data-srev="'+r.token+'">ยกเลิก</button></span></div>').join('')+
+  '<button class="soft" data-snew style="margin-top:8px">＋ สร้างลิงก์ใหม่</button>';
+ box.querySelectorAll('[data-scopy]').forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(shareUrl(b.dataset.scopy)).then(()=>toast('คัดลอกลิงก์แล้ว'),()=>{})});
+ box.querySelectorAll('[data-srev]').forEach(b=>b.onclick=async()=>{const {error}=await sb.from('share_links').delete().eq('token',b.dataset.srev);toast(error?'ยกเลิกไม่สำเร็จ: '+error.message:'ยกเลิกลิงก์แล้ว · คนที่มีลิงก์จะเปิดไม่ได้อีก');shareCard(box,where)});
+ box.querySelector('[data-snew]').onclick=async()=>{const {data:r,error}=await sb.from('share_links').insert(where.device?{device_id:where.device}:{group_name:where.group}).select('token').single();if(error){toast('สร้างไม่สำเร็จ: '+error.message);return}navigator.clipboard&&navigator.clipboard.writeText(shareUrl(r.token)).catch(()=>{});toast('สร้างลิงก์และคัดลอกแล้ว');shareCard(box,where)}}
 // ---------- group overview: totals, combined power, daily energy, members
 let grpView=null;
 async function openGroup(g){packH=null;const ds=devs.filter(d=>(dset(d).group||'')===g);if(!ds.length){go('');return}grpView={g,hist:null};show('vGrp');renderGroup();
@@ -552,8 +574,9 @@ function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(d
   const days={};H.forEach(r=>{const k=new Date(r.t).toLocaleDateString('th-TH',{day:'numeric',month:'short'});const e=days[k]||(days[k]={i:0,o:0});const wh=r.p*(r.n||1)/60;if(wh>0)e.i+=wh/1000;else e.o-=wh/1000});
   const D=Object.entries(days).slice(-7),dm=Math.max(.1,...D.map(([k,e])=>Math.max(e.i,e.o)));
   h+='<div class="card"><h3>พลังงานรายวันของกรุ๊ป (kWh)</h3><div class="leg"><span><i style="background:var(--good)"></i>ชาร์จเข้า</span><span><i style="background:var(--warn)"></i>จ่ายออก</span></div><div style="display:flex;gap:8px;align-items:flex-end;height:150px;margin-top:8px">'+D.map(([k,e])=>'<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0"><div style="display:flex;gap:3px;align-items:flex-end;height:110px;width:100%;justify-content:center"><i style="display:block;width:40%;max-width:18px;border-radius:4px 4px 0 0;background:var(--good);height:'+(e.i/dm*100)+'%" title="+'+e.i.toFixed(2)+'"></i><i style="display:block;width:40%;max-width:18px;border-radius:4px 4px 0 0;background:var(--warn);height:'+(e.o/dm*100)+'%" title="−'+e.o.toFixed(2)+'"></i></div><span class="tiny muted" style="white-space:nowrap;font-size:11px">'+k+'</span><span class="tiny" style="font-variant-numeric:tabular-nums;line-height:1.25;text-align:center;font-size:11px">+'+e.i.toFixed(1)+'<br>−'+e.o.toFixed(1)+'</span></div>').join('')+'</div></div>'}
+ if(!share&&!demo)h+='<div class="card"><h3>แชร์ทั้งกรุ๊ปแบบดูอย่างเดียว</h3><div class="small muted">คนที่มีลิงก์จะเห็นยอดรวมและแบตทุกลูกในกรุ๊ปนี้ ไม่ต้องมีบัญชี ควบคุมอะไรไม่ได้</div><div id="gShareBox" style="margin-top:8px"></div></div>';
  h+='<div class="card"><h3>แบตในกรุ๊ป</h3>'+ds.map(d=>{const l=latest[d.id],x=l&&l.data||{},[st,txt]=statusOf(l),live=st==='on';return '<div class="devrow" data-gd="'+esc(d.id)+'" style="cursor:pointer"><div class="l"><b>'+esc(dset(d).icon)+' '+esc(d.name)+'</b><span class="tiny muted"><span class="dot '+st+'"></span> '+esc(txt)+(num(x.ein)?' · วันนี้ +'+(+x.ein).toFixed(2)+' / −'+(+x.eout).toFixed(2)+' kWh':'')+'</span></div><b>'+(live?Math.round(x.soc)+'% · '+kw(x.p||0):'--')+'</b></div>'}).join('')+'</div>';
- $('vGrp').innerHTML=h;enterAnim('vGrp');$('vGrp').querySelectorAll('[data-gd]').forEach(e=>e.onclick=()=>go('d/'+e.dataset.gd+'/ov'))}
+ $('vGrp').innerHTML=h;enterAnim('vGrp');if($('gShareBox'))shareCard($('gShareBox'),{group:g});shareBanner();$('vGrp').querySelectorAll('[data-gd]').forEach(e=>e.onclick=()=>go('d/'+e.dataset.gd+'/ov'))}
 // ---------- list
 let viewers=[];
 async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}
@@ -562,7 +585,7 @@ function statusOf(l){if(!l)return ['off','ยังไม่เคยส่ง�
 function showList(){show('vList');renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
 function groupTotals(ds){const t={n:ds.length,live:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
  ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
-  if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.cap)&&x.cap>0?x.cap:1;if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
+  if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.full)&&x.full>0?+x.full:(num(x.cap)&&num(x.soc)&&x.soc>3?x.cap*100/x.soc:1);if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
  t.soc=t.cw?t.sw/t.cw:null;return t}
 function kw(w){return (w>=0?'+':'−')+(Math.abs(w)>=1000?(Math.abs(w)/1000).toFixed(2)+' kW':Math.round(Math.abs(w))+' W')}
 function renderList(){
@@ -597,11 +620,11 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
-function openDev(dev,t){if(dev.ble&&!['ov','cells','ctl'].includes(t))t='ctl';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!dev.ble&&!['ov','cells','ctl'].includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
+function openDev(dev,t){const AL=dev.ble?['ov','cells','ctl']:dev.shared?['ov','cells','hist']:null;if(AL&&!AL.includes(t))t=AL[0]==='ov'&&dev.ble?'ctl':'ov';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!AL&&!AL.includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
  ctlKey='';renderDev(true);if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
-function subRT(){if(cur.demo||cur.ble)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
+function subRT(){if(cur.demo||cur.ble||cur.shared)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
 async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(dev).catch(()=>null);if(cur!==dev)return;if(l)latest[dev.id]=l;
  if(l&&l.data&&l.data.fw){if(fwSeen[dev.id]&&fwSeen[dev.id]!==l.data.fw)toast('✓ บอร์ดใช้เฟิร์มแวร์ '+l.data.fw+' แล้ว');fwSeen[dev.id]=l.data.fw}
  if(!dev.ble&&Date.now()-energyAt>300000){energyAt=Date.now();const m=new Date();m.setHours(0,0,0,0);fetchHist(dev,m.getTime(),Date.now(),dev.demo?600:3600).then(r=>{energyToday=energyOf(r);if(tab==='ov')renderDev()}).catch(()=>{})}
@@ -628,7 +651,7 @@ function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
   case 'i':n='กระแส';v=fmt(d.i,1);u='A';sub=x.mode==='chg'?'กำลังชาร์จ':x.mode==='dsg'?'กำลังจ่ายไฟ':'พัก';break;
   case 'p':n='กำลังไฟ';v=num(d.p)?Math.abs(d.p)>=1000?(d.p/1000).toFixed(2):d.p.toFixed(0):'--';u=num(d.p)&&Math.abs(d.p)>=1000?'kW':'W';break;
   case 'cap':n='ความจุคงเหลือ';v=fmt(d.cap,1);u='Ah';if(num(d.cap)&&num(d.v))sub='≈ '+(d.cap*d.v/1000).toFixed(2)+' kWh';break;
-  case 'full':n='ความจุเต็ม';v=x.full?x.full.toFixed(0):'--';u='Ah';sub=s.capAh>0?'ตั้งค่าเอง':'ประมาณจาก SOC';break;
+  case 'full':n='ความจุเต็ม';v=x.full?x.full.toFixed(0):'--';u='Ah';sub=x.fullSrc==='set'?'ตั้งค่าเอง':x.fullSrc==='bms'?'จาก BMS':'ประมาณจาก SOC';break;
   case 'eta':n=x.mode==='chg'?'เวลาจนเต็ม':x.mode==='dsg'?'เวลาจนหมด':'เวลาโดยประมาณ';v=x.mode==='idle'?'—':hm(x.eta);sub=x.mode==='idle'?'ไม่มีการชาร์จ/จ่าย':'ที่กระแสตอนนี้';break;
   case 'delta':n='เซลล์ต่างกัน (Δ)';v=num(x.delta)?x.delta:'--';u='mV';if(num(x.delta)){sub='เซลล์ '+x.imax+' สูงสุด · '+x.imin+' ต่ำสุด';if(a.deltaHigh>0&&x.delta>=a.deltaHigh)cls='warn'}break;
   case 'cavg':n='เซลล์เฉลี่ย';v=fmt(x.cavg,3);u='V';break;
@@ -798,9 +821,9 @@ function renderSet(){if(!editS||editS._id!==cur.id){editS=JSON.parse(JSON.string
   '<label>กรุ๊ป (เช่น บ้าน, รถ)<input id="sGroup" maxlength="24" list="grpList" value="'+esc(s.group||'')+'"><datalist id="grpList">'+[...new Set(devs.map(d=>dset(d).group).filter(Boolean))].map(g=>'<option value="'+esc(g)+'">').join('')+'</datalist></label></div>'+
  '<div class="card"><h3>แบตเตอรี่</h3><div class="th3"><label>ชนิดเซลล์<select id="sChem"><option value="auto">อัตโนมัติ (ดูจากแรงดัน)</option><option value="LFP">LiFePO4 (LFP)</option><option value="NMC">Li-ion (NMC)</option><option value="LTO">LTO</option></select></label><label>ความจุเต็ม (Ah, 0 = ประมาณให้)<input id="sCap" type="number" min="0" step="1" value="'+s.capAh+'"></label></div><div class="small muted">ใช้คำนวณเวลาจนเต็ม/หมด และช่วงสีของเซลล์</div></div>'+
  '<div class="card tilemgr"><h3>การ์ดในหน้าภาพรวม</h3><div class="small muted" style="margin-bottom:6px">ติ๊กเพื่อแสดง · ใช้ลูกศรเรียงลำดับ</div>'+s.order.map((k,j)=>'<div class="tm"><input type="checkbox" data-k="'+k+'" '+(s.hidden.includes(k)?'':'checked')+'><span>'+TILE_NAMES[k]+'</span><button class="ghost" data-up="'+j+'" '+(j?'':'disabled')+'>↑</button><button class="ghost" data-dn="'+j+'" '+(j<s.order.length-1?'':'disabled')+'>↓</button></div>').join('')+'</div>'+
- '<div class="card row wrap"><button id="sSave">บันทึกการตั้งค่า</button><button class="soft" id="sReset">ค่าเริ่มต้น</button></div>'+
+ (cur.demo?'':'<div class="card"><h3>แชร์ลิงก์ดูอย่างเดียว</h3><div class="small muted">ส่งลิงก์ให้คนที่ไม่มีบัญชีดูค่าแบตของบอร์ดนี้แบบสด ๆ ได้ (ภาพรวม · เซลล์ · กราฟ) ควบคุมหรือแก้ค่าอะไรไม่ได้ และไม่เห็นรหัสจับคู่ / Wi-Fi / รหัส JK · กดยกเลิกเมื่อไหร่ลิงก์ใช้ไม่ได้ทันที</div><div id="shareBox" style="margin-top:8px"><div class="small muted">กำลังโหลด…</div></div></div>')+'<div class="card row wrap"><button id="sSave">บันทึกการตั้งค่า</button><button class="soft" id="sReset">ค่าเริ่มต้น</button></div>'+
  (cur.demo?'':'<div class="card"><h3>อุปกรณ์</h3><div class="small muted">รหัสจับคู่: <b style="color:var(--text)">'+esc(cur.pair_code||'--')+'</b> · เพิ่มเมื่อ '+new Date(cur.created_at).toLocaleDateString('th-TH')+'</div><button class="danger" id="sRemove" style="margin-top:12px">ลบออกจากบัญชี</button></div>');
- $('sChem').value=s.chem;
+ $('sChem').value=s.chem;shareCard($('shareBox'),{device:cur.id});
  $('sIcons').querySelectorAll('span').forEach(e=>e.onclick=()=>{s.icon=e.textContent;renderSet()});
  $('sProf').querySelectorAll('[data-pf]').forEach(e=>e.onclick=()=>{keepForm();s.profile.type=e.dataset.pf;if((s.profile.type==='ev'||s.profile.type==='car')&&s.icon==='🔋')s.icon=s.profile.type==='ev'?'🛵':'🚗';if(s.profile.type==='solar'&&s.icon==='🔋')s.icon='☀️';renderSet()});
  $('tab_set').querySelectorAll('.tm input').forEach(e=>e.onchange=()=>{const k=e.dataset.k;s.hidden=e.checked?s.hidden.filter(x=>x!==k):[...s.hidden,k]});

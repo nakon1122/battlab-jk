@@ -108,7 +108,7 @@ inline bool decodeOld(const uint8_t *d, int n, jk::Sample &s) {
     }
     i += len;
   }
-  if (capAh > 0) s.capacity = capAh * s.soc / 100.f;
+  if (capAh > 0) { s.capacity = capAh * s.soc / 100.f; s.full = capAh; }
   return haveV && s.count > 0;
 }
 
@@ -162,7 +162,7 @@ inline uint8_t frameOwner(uint8_t lastReqAddr, uint32_t lastReqAt, uint32_t now,
   return (lastReqAddr <= 15 && now - lastReqAt < window) ? lastReqAddr : 0;
 }
 // Bank totals from the packs that are fresh.
-struct BankTotals { float v = 0, i = 0, p = 0, soc = 0, cap = 0, tmax = -99, mos = -99, cmin = 9, cmax = 0; uint32_t cycles = 0; int n = 0; bool chg = false, dsg = false; };
+struct BankTotals { float v = 0, i = 0, p = 0, soc = 0, cap = 0, full = 0, tmax = -99, mos = -99, cmin = 9, cmax = 0; uint32_t cycles = 0; int n = 0; bool chg = false, dsg = false; };
 inline BankTotals bankTotals(const jk::Sample *s, const bool *fresh, int count) {
   BankTotals t;
   float socw = 0, capSum = 0, vSum = 0;
@@ -173,9 +173,12 @@ inline BankTotals bankTotals(const jk::Sample *s, const bool *fresh, int count) 
     vSum += x.voltage;
     t.i += x.current;
     t.p += x.voltage * x.current;
-    float w = x.capacity > 0 ? x.capacity : 1;
+    // weight SOC by each pack's full capacity (remaining Ah would favour fuller packs)
+    float full = x.full > 0 ? x.full : (x.soc > 3 && x.capacity > 0 ? x.capacity * 100.f / x.soc : 0);
+    float w = full > 0 ? full : 1;
     socw += x.soc * w; capSum += w;
     if (x.capacity > 0) t.cap += x.capacity;
+    if (full > 0) t.full += full;
     if (x.temp1 > t.tmax) t.tmax = x.temp1;
     if (x.temp2 > t.tmax) t.tmax = x.temp2;
     if (x.mos > t.mos) t.mos = x.mos;

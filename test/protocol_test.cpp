@@ -23,6 +23,7 @@ std::array<uint8_t, 300> fixture(bool large) {
   put(b, 118 + o, 52800);
   put(b, 126 + o, uint32_t(-12500));
   b[141 + o] = 75;
+  put(b, 142 + o, 75000);
   put(b, 146 + o, 100000);
   put(b, 150 + o, 123);
   put(b, 130 + o, uint16_t(-50), 2);
@@ -39,6 +40,7 @@ int main() {
     assert(std::fabs(s.current + 12.5f) < .001);
     assert(s.temp1 == -5);
     assert(s.cycles == 123);
+    assert(std::fabs(s.capacity - 75) < .001 && std::fabs(s.full - 100) < .001);
     assert(!jk::decode(b.data(), !large, s));
     for (unsigned split = 0; split <= 300; split++) {
       jk::Parser p;
