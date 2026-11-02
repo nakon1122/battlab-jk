@@ -62,6 +62,22 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 .roll{display:inline-flex;font-variant-numeric:tabular-nums}.roll .rd{display:inline-block;height:1.15em;overflow:hidden;vertical-align:bottom}.roll .rd span{display:block;height:1.15em;line-height:1.15em;transition:transform .55s cubic-bezier(.3,1.25,.5,1)}
 .flowsvg{width:100%;max-width:360px;height:auto;margin-top:10px;display:block}
 .flowsvg text{font-size:11px;fill:var(--muted)}
+.bic{position:relative;display:inline-block;width:52px;height:27px;border:2.5px solid var(--muted);border-radius:8px;padding:2px;flex:none}
+.bic:after{content:"";position:absolute;right:-6px;top:7px;width:4px;height:9px;background:var(--muted);border-radius:0 3px 3px 0}
+.bin{position:relative;display:block;width:100%;height:100%;border-radius:4px;overflow:hidden;background:rgba(127,140,150,.12)}
+.bin i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--bc,var(--good));transition:width 1.2s cubic-bezier(.3,.8,.3,1);overflow:hidden}
+.bin em{position:absolute;inset:0;display:grid;place-items:center;font-style:normal;font-size:14px;font-weight:900;color:#fff;text-shadow:0 0 4px rgba(0,0,0,.6);line-height:1}
+.bic.chg{border-color:var(--good);animation:bicGlow 1.6s infinite}.bic.chg:after{background:var(--good)}
+@keyframes bicGlow{0%{box-shadow:0 0 0 0 rgba(64,200,120,.55)}70%,100%{box-shadow:0 0 0 7px rgba(64,200,120,0)}}
+.bic.chg i:after{content:"";position:absolute;top:0;bottom:0;width:45%;left:-45%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.65),transparent);animation:bicIn 1.4s ease-in-out infinite}
+@keyframes bicIn{to{left:110%}}
+.bic.chg em{animation:bicBolt 1.2s ease-in-out infinite}
+@keyframes bicBolt{0%,100%{transform:scale(1)}50%{transform:scale(1.25);filter:drop-shadow(0 0 4px #b8ffd8)}}
+.bic.dsg i:after{content:"";position:absolute;top:0;bottom:0;width:45%;right:-45%;background:linear-gradient(270deg,transparent,rgba(0,0,0,.4),transparent);animation:bicOut 1.4s ease-in-out infinite}
+@keyframes bicOut{to{right:110%}}
+.bic.dsg em{animation:bicArr 1s ease-in-out infinite}
+@keyframes bicArr{0%{transform:translateX(7px);opacity:.15}50%{opacity:1}100%{transform:translateX(-9px);opacity:0}}
+@media (prefers-reduced-motion:reduce){.bic,.bic *,.bic i:after{animation:none!important}}
 .liq{width:46px;height:24px;border:2px solid var(--muted);border-radius:7px;position:relative;overflow:hidden;flex:none}
 .liq:after{content:"";position:absolute;right:-1px;top:6px;width:3px;height:8px;background:var(--muted);border-radius:0 2px 2px 0}
 .liq i{position:absolute;left:0;top:0;bottom:0;background:var(--bc,var(--good));transition:width 1.2s cubic-bezier(.3,.8,.3,1)}
@@ -492,7 +508,9 @@ function flowSvg(mode,d,s){const pt=(s&&s.profile&&s.profile.type)||'solar',ev=p
  const base=ev?'<path d="M40 44 L300 44" stroke="var(--line)" stroke-width="3" fill="none"/>':'<path d="M30 20 C110 20 120 44 180 44" stroke="var(--line)" stroke-width="3" fill="none"/><path d="M180 44 C230 44 240 70 310 70" stroke="var(--line)" stroke-width="3" fill="none"/>';
  const lbl=mode==='idle'?'พัก':ev?(mode==='chg'?'ชาร์จคืน / ชาร์จ ':'ขับขี่ ')+W.toFixed(0)+' W':(mode==='chg'?'ชาร์จเข้า ':'จ่ายออก ')+W.toFixed(0)+' W';
  return '<div id="flowBox" data-k="'+pt+mode+dur+'"><svg class="flowsvg" viewBox="0 0 340 '+(ev?64:100)+'">'+base+txt+dots+'</svg><div class="small muted" style="margin-top:2px">'+lbl+'</div></div>'}
-function liqHtml(key,soc,chg){const c=socColor(soc),o=twOld('liq:'+key,soc);return '<span class="liq'+(chg?' chg':'')+'" style="--bc:'+c+'"><i data-w="calc('+Math.max(4,Math.min(100,soc))+'% - 0px)" style="width:'+Math.max(4,Math.min(100,o??0))+'%"></i>'+(chg?'<b style="left:8px"></b><b style="left:20px;animation-delay:.6s"></b><b style="left:30px;animation-delay:1.2s"></b>':'')+'</span>'}
+// battery icon (style C): charging = pulsing bolt + light sweeping in + glowing rim; discharging = arrow flowing out
+function liqHtml(key,soc,mode){if(mode===true)mode='chg';else if(mode===false||!mode)mode='idle';const c=socColor(soc),o=twOld('liq:'+key,soc),w=Math.max(4,Math.min(100,soc));
+ return '<span class="bic '+mode+'" style="--bc:'+c+'" title="'+(mode==='chg'?'กำลังชาร์จ':mode==='dsg'?'กำลังจ่ายไฟ':'พัก')+'"><span class="bin"><i data-w="'+w+'%" style="width:'+Math.max(4,Math.min(100,o??0))+'%"></i>'+(mode==='chg'?'<em>⚡</em>':mode==='dsg'?'<em>←</em>':'')+'</span></span>'}
 let enterKey='';function enterAnim(id){const k=id+(cur&&cur.id);const e=$(id);if(!e)return;if(enterKey!==k){enterKey=k;e.classList.remove('enter');void e.offsetWidth;e.classList.add('enter');setTimeout(()=>e.classList.remove('enter'),900)}}
 function packsOf(d){return Array.isArray(d&&d.packs)&&d.packs.length?d.packs.slice().sort((a,b)=>a.a-b.a):null}
 function packL(l,p){return {ts:new Date(new Date(l.ts).getTime()-(p.age||0)*1000).toISOString(),data:{...p,p:num(p.v)&&num(p.i)?p.v*p.i:null}}}
@@ -666,7 +684,7 @@ function renderList(){
  {const sa=$('shareAll');if(sa){sa.classList.toggle('hide',!!share||demo||!devs.length);if(!sa.dataset.w){sa.dataset.w=1;sa.addEventListener('toggle',()=>{if(sa.open)shareCard($('shareAllBox'),{all:true})})}}}
  $('fleet').innerHTML='<div class="row wrap"><div><div class="big">'+(share?'แบตเตอรี่ที่แชร์ให้ดู':'อุปกรณ์ของฉัน')+'</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b>'+(()=>{const T=groupTotals(devs);return T.hasE||T.kwh?'<div class="tiny muted">'+(T.kwh?'คงเหลือ '+T.kwh.toFixed(1)+' kWh':'')+(T.hasE?' · วันนี้ +'+T.ei.toFixed(1)+' / −'+T.eo.toFixed(1)+' kWh':'')+'</div>':''})()+'</div>':'')+'</div>';
  const card=d=>{const l=latest[d.id],s=dset(d),[st,txt]=statusOf(l),al=evalAlerts(d,l);trackAlerts(d,al);const x=l&&l.data||{};const live=st==='on';const rk=live?evRange(x,s):null;
-  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)&&!share?(updPend[d.id]&&Date.now()-updPend[d.id]<300000?'<span class="abadge upd busy">⏳ กำลังอัปเดต…</span>':'<button class="abadge upd" data-upd="'+esc(d.id)+'"'+(st==='off'?' disabled title="บอร์ดต้องออนไลน์ก่อน"':'')+'>⬆ อัปเดต '+esc(fwUpdate(x).version)+'</button>'):'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?liqHtml(d.id,x.soc,num(x.i)&&x.i>0.3)+'<span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
+  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)&&!share?(updPend[d.id]&&Date.now()-updPend[d.id]<300000?'<span class="abadge upd busy">⏳ กำลังอัปเดต…</span>':'<button class="abadge upd" data-upd="'+esc(d.id)+'"'+(st==='off'?' disabled title="บอร์ดต้องออนไลน์ก่อน"':'')+'>⬆ อัปเดต '+esc(fwUpdate(x).version)+'</button>'):'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?liqHtml(d.id,x.soc,!num(x.i)?'idle':x.i>0.3?'chg':x.i<-0.3?'dsg':'idle')+'<span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
   (live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span>'+(rk!=null?'<b>'+Math.round(rk)+'</b> กม.':'<b>'+fmt(x.p,0)+'</b> W')+'</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'};
  const grpOf=d=>dset(d).group||'',anyG=devs.some(d=>grpOf(d));let closed=new Set();try{closed=new Set(JSON.parse(localStorage.getItem('bl_grp_closed')||'[]'))}catch(e){}
  let cards=[];if(!anyG)cards=devs.map(card);else{const names=[...new Set(devs.map(grpOf))].sort((a,b)=>(a===''?1:0)-(b===''?1:0)||a.localeCompare(b,'th'));
