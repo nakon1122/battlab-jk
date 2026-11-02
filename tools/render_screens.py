@@ -85,19 +85,19 @@ def pill(s, x, y, t, on):
     s.rr(x, y, 72, 26, 13, fill=GOOD if on else LINE)
     s.text(t, x + 36, y + 14, F9B, BG if on else MUTED, 'mm')
 
-def home(soc=72, alarm=None, live=True):
+def home(soc=72, alarm=None, live=True, flowdir=None, arc_soc=None, roll=None, border=None):
     s = Scr(); header(s, 'JK02_24S  LIVE' if live else 'CONNECTING', GOOD if live else WARN, alarm=alarm)
     cx, cy = 106, 150
     col = BAD if soc <= 15 else WARN if soc <= 35 else GOOD
     s.arc(cx, cy, 71, 86, 135, 405, LINE)
-    s.arc(cx, cy, 71, 86, 135, 135 + 270 * soc / 100, col)
-    s.text(f'{soc}%', cx, cy - 4, F24B, TEXT, 'mm')
+    a_soc = soc if arc_soc is None else arc_soc
+    s.arc(cx, cy, 71, 86, 135, 135 + 270 * a_soc / 100, col)
+    s.text(f'{a_soc}%', cx, cy - 4, F24B, TEXT, 'mm')
     s.text('SOC', cx, cy + 25, F9, MUTED, 'mm')
-    for k in range(3):  # flow chevrons (discharging)
-        x = cx - 32 + 6 + k * 20; c = WARN if k == 1 else LINE
-        s.d.polygon([(x*S, (cy+40)*S), ((x+16)*S, (cy+40)*S), ((x+8)*S, (cy+51)*S)], fill=c)
+    flow_icon(s, -1 if flowdir is None else flowdir)
     p = PACK
-    tile(s, 214, 46, 126, 56, 'VOLTAGE', f"{p['v']:.2f}", 'V', ACCENT)
+    if roll: tile_roll(s, 214, 46, 126, 56, 'VOLTAGE', roll[0], roll[1], 'V', ACCENT, roll[2])
+    else: tile(s, 214, 46, 126, 56, 'VOLTAGE', f"{p['v']:.2f}", 'V', ACCENT)
     tile(s, 346, 46, 126, 56, 'CURRENT', f"{p['i']:.1f}", 'A', WARN)
     tile(s, 214, 106, 126, 56, 'POWER', f"{p['v']*p['i']:.0f}", 'W', BLUE)
     tile(s, 346, 106, 126, 56, 'REMAIN', f"{p['ah']:.1f}", 'Ah', ACCENT)
@@ -113,7 +113,80 @@ def home(soc=72, alarm=None, live=True):
     pts = [(sx + sw * k / 59, sy + 10 + 18 * (0.6 + 0.4 * math.sin(k / 6)) ) for k in range(60)]
     s.d.line([(x*S, y*S) for x, y in pts], fill=WARN, width=S)
     pill(s, 313, 238, 'CHG', True); pill(s, 391, 238, 'DSG', True)
+    tabs(s, 0)
+    if border:
+        for k in range(4): s.d.rectangle((k*S, k*S, (480-k)*S-1, (320-k)*S-1), outline=border, width=S)
+    return s
+
+def blend(a, b, k): return tuple(int(a[i] + (b[i] - a[i]) * k) for i in range(3))
+def flow_icon(s, d, t=0.42):
+    ox, oy = 58, 186
+    P = lambda pts: [((ox + x) * S, (oy + y) * S) for x, y in pts]
+    if d == 0: s.rr(ox + 24, oy + 8, 48, 4, 2, fill=LINE); return
+    on = GOOD if d > 0 else WARN
+    ic = blend(BG, WARN, .85)
+    if d > 0:
+        s.d.polygon(P([(10, 1), (3, 11), (9, 11)]), fill=ic); s.d.polygon(P([(9, 9), (15, 9), (7, 19)]), fill=ic)
+    else:
+        s.circle(ox + 9, oy + 12, 6, ic); s.d.polygon(P([(3, 11), (15, 11), (9, 1)]), fill=ic)
+    for k in range(4):
+        idx = 3 - k if d > 0 else k
+        ph = (t * 1.6 - idx * .22) % 1
+        a = .2 + .8 * max(0, math.sin(ph * math.pi))
+        c = blend(LINE, on, a); x = 24 + k * 18
+        s.d.polygon(P([(x, 16), (x + 14, 16), (x + 7, 4)] if d > 0 else [(x, 4), (x + 14, 4), (x + 7, 16)]), fill=c)
+
+def tile_roll(s, x, y, w, h, lbl, old, new, unit, accent, r):
+    s.rr(x, y, w, h, 10, fill=CARD); s.rr(x, y + 10, 4, h - 20, 2, fill=accent)
+    s.text(lbl, x + 12, y + 5, F9, MUTED, 'lt')
+    layer = Image.new('RGB', ((w - 12) * S, (h - 22) * S), CARD); dl = ImageDraw.Draw(layer)
+    step = (h - 22) / 4
+    dl.text((6 * S, (h - 4 - 22 - r * step) * S), old, font=F18B, fill=TEXT, anchor='ls')
+    dl.text((6 * S, (h - 4 - 22 + (4 - r) * step) * S), new, font=F18B, fill=TEXT, anchor='ls')
+    s.im.paste(layer, ((x + 6) * S, (y + 22) * S))
+
+def ev_home(p=2400, rk=42, soc=71, whkm=34, v=76.4, regen=False, alarm=None, peak=5000):
+    s = Scr(); header(s, 'JK02_32S  LIVE', alarm=alarm)
+    if regen:
+        r = f'REGEN +{-p/1000:.1f} kW'; w = s.width(r, F9B) + 24
+        s.rect(300, 2, 180, 36, BG); s.rr(476 - w, 7, w, 26, 13, fill=GOOD); s.text(r, 476 - w/2, 21, F9B, BG, 'mm')
+    cx, cy, r0, r1 = 150, 214, 108, 126; z = 180 + 180 * .2
+    s.arc(cx, cy, r0, r1, 180, 360, LINE)
+    if p > 1: s.arc(cx, cy, r0, r1, z, z + (360 - z) * min(1, p / peak), WARN)
+    elif p < -1: s.arc(cx, cy, r0, r1, z - (z - 180) * min(1, -p / (peak * .3)), z, GOOD)
+    s.text(f'{p/1000:.1f}', cx, cy - 70, F24B, GOOD if p < -1 else TEXT, 'mm')
+    s.text('kW regen' if p < -1 else 'kW', cx, cy - 38, F9, MUTED, 'mm')
+    s.text('REGEN', 30, 226, F9, MUTED, 'mm'); s.text(f'{peak//1000} kW', 268, 226, F9, MUTED, 'mm')
+    s.rr(300, 46, 170, 186, 12, fill=CARD)
+    s.text('Range left', 312, 56, F9, MUTED, 'lt')
+    low = alarm is not None
+    s.text(str(rk), 312, 78, F24B, WARN if low else TEXT, 'lt')
+    s.text(f'km  {whkm} Wh/km', 312, 122, F9, MUTED, 'lt')
+    s.text(f'SOC {soc}%', 312, 146, F9, MUTED, 'lt')
+    s.rr(312, 168, 146, 8, 4, fill=LINE); s.rr(312, 168, int(146 * soc / 100), 8, 4, fill=BAD if soc <= 15 else WARN if soc <= 35 else GOOD)
+    s.text('Voltage', 312, 186, F9, MUTED, 'lt'); s.text(f'{v:.1f} V', 312, 204, F12B, TEXT, 'lt')
+    s.rr(9, 234, 462, 40, 10, fill=CARD)
+    s.text(f'20S  d6mV  31C  {-p/v:.1f}A', 21, 254, F9, TEXT)
+    pill(s, 313, 241, 'CHG', True); pill(s, 391, 241, 'DSG', True)
     tabs(s, 0); return s
+
+def boot_shine(progress=.35, shine=150, step='Starting Bluetooth'):
+    s = Scr(bg=(0, 0, 0))
+    g = LOGO_BIG.copy(); px = g.load()
+    for y in range(g.height):
+        for x in range(g.width):
+            dd = abs(x - shine + (y - g.height // 2) / 3)
+            boost = (18 - dd) * 7 if dd < 18 else 0
+            v = px[x, y]; px[x, y] = int(min(255, v + (boost if v > 40 else boost // 3)))
+    s.paste_gray(g, (480 - g.width)//2, 96, (0, 0, 0))
+    s.rr(140, 262, 200, 4, 2, fill=(40, 40, 40)); s.rr(140, 262, int(200*progress), 4, 2, fill=ACCENT)
+    s.text(step, 240, 286, F9, (120, 120, 120), 'mm')
+    return s
+
+def wipe_frame():
+    s = cells(CELLS20)
+    s.rect(240, 41, 240, TAB_Y - 41, BG); s.rect(240, 41, 3, TAB_Y - 41, ACCENT)
+    return s
 
 def big_home():
     s = Scr(); header(s, 'JK02_24S  LIVE')
@@ -124,7 +197,7 @@ def big_home():
     s.text('empty in 2h17   -12.6 A   31 C', 240, 41 + 222, F9, MUTED, 'mm')
     tabs(s, 0); return s
 
-def cells(values, title='JK02_24S  LIVE'):
+def cells(values, title='JK02_24S  LIVE', grow_fr=6):
     s = Scr(); header(s, title)
     n = len(values); dense = n > 24
     cols = 2 if n <= 16 else 4; rows = (n + cols - 1) // cols
@@ -136,7 +209,7 @@ def cells(values, title='JK02_24S  LIVE'):
     for i, v in enumerate(values):
         x = 12 + (i % cols) * (cw + 6); y = 46 + (i // cols) * (ch + gap)
         s.rr(x, y, cw, ch, 6, fill=CARD)
-        f = max(0, min(1, (v - lo) / (hi - lo)))
+        f = max(0, min(1, (v - lo) / (hi - lo))) * min(1, max(0, grow_fr / 6 * 1.5 - i * .5 / n))
         s.rect(x, y + ch - barH, int(cw * f), barH, BAD if i == imx else BLUE if i == imn else GOOD)
         s.text(str(i + 1), x + 8, y + ch/2, F9, MUTED)
         s.text(f'{v:.3f}', x + cw - 8, y + ch/2, F9, BAD if i == imx else BLUE if i == imn else TEXT, 'rm')
@@ -151,8 +224,8 @@ def bms():
     s.text('10:23:81:A9:C0:D6', 12, 68, F9, MUTED, 'lt')
     s.button((214, 46, 84, 40), 'AUTO'); s.button((302, 46, 84, 40), 'SCAN'); s.button((390, 46, 84, 40), 'STOP')
     s.text('Protocol', 12, 110, F9, MUTED)
-    for i, t in enumerate(['AUTO', 'JK32', 'JK24', 'ANT', 'JBD']):
-        s.button((96 + i*76, 92, 70, 36), t, i == 0)
+    for i, t in enumerate(['AUTO', 'JK32', 'JK24', 'ANT', 'JBD', 'DALY']):
+        s.button((96 + i*64, 92, 60, 36), t, i == 0)
     devs = [('72V 40Ah', '10:23:81:A9:C0:D6', -51, True, True), ('ANT-BLE16ZMUB', 'AA:BB:CC:11:22:33', -64, True, False),
             ('xiaoxiang BMS', 'A4:C1:38:5E:01:9F', -70, True, False), ('[LG] webOS TV', '44:27:45:DF:8A:A7', -71, False, False)]
     for i, (nm, mac, rssi, cand, cur) in enumerate(devs):
@@ -341,6 +414,16 @@ shots = [
     ('18_home_big.png', 'HOME: tap the gauge = BIG view (tap again to go back)', big_home()),
     ('17_cloud_pairing.png', 'CLOUD: pair code to add on the website', cloud()),
     ('14_boot_after_crash.png', 'Boot after an abnormal reset', boot('CRASH (panic)', .3)),
+    ('21_ev_home.png', 'EV profile: HOME = drive-power meter + range left (km)', ev_home()),
+    ('22_ev_regen.png', 'EV braking: green REGEN banner, meter swings left', ev_home(p=-900, regen=True)),
+    ('23_ev_range_low.png', 'EV: range below the alarm level (set on the website)', ev_home(p=1200, rk=8, soc=14, v=70.2, alarm='RANGE LOW 8km')),
+    ('24_anim_boot.png', 'Animation C1: light sweeps over the logo, boot steps below', boot_shine()),
+    ('25_anim_gauge.png', 'Animation C2: gauge sweeps 0 -> SOC when HOME opens', home(arc_soc=41)),
+    ('26_anim_charge.png', 'Animation C3: charging = pulsing bolt + chevrons light up', home(flowdir=1)),
+    ('27_anim_wipe.png', 'Animation C4: tab change wipes in the direction of travel', wipe_frame()),
+    ('28_anim_roll.png', 'Animation C5: changed numbers roll up (VOLTAGE tile)', home(roll=('77.38', '77.41', 2))),
+    ('29_anim_alarm.png', 'Animation C6: new alarm slides in, screen edge blinks red', home(soc=12, alarm='LOW SOC 12%', border=BAD)),
+    ('30_anim_cells.png', 'Animation C7: cell bars grow one after another', cells(CELLS20, grow_fr=3)),
 ]
 paths = []
 for name, cap, s in shots:

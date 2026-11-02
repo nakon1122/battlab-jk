@@ -168,11 +168,15 @@ struct PackSum { // one JK pack of an RS485 bank (focused board only)
   float soc = NAN, v = NAN, i = NAN, t = NAN, mos = NAN;
   bool chg = false, dsg = false;
   float cells[32];
+  bool jkValid = false, sw[3] = {false, false, false}, bt = false; // its settings, and whether the board has its Bluetooth
+  float jk[bmsw::JK_PARAM_COUNT];
+  String btName;
 };
 struct Focus {
   String id;
   std::vector<PackSum> packs;
   uint8_t busm = 0;
+  String btm; // Bluetooth auto-match progress
   float cells[32];
   int n = 0;
   bool jkValid = false;
@@ -381,6 +385,7 @@ static void parseSync(JsonDocument &d) {
   for (float v : x["cells"].as<JsonArrayConst>())
     if (f.n < 32) f.cells[f.n++] = v;
   f.busm = x["busm"] | 0;
+  f.btm = x["cfg"]["btm"] | "";
   for (JsonObjectConst o : x["packs"].as<JsonArrayConst>()) {
     if (f.packs.size() >= 16) break;
     PackSum k;
@@ -395,6 +400,16 @@ static void parseSync(JsonDocument &d) {
     k.dsg = o["dsg"] | false;
     for (float v : o["cells"].as<JsonArrayConst>())
       if (k.n < 32) k.cells[k.n++] = v;
+    JsonObjectConst pj = o["jk"].as<JsonObjectConst>();
+    if (!pj.isNull()) {
+      int q = 0;
+      for (float v : pj["v"].as<JsonArrayConst>()) if (q < bmsw::JK_PARAM_COUNT) k.jk[q++] = v;
+      k.jkValid = q == bmsw::JK_PARAM_COUNT;
+      q = 0;
+      for (bool b : pj["sw"].as<JsonArrayConst>()) if (q < 3) k.sw[q++] = b;
+    } else { k.sw[0] = k.chg; k.sw[1] = k.dsg; }
+    JsonObjectConst bt = x["cfg"]["bt"][String(k.a)].as<JsonObjectConst>();
+    if (!bt.isNull()) { k.bt = true; k.btName = bt["name"] | ""; }
     f.packs.push_back(k);
   }
   JsonObjectConst jk = x["jk"].as<JsonObjectConst>();
@@ -1112,9 +1127,9 @@ static void evHome(const DevSum &d, bool force) {
   b.drawString(rk < 0 ? String("--") : String(int(rk + .5f)), 12, 32);
   b.setFont(&fonts::FreeSans9pt7b);
   b.setTextColor(C_MUTED, C_CARD);
-  b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : "km", 12, 76);
+  b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : (d.whkm ? String("km  ") + d.whkm + " Wh/km" : String("km")), 12, 76);
   int soc = ok ? int(d.soc + .5f) : 0;
-  b.drawString(String("SOC ") + (ok ? String(soc) + "%" : String("--")) + (d.whkm ? String("  ") + d.whkm + " Wh/km" : String("")), 12, 100);
+  b.drawString(String("SOC ") + (ok ? String(soc) + "%" : String("--")), 12, 100);
   b.fillRoundRect(12, 122, 146, 8, 4, C_LINE);
   if (soc > 0) b.fillRoundRect(12, 122, 146 * std::min(soc, 100) / 100, 8, 4, socColor(d.soc));
   b.drawString("Voltage", 12, 140);
@@ -1470,7 +1485,9 @@ static int pCount(const Focus &f) {
   bset::table(f.fam, n);
   return n;
 }
-static int pPages(const Focus &f) { return std::max(1, (pCount(f) + PROWS - 1) / PROWS); }
+static int pRows = PROWS, pY0 = 88; // a bank adds a row of pack buttons above
+static bool bankUi = false;
+static int pPages(const Focus &f) { return std::max(1, (pCount(f) + pRows - 1) / pRows); }
 static PInfo pInfo(const Focus &f, int i) {
   if (f.fam == 1) { const auto &p = bmsw::JK_PARAMS[i]; return {p.name, p.unit, p.step, p.min, p.max, p.decimals}; }
   int n;
@@ -1480,13 +1497,16 @@ static PInfo pInfo(const Focus &f, int i) {
 static bool pReady(const Focus &f) { return f.fam == 1 ? f.jkValid : (f.fam == 2 || f.fam == 3) && f.pvHave; }
 static bool pHas(const Focus &f, int i) { return f.fam == 1 || (f.pvHave >> i & 1); }
 static float pVal(const Focus &f, int i) { return f.fam == 1 ? f.jk[i] : f.pv[i]; }
-static Btn pMinus(int r) { return {282, 88 + r * 38, 52, 34}; }
-static Btn pPlus(int r) { return {338, 88 + r * 38, 52, 34}; }
-static Btn pSet(int r) { return {394, 88 + r * 38, 78, 34}; }
+static Btn pMinus(int r) { return {282, pY0 + r * 38, 52, 34}; }
+static Btn pPlus(int r) { return {338, pY0 + r * 38, 52, 34}; }
+static Btn pSet(int r) { return {394, pY0 + r * 38, 78, 34}; }
 static const Btn PP_PREV = {8, 240, 56, 34}, PP_NEXT = {128, 240, 56, 34};
 // MOS
-static Btn mosBtn(int i) { return {8 + i * 156, 92, 150, 78}; }
-static const Btn M_READ = {8, 180, 150, 44};
+static Btn mosBtn(int i) { return bankUi ? Btn{8 + i * 156, 122, 150, 62} : Btn{8 + i * 156, 92, 150, 78}; }
+static Btn mRead() { return bankUi ? Btn{8, 192, 130, 40} : Btn{8, 180, 150, 44}; }
+// RS485 bank: one button per pack (shared selection with CELLS)
+static Btn pkBtn(int k, int np) { int w = 464 / np; return {8 + k * w, 84, w - 4, 30}; }
+static const Btn D_MATCH = {8, 88, 160, 38}, D_CLEAR = {172, 88, 100, 38};
 // LED
 static const Btn L_ON = {8, 88, 120, 40}, L_MINUS = {296, 88, 52, 40}, L_PLUS = {420, 88, 52, 40};
 static Btn lMode(int i) { return {8 + i * 117, 134, 113, 38}; }
@@ -1550,6 +1570,8 @@ static String cmdLabel(const String &c) {
   if (c == "radio_max") return "TX power";
   if (c == "wifi_ap") return "Hotspot";
   if (c == "restart") return "Restart";
+  if (c == "bt_match") return "Auto match";
+  if (c == "bt_clear") return "Clear matches";
   return c;
 }
 static void statusLine(const Model &m) {
@@ -1566,6 +1588,34 @@ static void statusLine(const Model &m) {
   tft.drawString(t, STATUS_AREA.x + STATUS_AREA.w, STATUS_AREA.y + STATUS_AREA.h / 2);
 }
 static String fmtParam(const Focus &f, int i, float v) { PInfo p = pInfo(f, i); return fmt(v, p.dec) + " " + p.unit; }
+// the selected pack of a bank seen as one battery (settings, switches)
+static int bankIdx(const Focus &f) {
+  int np = std::min<int>(f.packs.size(), 8);
+  for (int k = 0; k < np; k++) if (f.packs[k].a == packSel) return k;
+  if (np) packSel = f.packs[0].a;
+  return 0;
+}
+static Focus packView(const Focus &f, int k) {
+  Focus v = f;
+  const PackSum &p = f.packs[k];
+  v.fam = 1;
+  v.jkValid = p.jkValid;
+  for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) v.jk[i] = p.jk[i];
+  for (int i = 0; i < 3; i++) v.sw[i] = p.sw[i];
+  if (!p.jkValid) { v.sw[0] = p.chg; v.sw[1] = p.dsg; }
+  return v;
+}
+static bool packWritable(const Focus &f, int k) { return f.busm != 1 || f.packs[k].bt; }
+static void packRow(const Focus &f, int ps) {
+  int np = std::min<int>(f.packs.size(), 8);
+  for (int k = 0; k < np; k++) {
+    Btn b = pkBtn(k, np);
+    const PackSum &p = f.packs[k];
+    String t = String("#") + p.a + (np <= 6 ? String(" ") + (std::isnan(p.soc) ? String("--") : String(int(p.soc + .5f)) + "%") : String(""));
+    button(b, t, k == ps, 0, &fonts::FreeSansBold9pt7b);
+    if (p.bt) tft.fillCircle(b.x + b.w - 9, b.y + 8, 3, C_BLUE);
+  }
+}
 static void ctlPage(const Model &m, bool force) {
   const DevSum *dp = focusDev(m);
   const Focus &f = m.f;
@@ -1575,10 +1625,22 @@ static void ctlPage(const Model &m, bool force) {
   if (pReady(f))
     for (int i = 0; i < pCount(f); i++) key += (pHas(f, i) ? fmt(pVal(f, i), 3) : String("?")) + (pendSet[i] ? fmt(pend[i], 3) : String("-"));
   for (auto &c : f.cmds) key += String(c.id) + c.s;
+  bankUi = !f.packs.empty() && ctlSub < 2;
+  int ps = bankUi ? bankIdx(f) : 0;
+  pRows = bankUi ? 3 : PROWS;
+  pY0 = bankUi ? 120 : 88;
+  if (!f.packs.empty()) {
+    key += String("b") + packSel + f.btm + f.lw + int(f.busm);
+    for (auto &p : f.packs) { key += String(p.a) + B(p.bt) + B(p.sw[0]) + B(p.sw[1]) + B(p.sw[2]) + B(p.jkValid); if (p.jkValid) for (float v : p.jk) key += fmt(v, 3); }
+  }
   if (!force && key == ctlKey) return;
   ctlKey = key;
   clearContent();
   if (!dp) { noFocus(m); return; }
+  Focus pv;
+  bool canW = true;
+  if (bankUi) { pv = packView(f, ps); canW = packWritable(f, ps); }
+  const Focus &f2 = bankUi ? pv : f;
   for (int i = 0; i < 4; i++) button(subBtn(i), CTL_SUB[i], ctlSub == i);
   if (!f.remote) {
     label(16, 110, "This board needs firmware 2.1.0 or newer for control.", C_TEXT);
@@ -1587,13 +1649,14 @@ static void ctlPage(const Model &m, bool force) {
   }
   if (!dp->online()) label(16, 262, "Board offline - commands wait 5 min", C_WARN);
   bool live = dp->live();
+  if (bankUi) { packRow(f, ps); live = live && f.packs[ps].age < 120; }
   if (ctlSub == 0) {
     const char *nm[3] = {"CHARGE", "DISCHARGE", "BALANCE"};
     for (int i = 0; i < 3; i++) {
       Btn b = mosBtn(i);
-      bool avail = live && f.fam && !(f.fam == 3 && i == 2);
-      bool on = f.sw[i];
-      bool known = f.jkValid || i < 2;
+      bool avail = live && f2.fam && !(f2.fam == 3 && i == 2) && canW;
+      bool on = f2.sw[i];
+      bool known = f2.jkValid || i < 2;
       uint16_t bg = !avail ? C_CARD : on && known ? C_GOOD : C_CARD;
       tft.fillRoundRect(b.x, b.y, b.w, b.h, 12, bg);
       tft.drawRoundRect(b.x, b.y, b.w, b.h, 12, avail ? (on ? C_GOOD : C_LINE) : C_LINE);
@@ -1605,24 +1668,38 @@ static void ctlPage(const Model &m, bool force) {
       tft.setTextColor(!avail ? C_LINE : on && known ? C_BG : C_TEXT, bg);
       tft.drawString(!known ? "?" : on ? "ON" : "OFF", b.x + b.w / 2, b.y + 52);
     }
-    button(M_READ, "READ BMS", false, 0, nullptr, live);
+    button(mRead(), bankUi ? String("READ #") + f.packs[ps].a : String("READ BMS"), false, 0, nullptr, live && canW);
     tft.setFont(&fonts::FreeSans9pt7b);
     tft.setTextDatum(textdatum_t::middle_left);
     tft.setTextColor(C_MUTED, C_BG);
-    const char *fam[4] = {"BMS not identified", "JK BMS", "ANT BMS", "JBD BMS"};
-    tft.drawString(String(fam[f.fam < 4 ? f.fam : 0]) + (f.mac.length() ? "  " + f.mac : String("")), 168, 194);
-    tft.drawString(live ? "Tap a switch to change it" : "Battery is not live", 168, 214);
-  } else if (ctlSub == 1) {
-    if (!pReady(f)) {
-      label(16, 110, f.fam ? "Reading the BMS settings... (MOSFET > READ BMS)" : "Connect a BMS on the board first.", C_TEXT);
-      label(16, 136, f.fam == 2 ? "ANT: all settings are read; writing is experimental" : "Board firmware 2.5.0+ reads ANT / JBD settings.");
+    if (bankUi && !canW) {
+      tft.fillRoundRect(8, 192, 464, 44, 10, C_CARD);
+      tft.drawRoundRect(8, 192, 464, 44, 10, C_WARN);
+      tft.setTextColor(C_WARN, C_CARD);
+      tft.drawString(String("#") + f.packs[ps].a + " has no Bluetooth match yet: view only.", 20, 206);
+      tft.drawString("CONTROL > BOARD > AUTO MATCH", 20, 226);
+    } else if (bankUi) {
+      const PackSum &p = f.packs[ps];
+      tft.setTextColor(f.busm == 1 ? C_BLUE : C_MUTED, C_BG);
+      tft.drawString(String("#") + p.a + (p.a == 0 && f.busm == 1 ? " MASTER" : "") + (f.busm == 1 ? "  BT: " + (p.btName.length() ? p.btName : String("matched")) : String("  via RS485")), 148, 204);
+      tft.setTextColor(C_MUTED, C_BG);
+      tft.drawString(f.busm == 1 ? "Settings go by Bluetooth, read back" : "Tap a switch to change it", 148, 224);
     } else {
-      if (pPage >= pPages(f)) pPage = 0;
-      for (int r = 0; r < PROWS; r++) {
-        int i = pPage * PROWS + r;
-        if (i >= pCount(f)) break;
-        PInfo p = pInfo(f, i);
-        int y = 88 + r * 38;
+      const char *fam[5] = {"BMS not identified", "JK BMS", "ANT BMS", "JBD BMS", "DALY BMS"};
+      tft.drawString(String(fam[f2.fam < 5 ? f2.fam : 0]) + (f.mac.length() ? "  " + f.mac : String("")), 168, 194);
+      tft.drawString(live ? "Tap a switch to change it" : "Battery is not live", 168, 214);
+    }
+  } else if (ctlSub == 1) {
+    if (!pReady(f2)) {
+      label(16, bankUi ? 140 : 110, bankUi ? String("#") + f.packs[ps].a + ": settings not received yet" : String(f2.fam ? "Reading the BMS settings... (MOSFET > READ BMS)" : "Connect a BMS on the board first."), C_TEXT);
+      if (!bankUi) label(16, 136, f2.fam == 2 ? "ANT: all settings are read; writing is experimental" : "Board firmware 2.5.0+ reads ANT / JBD settings.");
+    } else {
+      if (pPage >= pPages(f2)) pPage = 0;
+      for (int r = 0; r < pRows; r++) {
+        int i = pPage * pRows + r;
+        if (i >= pCount(f2)) break;
+        PInfo p = pInfo(f2, i);
+        int y = pY0 + r * 38;
         tft.fillRoundRect(8, y, 270, 34, 8, C_CARD);
         tft.setFont(&fonts::FreeSans9pt7b);
         tft.setTextDatum(textdatum_t::middle_left);
@@ -1630,12 +1707,12 @@ static void ctlPage(const Model &m, bool force) {
         String nm = p.name;
         while (nm.length() && tft.textWidth(nm) > 140) nm.remove(nm.length() - 1);
         tft.drawString(nm, 18, y + 17);
-        bool have = pHas(f, i);
-        bool edited = have && pendSet[i] && std::fabs(pend[i] - pVal(f, i)) > p.step / 2;
+        bool have = pHas(f2, i);
+        bool edited = have && pendSet[i] && std::fabs(pend[i] - pVal(f2, i)) > p.step / 2;
         tft.setFont(&fonts::FreeSansBold9pt7b);
         tft.setTextDatum(textdatum_t::middle_right);
         tft.setTextColor(edited ? C_WARN : have ? C_TEXT : C_MUTED, C_CARD);
-        tft.drawString(have ? fmtParam(f, i, edited ? pend[i] : pVal(f, i)) : String("not read"), 270, y + 17);
+        tft.drawString(have ? fmtParam(f2, i, edited ? pend[i] : pVal(f2, i)) : String("not read"), 270, y + 17);
         button(pMinus(r), "-", false, 0, &fonts::FreeSansBold12pt7b);
         button(pPlus(r), "+", false, 0, &fonts::FreeSansBold12pt7b);
         button(pSet(r), "SET", edited, C_WARN);
@@ -1645,7 +1722,7 @@ static void ctlPage(const Model &m, bool force) {
       tft.setFont(&fonts::FreeSans9pt7b);
       tft.setTextDatum(textdatum_t::middle_center);
       tft.setTextColor(C_MUTED, C_BG);
-      tft.drawString(String(pPage + 1) + "/" + pPages(f), 96, 258);
+      tft.drawString(String(pPage + 1) + "/" + pPages(f2), 96, 258);
     }
   } else if (ctlSub == 2) {
     button(L_ON, f.ledOn ? "LED ON" : "LED OFF", f.ledOn, C_GOOD);
@@ -1662,6 +1739,42 @@ static void ctlPage(const Model &m, bool force) {
       uint16_t c = tft.color565(LED_PAL[i][0], LED_PAL[i][1], LED_PAL[i][2]);
       tft.fillCircle(b.x + 25, b.y + 25, 21, c);
       if (f.ledColor == i) tft.drawCircle(b.x + 25, b.y + 25, 24, C_TEXT);
+    }
+  } else if (!f.packs.empty()) { // RS485 bank: Bluetooth link of each pack
+    button(D_MATCH, f.btm.startsWith("check") || f.btm == "scan" || f.btm == "queued" ? "MATCHING..." : "AUTO MATCH", true);
+    button(D_CLEAR, "CLEAR", false);
+    button(D_RST, "RESTART", false);
+    tft.setFont(&fonts::FreeSansBold9pt7b);
+    tft.setTextDatum(textdatum_t::middle_left);
+    tft.setTextColor(C_TEXT, C_BG);
+    tft.drawString("Bluetooth of each pack (for settings)", 12, 142);
+    int np = std::min<int>(f.packs.size(), 4);
+    for (int k = 0; k < np; k++) {
+      const PackSum &p = f.packs[k];
+      int y = 156 + k * 27;
+      tft.fillRoundRect(8, y, 464, 25, 7, C_CARD);
+      tft.setFont(&fonts::FreeSansBold9pt7b);
+      tft.setTextColor(C_TEXT, C_CARD);
+      tft.drawString(String("#") + p.a, 18, y + 13);
+      tft.setFont(&fonts::FreeSans9pt7b);
+      tft.setTextColor(p.bt ? C_MUTED : C_WARN, C_CARD);
+      tft.drawString(p.bt ? (p.btName.length() ? p.btName : String("JK")) : String("not found yet"), 60, y + 13);
+      tft.setTextDatum(textdatum_t::middle_right);
+      tft.setTextColor(p.bt ? C_GOOD : C_MUTED, C_CARD);
+      tft.drawString(p.bt ? "matched" : "-", 462, y + 13);
+      tft.setTextDatum(textdatum_t::middle_left);
+    }
+    if ((int)f.packs.size() > np) label(16, 268, String("+") + (f.packs.size() - np) + " more on the website");
+    if (f.btm.length()) { // "scan", "check:2/5", "done:4/5:6"
+      String t = f.btm;
+      if (t.startsWith("done:")) { t = t.substring(5); int c = t.indexOf(':'); t = "matched " + (c > 0 ? t.substring(0, c) : t); }
+      else if (t.startsWith("check:")) t = "checking " + t.substring(6);
+      else if (t == "scan" || t == "queued") t = "scanning...";
+      tft.setFont(&fonts::FreeSans9pt7b);
+      tft.setTextDatum(textdatum_t::middle_right);
+      tft.setTextColor(C_MUTED, C_BG);
+      tft.drawString(t, 468, 142);
+      tft.setTextDatum(textdatum_t::middle_left);
     }
   } else {
     button(D_SCAN, f.scanning ? "SCANNING" : "SCAN BMS", f.scanning);
@@ -1707,28 +1820,46 @@ static void ctlTouch(const Model &m, int x, int y) {
   const DevSum *dp = focusDev(m);
   if (!dp || !f.remote) return;
   bool live = dp->live();
+  bankUi = !f.packs.empty() && ctlSub < 2;
+  int ps = bankUi ? bankIdx(f) : 0;
+  pRows = bankUi ? 3 : PROWS;
+  pY0 = bankUi ? 120 : 88;
+  Focus pv;
+  bool canW = true;
+  String pa = "";
+  if (bankUi) {
+    int np = std::min<int>(f.packs.size(), 8);
+    for (int k = 0; k < np; k++)
+      if (hit(pkBtn(k, np), x, y)) { packSel = f.packs[k].a; for (auto &q : pendSet) q = false; ctlKey = ""; cellsKey = ""; return; }
+    pv = packView(f, ps);
+    canW = packWritable(f, ps);
+    pa = String(",\"a\":") + f.packs[ps].a;
+    if (!canW && y > 118 && y < 238) { showToast(String("#") + f.packs[ps].a + " view only: BOARD > AUTO MATCH first", 3500); return; }
+  }
+  const Focus &f0 = f;
+  const Focus &fz = bankUi ? pv : f0;
   if (ctlSub == 0) {
     for (int i = 0; i < 3; i++)
-      if (hit(mosBtn(i), x, y) && live && f.fam && !(f.fam == 3 && i == 2)) {
-        bool on = !(f.sw[i] && (f.jkValid || i < 2));
+      if (hit(mosBtn(i), x, y) && live && fz.fam && !(fz.fam == 3 && i == 2)) {
+        bool on = !(fz.sw[i] && (fz.jkValid || i < 2));
         const char *what[3] = {"Charge MOSFET", "Discharge MOSFET", "Balancer"};
         ask(String(what[i]) + (on ? "  ->  ON" : "  ->  OFF"),
             i == 1 && !on ? String("Discharge OFF cuts power to the load!") : dp->name,
-            "bms_switch", String("{\"which\":") + i + ",\"on\":" + (on ? "true" : "false") + "}",
+            "bms_switch", String("{\"which\":") + i + ",\"on\":" + (on ? "true" : "false") + pa + "}",
             String(what[i]) + (on ? " ON" : " OFF"), i == 1 && !on);
         return;
       }
-    if (hit(M_READ, x, y) && live) { sendCmd("bms_read", "{}", "Read BMS"); showToast("Reading settings..."); }
-  } else if (ctlSub == 1 && pReady(f)) {
-    int pages = pPages(f);
+    if (hit(mRead(), x, y) && live) { sendCmd("bms_read", "{}", "Read BMS"); showToast("Reading settings..."); }
+  } else if (ctlSub == 1 && pReady(fz)) {
+    int pages = pPages(fz);
     if (hit(PP_PREV, x, y)) { pPage = (pPage + pages - 1) % pages; return; }
     if (hit(PP_NEXT, x, y)) { pPage = (pPage + 1) % pages; return; }
-    for (int r = 0; r < PROWS; r++) {
-      int i = pPage * PROWS + r;
-      if (i >= pCount(f)) break;
-      if (!pHas(f, i)) continue;
-      PInfo p = pInfo(f, i);
-      float cur = pendSet[i] ? pend[i] : pVal(f, i);
+    for (int r = 0; r < pRows; r++) {
+      int i = pPage * pRows + r;
+      if (i >= pCount(fz)) break;
+      if (!pHas(fz, i)) continue;
+      PInfo p = pInfo(fz, i);
+      float cur = pendSet[i] ? pend[i] : pVal(fz, i);
       if (hit(pMinus(r), x, y) || hit(pPlus(r), x, y)) {
         float v = cur + (hit(pPlus(r), x, y) ? p.step : -p.step);
         v = std::round(v / p.step) * p.step;
@@ -1736,19 +1867,19 @@ static void ctlTouch(const Model &m, int x, int y) {
         pendSet[i] = true;
         return;
       }
-      if (hit(pSet(r), x, y) && pendSet[i] && std::fabs(pend[i] - pVal(f, i)) > p.step / 2) {
+      if (hit(pSet(r), x, y) && pendSet[i] && std::fabs(pend[i] - pVal(fz, i)) > p.step / 2) {
         const char *e;
-        if (f.fam == 1) {
+        if (fz.fam == 1) {
           bmsw::JkSettings js;
           js.valid = true;
-          for (int k = 0; k < bmsw::JK_PARAM_COUNT; k++) js.v[k] = f.jk[k];
+          for (int k = 0; k < bmsw::JK_PARAM_COUNT; k++) js.v[k] = fz.jk[k];
           e = bmsw::checkJkValue(js, i, pend[i]);
-        } else e = bset::check(f.fam, f.pv, f.pvHave, i, pend[i]);
+        } else e = bset::check(fz.fam, fz.pv, fz.pvHave, i, pend[i]);
         if (e) { showToast(String("Not allowed: ") + e, 4000); return; }
         char a[64];
-        snprintf(a, sizeof a, "{\"index\":%d,\"value\":%.4f}", i, pend[i]);
-        ask(String(p.name) + ":  " + fmtParam(f, i, pVal(f, i)) + "  ->  " + fmtParam(f, i, pend[i]),
-            f.fam == 2 ? "ANT write is experimental - it is read back" : "Check the value is right for your cells",
+        snprintf(a, sizeof a, "{\"index\":%d,\"value\":%.4f%s}", i, pend[i], pa.c_str());
+        ask(String(p.name) + ":  " + fmtParam(fz, i, pVal(fz, i)) + "  ->  " + fmtParam(fz, i, pend[i]),
+            bankUi ? String("Pack #") + f.packs[ps].a + (f.busm == 1 ? ": sent by Bluetooth, read back" : ": sent over RS485") : String(fz.fam == 2 ? "ANT write is experimental - it is read back" : "Check the value is right for your cells"),
             "bms_param", a, String(p.name));
         return;
       }
@@ -1764,6 +1895,11 @@ static void ctlTouch(const Model &m, int x, int y) {
         if (hit(lColor(i), x, y)) { sendCmd("led", String("{\"on\":true,\"color\":") + i + "}", "LED colour"); return; }
       return;
     }
+  } else if (ctlSub == 3 && !f.packs.empty()) {
+    if (hit(D_MATCH, x, y)) ask("Match Bluetooth to each pack?", "Close the JK app first - takes about 1 minute", "bt_match", "{}", "Auto match");
+    else if (hit(D_CLEAR, x, y)) ask("Forget the Bluetooth matches?", "Settings become view-only until matched again", "bt_clear", "{}", "Clear matches");
+    else if (hit(D_RST, x, y)) ask("Restart the board?", "Back online in about 20 s", "restart", "{}", "Restart");
+    else return;
   } else if (ctlSub == 3) {
     if (hit(D_SCAN, x, y)) sendCmd("bms_scan", "{}", "Scan BMS");
     else if (hit(D_AUTO, x, y)) sendCmd("bms_auto", "{}", "Auto connect");
@@ -2281,7 +2417,7 @@ static void uiTask(void *) {
     if (down && !wasDown) pressStart = now;
     if (down && wasDown && !asleep && !dlg.active && page == P_CTRL && ctlSub == 1 && now - pressStart > 500 &&
         now - lastRepeat > 110) {
-      for (int r = 0; r < PROWS; r++)
+      for (int r = 0; r < pRows; r++)
         if (hit(pMinus(r), tp.x, tp.y) || hit(pPlus(r), tp.x, tp.y)) {
           lastRepeat = now;
           ctlTouch(m, tp.x, tp.y);

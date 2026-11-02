@@ -106,9 +106,7 @@ def home():
     cx, cy = 106, 150
     s.arc(cx, cy, 71, 86, 135, 405, LINE); s.arc(cx, cy, 71, 86, 135, 135 + 270 * d['soc'] / 100, soc_col(d['soc']))
     s.text(f"{d['soc']}%", cx, cy - 4, F24B, TEXT, 'mm'); s.text('SOC', cx, cy + 25, F9, MUTED, 'mm')
-    for k in range(3):
-        x = cx - 32 + 6 + k * 20; c = GOOD if k == 1 else LINE
-        s.d.polygon([(x*S, (cy+51)*S), ((x+16)*S, (cy+51)*S), ((x+8)*S, (cy+40)*S)], fill=c)
+    flow_icon(s, 1)
     tile(s, 214, 46, 126, 56, 'VOLTAGE', f"{d['v']:.2f}", 'V', ACCENT); tile(s, 346, 46, 126, 56, 'CURRENT', f"{d['i']:.1f}", 'A', GOOD)
     tile(s, 214, 106, 126, 56, 'POWER', f"{d['v']*d['i']:.0f}", 'W', BLUE); tile(s, 346, 106, 126, 56, 'REMAIN', f"{d['cap']:.1f}", 'Ah', ACCENT)
     tile(s, 214, 166, 126, 56, 'TEMP', f"{d['t']}", 'C', WARN); tile(s, 346, 166, 126, 56, 'MOS', f"{d['mos']}", 'C', WARN)
@@ -161,6 +159,91 @@ def cells_bank():
     s.rr(9, 230, 462, 42, 10, fill=CARD)
     s.text(f"#3  {sum(cl):.2f}V -5.2A  31C  CD  d{round((mx-mn)*1000)}mV", 21, 251, F9, TEXT)
     tabs(s, 2); return s
+
+def blend(a, b, k): return tuple(int(a[i] + (b[i] - a[i]) * k) for i in range(3))
+def flow_icon(s, d, t=0.42):
+    ox, oy = 58, 186
+    P = lambda pts: [((ox + x) * S, (oy + y) * S) for x, y in pts]
+    on = GOOD if d > 0 else WARN; ic = blend(BG, WARN, .85)
+    if d > 0: s.d.polygon(P([(10, 1), (3, 11), (9, 11)]), fill=ic); s.d.polygon(P([(9, 9), (15, 9), (7, 19)]), fill=ic)
+    else: s.circle(ox + 9, oy + 12, 6, ic); s.d.polygon(P([(3, 11), (15, 11), (9, 1)]), fill=ic)
+    for k in range(4):
+        idx = 3 - k if d > 0 else k
+        a = .2 + .8 * max(0, math.sin(((t * 1.6 - idx * .22) % 1) * math.pi))
+        x = 24 + k * 18
+        s.d.polygon(P([(x, 16), (x + 14, 16), (x + 7, 4)] if d > 0 else [(x, 4), (x + 14, 4), (x + 7, 16)]), fill=blend(LINE, on, a))
+
+def ev_home(p=2400, rk=42, soc=71, whkm=34, v=76.4, regen=False, alarm=None, peak=5000, name='Vespa EV 72V'):
+    s = Scr(); header(s, f'{name}  {"CHARGING" if p < 0 else "DISCHARGING"}', nav=True, alarm=alarm)
+    if regen:
+        r = f'REGEN +{-p/1000:.1f} kW'; w = s.width(r, F9) + 24
+        s.rect(132, 2, 236, 36, BG); s.rr(136, 7, w, 26, 13, fill=GOOD); s.text(r, 148, 21, F9, BG)
+    cx, cy, r0, r1 = 150, 214, 108, 126; z = 216
+    s.arc(cx, cy, r0, r1, 180, 360, LINE)
+    if p > 1: s.arc(cx, cy, r0, r1, z, z + (360 - z) * min(1, p / peak), WARN)
+    elif p < -1: s.arc(cx, cy, r0, r1, z - (z - 180) * min(1, -p / (peak * .3)), z, GOOD)
+    s.text(f'{p/1000:.1f}', cx, cy - 70, F24B, GOOD if p < -1 else TEXT, 'mm')
+    s.text('kW regen' if p < -1 else 'kW', cx, cy - 38, F9, MUTED, 'mm')
+    s.text('REGEN', 30, 226, F9, MUTED, 'mm'); s.text(f'{peak//1000} kW', 268, 226, F9, MUTED, 'mm')
+    s.rr(300, 46, 170, 186, 12, fill=CARD)
+    s.text('Range left', 312, 56, F9, MUTED, 'lt')
+    s.text(str(rk), 312, 78, F24B, WARN if alarm else TEXT, 'lt')
+    s.text(f'km  {whkm} Wh/km', 312, 122, F9, MUTED, 'lt'); s.text(f'SOC {soc}%', 312, 146, F9, MUTED, 'lt')
+    s.rr(312, 168, 146, 8, 4, fill=LINE); s.rr(312, 168, int(146 * soc / 100), 8, 4, fill=soc_col(soc))
+    s.text('Voltage', 312, 186, F9, MUTED, 'lt'); s.text(f'{v:.1f} V', 312, 204, F12B, TEXT, 'lt')
+    s.rr(9, 234, 462, 40, 10, fill=CARD)
+    s.text(f'{name}  31C  {-p/v:.1f}A', 21, 254, F9, TEXT)
+    pill(s, 313, 241, 'CHG', True); pill(s, 391, 241, 'DSG', True)
+    tabs(s, 1); return s
+
+SOCS5 = [62, 60, 58, 51, 56]
+def pack_row(s, sel, bt=(1, 1, 1, 1, 0)):
+    w = 464 // 5
+    for k in range(5):
+        b = (8 + k * w, 84, w - 4, 30)
+        s.button(b, f'#{k} {SOCS5[k]}%', k == sel)
+        if bt[k]: s.circle(b[0] + b[2] - 9, b[1] + 8, 3, BLUE)
+def mos3(s, y, states, enabled=True):
+    for i, (nm, on) in enumerate(zip(['CHARGE', 'DISCHARGE', 'BALANCE'], states)):
+        x, w, h = 8 + i * 156, 150, 62; lit = on and enabled; bg = GOOD if lit else CARD
+        s.rr(x, y, w, h, 12, fill=bg, outline=GOOD if lit else LINE)
+        s.text(nm, x + w/2, y + 17, F9, BG if lit else MUTED, 'mm'); s.text('ON' if on else 'OFF', x + w/2, y + 42, F18B, BG if lit else (TEXT if enabled else LINE), 'mm')
+def ctl_bank_mos(sel=0):
+    s = ctl_base(0, 'Home bank  DISCHARGING'); pack_row(s, sel); mos3(s, 122, [True, True, True])
+    s.button((8, 192, 130, 40), f'READ #{sel}')
+    s.text(f'#{sel} MASTER  BT: JK-PB2A16S20P' if sel == 0 else f'#{sel}  BT: JK-PB2A16S20P', 148, 204, F9, BLUE)
+    s.text('Settings go by Bluetooth, read back', 148, 224, F9, MUTED)
+    status(s, f'Pack #{sel}: verified'); tabs(s, 4); return s
+def ctl_bank_params(sel=3):
+    s = ctl_base(1, 'Home bank  DISCHARGING'); pack_row(s, sel)
+    for r, (nm, v, u, dec) in enumerate(PARAMS[:3]):
+        y = 120 + r * 38; s.rr(8, y, 270, 34, 8, fill=CARD); s.text(nm, 18, y + 17, F9, MUTED)
+        ed = r == 0
+        s.text(f"{3.600 if ed else v:.{dec}f} {u}", 270, y + 17, F9B, WARN if ed else TEXT, 'rm')
+        s.button((282, y, 52, 34), '-', f=F12B); s.button((338, y, 52, 34), '+', f=F12B); s.button((394, y, 78, 34), 'SET', ed, WARN)
+    s.button((8, 240, 56, 34), '<', f=F12B); s.button((128, 240, 56, 34), '>', f=F12B); s.text('1/5', 96, 258, F9, MUTED, 'mm')
+    tabs(s, 4); return s
+def ctl_bank_view_only():
+    s = ctl_base(0, 'Home bank  DISCHARGING'); pack_row(s, 4); mos3(s, 122, [True, True, False], enabled=False)
+    s.rr(8, 192, 464, 44, 10, fill=CARD, outline=WARN)
+    s.text('#4 has no Bluetooth match yet: view only.', 20, 206, F9, WARN); s.text('CONTROL > BOARD > AUTO MATCH', 20, 226, F9, WARN)
+    tabs(s, 4); return s
+def ctl_bank_board():
+    s = ctl_base(3, 'Home bank  DISCHARGING')
+    s.button((8, 88, 160, 38), 'AUTO MATCH', True); s.button((172, 88, 100, 38), 'CLEAR'); s.button((368, 88, 104, 38), 'RESTART')
+    s.text('matched 4/5', 468, 142, F9, MUTED, 'rm')
+    s.text('Bluetooth of each pack (for settings)', 12, 142, F9B, TEXT)
+    for k in range(4):
+        y = 156 + k * 27; s.rr(8, y, 464, 25, 7, fill=CARD)
+        s.text(f'#{k}', 18, y + 13, F9B, TEXT); s.text('JK-PB2A16S20P', 60, y + 13, F9, MUTED); s.text('matched', 462, y + 13, F9, GOOD, 'rm')
+    s.text('+1 more on the website', 16, 268, F9, MUTED)
+    tabs(s, 4); return s
+def wipe_frame():
+    s = cells(); s.rect(240, 41, 240, TAB_Y - 41, BG); s.rect(240, 41, 3, TAB_Y - 41, ACCENT); return s
+def alarm_frame():
+    s = all_page('E-bike 60V LOW 12%')
+    for k in range(4): s.d.rectangle((k*S, k*S, (480-k)*S-1, (320-k)*S-1), outline=BAD, width=S)
+    return s
 
 def graph(metric=0):
     s = Scr(); header(s, 'Solar 48V 280Ah  CHARGING', nav=True)
@@ -321,6 +404,15 @@ shots = [
     ('cloudscreen_13_setup.png', 'SETUP: screen, alarms, Wi-Fi, pairing', setup()),
     ('cloudscreen_14_wifi.png', 'SETUP > WI-FI', wifi()),
     ('cloudscreen_15_paired.png', 'SETUP > PAIRING (paired)', pairing(True)),
+    ('cloudscreen_17_ev_home.png', 'EV profile: HOME = drive-power meter + range left (km)', ev_home()),
+    ('cloudscreen_18_ev_regen.png', 'EV braking: green REGEN banner', ev_home(p=-900, regen=True)),
+    ('cloudscreen_19_ev_range_low.png', 'EV: range below the alarm level', ev_home(p=1200, rk=8, soc=14, v=70.2, alarm='Vespa EV RANGE 8km')),
+    ('cloudscreen_20_bank_mos_master.png', 'Bank: #0 master set by Bluetooth like the others', ctl_bank_mos(0)),
+    ('cloudscreen_21_bank_params.png', 'Bank: PARAMS of the chosen pack', ctl_bank_params(3)),
+    ('cloudscreen_22_bank_board.png', 'Bank: BOARD > AUTO MATCH Bluetooth to each pack', ctl_bank_board()),
+    ('cloudscreen_23_bank_view_only.png', 'Bank: pack without a Bluetooth match = view only', ctl_bank_view_only()),
+    ('cloudscreen_24_anim_wipe.png', 'Animation: tab change wipes in the direction of travel', wipe_frame()),
+    ('cloudscreen_25_anim_alarm.png', 'Animation: new alarm slides in, screen edge blinks red', alarm_frame()),
 ]
 paths = [(s.save(n), c) for n, c, s in shots]
 W, H = 480 * S // 2, 320 * S // 2

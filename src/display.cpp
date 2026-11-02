@@ -666,9 +666,9 @@ static void evHome(const DisplaySnap &d, bool force) {
   b.drawString(rk < 0 ? String("--") : String(int(rk + .5f)), 12, 32);
   b.setFont(&fonts::FreeSans9pt7b);
   b.setTextColor(C_MUTED, C_CARD);
-  b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : "km", 12, 76);
+  b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : (d.whkm ? String("km  ") + d.whkm + " Wh/km" : String("km")), 12, 76);
   int soc = ok ? int(s.soc + .5f) : 0;
-  b.drawString(String("SOC ") + (ok ? String(soc) + "%" : String("--")) + (d.whkm ? String("  ") + d.whkm + " Wh/km" : String("")), 12, 100);
+  b.drawString(String("SOC ") + (ok ? String(soc) + "%" : String("--")), 12, 100);
   b.fillRoundRect(12, 122, 146, 8, 4, C_LINE);
   if (soc > 0) b.fillRoundRect(12, 122, 146 * std::min(soc, 100) / 100, 8, 4, soc <= 15 ? C_BAD : soc <= 35 ? C_WARN : C_GOOD);
   b.drawString("Voltage", 12, 140);
