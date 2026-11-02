@@ -16,7 +16,7 @@ jobs:
       - name: Install PlatformIO and esptool
         run: pip install platformio esptool==4.5.1
       - name: Native decoder tests
-        run: g++ -std=c++17 -o other_test test/other_bms_test.cpp && ./other_test && g++ -std=c++17 -o params_test test/params_test.cpp && ./params_test && g++ -std=c++17 -o settings_test test/settings_test.cpp && ./settings_test && g++ -std=c++17 -o rs485_test test/rs485_test.cpp && ./rs485_test && g++ -std=c++17 -Iinclude -o bank_test test/bank_test.cpp && ./bank_test
+        run: g++ -std=c++17 -o other_test test/other_bms_test.cpp && ./other_test && g++ -std=c++17 -o params_test test/params_test.cpp && ./params_test && g++ -std=c++17 -o settings_test test/settings_test.cpp && ./settings_test && g++ -std=c++17 -o rs485_test test/rs485_test.cpp && ./rs485_test && g++ -std=c++17 -Iinclude -o bank_test test/bank_test.cpp && ./bank_test && g++ -std=c++17 -o daly_test test/daly_test.cpp && ./daly_test
       - name: Web UI test (lighting page)
         run: |
           set -o pipefail

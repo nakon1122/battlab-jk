@@ -22,7 +22,7 @@
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
 
-#define BATTLAB_FW "2.7.0-cloudscreen"
+#define BATTLAB_FW "2.8.0-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {

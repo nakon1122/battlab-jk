@@ -3,6 +3,9 @@
 #include "bms_params.h"
 #include "bms_settings.h"
 #include "jk_rs485.h"
+#include "bms_daly.h"
+#include <mbedtls/sha256.h>
+#include <Update.h>
 #include "jk_auth.h"
 #include "ble_channels.h"
 #include "ui.h"
@@ -25,9 +28,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.7.0-cyd35"
+#define BATTLAB_FW "2.8.0-cyd35"
 #else
-#define BATTLAB_FW "2.7.0-s3"
+#define BATTLAB_FW "2.8.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -73,16 +76,18 @@ struct Shared {
   String lastRxHex, gatt, probe = "idle", lastRxChar, probeLog;
   bmsw::JkSettings jk;      // last JK settings frame (0x01)
   uint32_t jkStamp = 0;
-  uint8_t family = 0;       // 0 unknown, 1 JK, 2 ANT, 3 JBD
+  uint8_t family = 0;       // 0 unknown, 1 JK, 2 ANT, 3 JBD, 4 DALY
   String lastWrite;         // result of the last BMS write, for the UI
   bool probeLogFrozen = false;
   String state = "UNCONFIGURED", devices = "[]";
   uint32_t devStamp = 0;
   float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
   uint64_t pvHave = 0;          // bit i = pv[i] was read from the BMS    // when the last BLE scan finished
-  // RS485 bus with several JK packs (index = DIP address 0..15)
-  struct Pack { jk::Sample s; uint32_t stamp = 0; bmsw::JkSettings js; uint32_t setStamp = 0; String model; };
+#ifndef BATTLAB_DISPLAY
+  // RS485 bus with several packs (index = DIP / Modbus address 0..15)
+  struct Pack { jk::Sample s; uint32_t stamp = 0; bmsw::JkSettings js; uint32_t setStamp = 0; String model; char serial[12] = {0}; };
   Pack packs[16];
+#endif
   uint8_t busMode = 0;          // 0 single pack, 1 listening to a master (DIP 0), 2 board polls the packs
   uint8_t bankN = 0;            // packs seen recently (>1 = bank view)
 } shared;
@@ -97,9 +102,28 @@ struct LinkCfg {
   uint8_t addr = 1;
   uint8_t bus = 0;   // several packs on the bus: 0 auto, 1 listen only, 2 board polls
   uint8_t count = 1; // poll mode: packs at addr .. addr+count-1
+  uint8_t brand = 0; // 0 auto, 1 JK, 2 DALY
 } linkCfg;
+// Usage profile (set from the website): changes the screen layout and alarms.
+struct ProfileCfg { uint8_t type = 0; uint16_t whkm = 0; uint8_t rangeAlarm = 10; } profCfg; // 0 solar,1 ev,2 car,3 ups,4 camp
+static const char *const PROF_NAME[5] = {"solar", "ev", "car", "ups", "camp"};
+#ifndef BATTLAB_DISPLAY
+// Bluetooth link to each pack of an RS485 bank (used to change its settings)
+struct BtLink { char mac[18] = {0}; uint8_t type = 0; char name[20] = {0}; };
+static BtLink btMap[16];
+static volatile bool btMatchWanted = false, btClearWanted = false;
+static String btmStatus;          // progress of the auto-match, for the website
+struct PackJob { uint8_t a; bool isSwitch; uint8_t idx; float value; bool on; uint32_t id; };
+static PackJob pjQ[4];
+static uint8_t pjN = 0;
+struct PwEntry { uint8_t a = 0; String what; uint8_t st = 0; uint32_t at = 0; uint32_t id = 0; }; // st: 0 bluetooth, 1 sent, 2 ok, 3 no change, 4 no bluetooth
+static PwEntry pwLog[6];
+static uint32_t pwSeq = 0;
+static void pwSet(uint32_t id, uint8_t a, const String &what, uint8_t st);
+#endif
 static volatile bool linkRs485 = false;
 static volatile bool otaBusy = false; // firmware update running: Bluetooth stays idle
+static volatile bool bleOtaBusy = false; // firmware arriving over the Bluetooth setup link
 static volatile int otaPct = -1;
 int otaProgress() { return otaPct; }
 static String devName = "BATTLAB"; // BATTLAB-XXXX: hotspot + Bluetooth name, unique per board
@@ -296,13 +320,30 @@ static const char *queueCmd(const BmsCmd &c, uint8_t addr = 0xFF) {
 // Returns nullptr when queued, otherwise the reason it was refused.
 const char *bmsWriteParam(int idx, float value, int addr) {
   if (addr >= 0) { // one pack of an RS485 bank
+#ifdef BATTLAB_DISPLAY
+    return "pack address needs the ESP32-S3 RS485 board";
+#else
     Guard g;
     if (!linkRs485 || addr > 15) return "pack address 0-15 on RS485 only";
-    if (shared.busMode == 1) return "read only: a master pack (DIP 0) is running the bus";
+    if (shared.family != 1) return "settings: JK only";
     if (idx < 0 || idx >= bmsw::JK_PARAM_COUNT) return "unknown setting";
     const auto &pk = shared.packs[addr];
-    if (!pk.js.valid || uint32_t(millis() - pk.setStamp) > 600000) return "settings of this pack not read yet";
-    if (const char *e = bmsw::checkJkValue(pk.js, idx, value)) return e;
+    if (pk.js.valid && uint32_t(millis() - pk.setStamp) < 600000)
+      if (const char *e = bmsw::checkJkValue(pk.js, idx, value)) return e;
+    if (shared.busMode == 1) { // master runs the bus: go over Bluetooth
+      if (!btMap[addr].mac[0]) return "pack has no Bluetooth match yet - run auto match";
+      if (pjN >= 4) return "busy, try again";
+      uint32_t id = ++pwSeq;
+      pjQ[pjN++] = {uint8_t(addr), false, uint8_t(idx), value, false, id};
+      const auto &p = bmsw::JK_PARAMS[idx];
+      pwLog[5] = PwEntry(); // make room
+      for (int k = 5; k > 0; k--) pwLog[k] = pwLog[k - 1];
+      pwLog[0].a = addr; pwLog[0].what = String(p.name) + " -> " + String(value, int(p.decimals)) + " " + p.unit;
+      pwLog[0].st = 0; pwLog[0].at = millis(); pwLog[0].id = id;
+      return nullptr;
+    }
+    if (!pk.js.valid) return "settings of this pack not read yet";
+#endif
   } else {
     Guard g;
     if (shared.family == 2 || shared.family == 3) {
@@ -312,6 +353,7 @@ const char *bmsWriteParam(int idx, float value, int addr) {
       if (!(shared.pvHave >> idx & 1)) return "setting not read yet - read the BMS first";
       if (const char *e = bset::check(shared.family, shared.pv, shared.pvHave, idx, value)) return e;
     } else {
+      if (shared.family == 4) return "DALY: only the MOS switches can be changed for now";
       if (shared.family != 1) return "BMS type not identified yet";
       if (uint32_t(millis() - shared.jkStamp) > 600000 || !shared.jk.valid)
         return "settings not read yet";
@@ -323,10 +365,24 @@ const char *bmsWriteParam(int idx, float value, int addr) {
 const char *bmsSetSwitch(int which, bool on, int addr) {
   if (which < 0 || which >= bmsw::SW_COUNT) return "unknown switch";
   if (addr >= 0) {
+#ifdef BATTLAB_DISPLAY
+    return "pack address needs the ESP32-S3 RS485 board";
+#else
     Guard g;
     if (!linkRs485 || addr > 15) return "pack address 0-15 on RS485 only";
-    if (shared.busMode == 1) return "read only: a master pack (DIP 0) is running the bus";
     if (!shared.packs[addr].stamp) return "pack not seen on the bus";
+    if (shared.family == 4 && which == bmsw::SW_BALANCER) return "balancer switch: not on DALY wire protocol";
+    if (shared.busMode == 1) {
+      if (!btMap[addr].mac[0]) return "pack has no Bluetooth match yet - run auto match";
+      if (pjN >= 4) return "busy, try again";
+      uint32_t id = ++pwSeq;
+      pjQ[pjN++] = {uint8_t(addr), true, uint8_t(which), 0, on, id};
+      for (int k = 5; k > 0; k--) pwLog[k] = pwLog[k - 1];
+      pwLog[0].a = addr; pwLog[0].what = String(which == 0 ? "Charge" : which == 1 ? "Discharge" : "Balancer") + (on ? " ON" : " OFF");
+      pwLog[0].st = 0; pwLog[0].at = millis(); pwLog[0].id = id;
+      return nullptr;
+    }
+#endif
   } else {
     Guard g;
     if (!shared.family) return "BMS type not identified yet";
@@ -335,6 +391,48 @@ const char *bmsSetSwitch(int which, bool on, int addr) {
   return queueCmd({true, uint8_t(which), 0, on}, addr >= 0 ? uint8_t(addr) : 0xFF);
 }
 
+#ifndef BATTLAB_DISPLAY
+static void btSave() { // "a,mac,type,name;..."
+  String o;
+  for (int a = 0; a < 16; a++)
+    if (btMap[a].mac[0]) o += String(a) + "," + btMap[a].mac + "," + btMap[a].type + "," + btMap[a].name + ";";
+  Preferences p;
+  p.begin("battlab-jk", false);
+  p.putString("btmap", o);
+  p.end();
+}
+static void btLoad() {
+  Preferences p;
+  p.begin("battlab-jk", true);
+  String s = p.getString("btmap", "");
+  p.end();
+  int i = 0;
+  while (i < (int)s.length()) {
+    int e = s.indexOf(';', i);
+    if (e < 0) break;
+    String it = s.substring(i, e);
+    i = e + 1;
+    int c1 = it.indexOf(','), c2 = it.indexOf(',', c1 + 1), c3 = it.indexOf(',', c2 + 1);
+    if (c1 < 0 || c2 < 0 || c3 < 0) continue;
+    int a = it.substring(0, c1).toInt();
+    String mac = it.substring(c1 + 1, c2);
+    if (a < 0 || a > 15 || mac.length() != 17) continue;
+    strncpy(btMap[a].mac, mac.c_str(), 17);
+    btMap[a].type = it.substring(c2 + 1, c3).toInt();
+    strncpy(btMap[a].name, it.substring(c3 + 1).c_str(), sizeof(btMap[a].name) - 1);
+  }
+}
+static void pwSet(uint32_t id, uint8_t a, const String &what, uint8_t st) {
+  Guard g;
+  for (auto &e : pwLog)
+    if (e.id == id) { e.st = st; e.at = millis(); if (what.length()) e.what = what; return; }
+}
+static void serialOf(const uint8_t *b, char *out) { // JK device info frame: serial number at byte 86, 11 chars
+  int k = 0;
+  for (int i = 0; i < 11; i++) { char c = b[86 + i]; if (c >= 33 && c < 127) out[k++] = c; }
+  out[k] = 0;
+}
+#endif
 void bleWorker(void *) {
 #ifdef BATTLAB_CYD35
   // Start the Bluetooth radio after Wi-Fi and the boot splash have settled,
@@ -371,6 +469,12 @@ void bleWorker(void *) {
   NimBLERemoteCharacteristic *antCh = nullptr, *jbdCh = nullptr;
   bms::AntFramer antF;
   bms::JbdFramer jbdF;
+  // DALY: new (0xD2 Modbus-like) and older (0xA5) protocols over FFF0 / FFF2
+  NimBLERemoteCharacteristic *dalyCh = nullptr;
+  daly::D2Framer dD2;
+  daly::A5Framer dA5;
+  daly::A5State dA5st;
+  uint8_t dalySub = 0, dalyIdx = 0; // 1 = D2, 2 = A5
   jk::Sample jbdSample;
   bool jbdHaveBasic = false;
   uint32_t identAt = 0, identStartedAt = 0, lastOtherPoll = 0;
@@ -379,6 +483,7 @@ void bleWorker(void *) {
   auto forcedFamily = [](const String &p) -> uint8_t {
     if (p == "ANT") return 2;
     if (p == "JBD") return 3;
+    if (p == "DALY") return 4;
     if (p == "JK02_24S" || p == "JK02_32S") return 1;
     return 0;
   };
@@ -517,10 +622,188 @@ void bleWorker(void *) {
     if (xQueueSend(queue, &q, 0) != pdTRUE)
       dropped++;
   };
+#ifndef BATTLAB_DISPLAY
+  // ---- RS485 bank: Bluetooth is used only to match packs and to change their settings ----
+  static uint8_t pjBuf[300], pjBuf2[300];
+  auto pjConnect = [&](const char *mac, uint8_t type, NimBLERemoteCharacteristic *&w) -> bool {
+    w = nullptr;
+    if (client->isConnected()) client->disconnect();
+    xQueueReset(queue);
+    if (!client->connect(NimBLEAddress(mac, type))) return false;
+    NimBLERemoteService *sv = client->getService(NimBLEUUID(uint16_t(0xffe0)));
+    NimBLERemoteCharacteristic *c1 = sv ? sv->getCharacteristic(NimBLEUUID(uint16_t(0xffe1))) : nullptr;
+    if (!c1 || !c1->canNotify() || !c1->subscribe(true, notify)) { client->disconnect(); return false; }
+    w = c1;
+    return true;
+  };
+  auto pjWait = [&](jk::Parser &P, uint8_t want, uint32_t ms, uint8_t *out) -> bool {
+    uint32_t t0 = millis();
+    bool got = false;
+    Chunk ck;
+    while (!got && millis() - t0 < ms && client->isConnected()) {
+      if (xQueueReceive(queue, &ck, pdMS_TO_TICKS(50)) == pdTRUE)
+        P.feed(ck.data, ck.n, [&](const uint8_t *b) { if (b[4] == want && !got) { memcpy(out, b, 300); got = true; } });
+    }
+    return got;
+  };
+  auto pjSend = [&](NimBLERemoteCharacteristic *w, uint8_t cmd) {
+    auto b = jk::request(cmd);
+    w->writeValue(b.data(), b.size(), !w->canWriteNoResponse());
+  };
+  auto setBtm = [&](const String &st) { Guard g; btmStatus = st; };
+  auto runMatch = [&]() {
+    setBtm("scan");
+    scan->clearResults();
+    NimBLEScanResults res = scan->start(8, false);
+    struct Cand { std::string mac; uint8_t type; std::string name; };
+    std::vector<Cand> cands;
+    for (int i = 0; i < res.getCount() && cands.size() < 20; i++) {
+      auto dev = res.getDevice(i);
+      String up = dev.getName().c_str();
+      up.toUpperCase();
+      if (up.startsWith("JK") || (dev.haveServiceUUID() && dev.isAdvertisingService(NimBLEUUID(uint16_t(0xffe0)))))
+        cands.push_back({dev.getAddress().toString(), dev.getAddressType(), dev.getName().substr(0, 19)});
+    }
+    jk::Sample ps[16];
+    bool have[16];
+    char ser[16][12];
+    {
+      Guard g;
+      uint32_t now = millis();
+      for (int k = 0; k < 16; k++) {
+        have[k] = shared.packs[k].stamp && now - shared.packs[k].stamp < 180000;
+        ps[k] = shared.packs[k].s;
+        memcpy(ser[k], shared.packs[k].serial, 12);
+      }
+    }
+    struct Got { int c; char serial[12]; jk::Sample s; bool hv; };
+    std::vector<Got> got;
+    for (size_t j = 0; j < cands.size(); j++) {
+      setBtm(String("check:") + (j + 1) + "/" + cands.size());
+      NimBLERemoteCharacteristic *w;
+      if (!pjConnect(cands[j].mac.c_str(), cands[j].type, w)) continue;
+      jk::Parser P;
+      Got g{int(j), {0}, jk::Sample(), false};
+      pjSend(w, 0x97);
+      if (pjWait(P, 3, 3000, pjBuf)) serialOf(pjBuf, g.serial);
+      pjSend(w, 0x96);
+      if (pjWait(P, 2, 4000, pjBuf)) g.hv = jk::decode(pjBuf, true, g.s) || jk::decode(pjBuf, false, g.s);
+      client->disconnect();
+      if (g.serial[0] || g.hv) got.push_back(g);
+      vTaskDelay(pdMS_TO_TICKS(300));
+    }
+    int asg[16];
+    for (int k = 0; k < 16; k++) asg[k] = -1;
+    std::vector<bool> used(got.size(), false);
+    for (int k = 0; k < 16; k++) // 1) exact serial number
+      if (have[k] && ser[k][0])
+        for (size_t g = 0; g < got.size(); g++)
+          if (!used[g] && !strcmp(ser[k], got[g].serial)) { asg[k] = g; used[g] = true; break; }
+    for (int k = 0; k < 16; k++) { // 2) fingerprint: cell voltages, cycles, SOC
+      if (!have[k] || asg[k] >= 0) continue;
+      float best = 1e9, second = 1e9;
+      int bi = -1;
+      for (size_t g = 0; g < got.size(); g++) {
+        if (used[g] || !got[g].hv) continue;
+        const jk::Sample &a = ps[k], &b = got[g].s;
+        if (a.count != b.count || !a.count) continue;
+        float d = 0;
+        for (unsigned i = 0; i < 32; i++) d += std::fabs(a.cells[i] - b.cells[i]) * 1000;
+        d = d / a.count + std::fabs(float(a.cycles) - float(b.cycles)) * 200 + std::fabs(a.soc - b.soc) * 20;
+        if (d < best) { second = best; best = d; bi = g; } else if (d < second) second = d;
+      }
+      if (bi >= 0 && best < 60 && second - best > 10) { asg[k] = bi; used[bi] = true; }
+    }
+    int n = 0, total = 0;
+    {
+      Guard g;
+      for (int k = 0; k < 16; k++) {
+        if (have[k]) total++;
+        if (asg[k] < 0) continue;
+        const Cand &cd = cands[got[asg[k]].c];
+        btMap[k] = BtLink();
+        strncpy(btMap[k].mac, cd.mac.c_str(), 17);
+        btMap[k].type = cd.type;
+        strncpy(btMap[k].name, cd.name.c_str(), sizeof(btMap[k].name) - 1);
+        n++;
+      }
+    }
+    btSave();
+    setBtm(String("done:") + n + "/" + total + ":" + cands.size());
+  };
+  auto runJob = [&](const PackJob &j) {
+    BtLink L;
+    {
+      Guard g;
+      L = btMap[j.a];
+    }
+    NimBLERemoteCharacteristic *w = nullptr;
+    pwSet(j.id, j.a, "", 0);
+    if (!L.mac[0] || (!pjConnect(L.mac, L.type, w) && !pjConnect(L.mac, L.type, w))) { pwSet(j.id, j.a, "", 4); return; }
+    jk::Parser P;
+    pjSend(w, 0x97);
+    pjWait(P, 3, 2000, pjBuf);
+    pjSend(w, 0x96);
+    bmsw::JkSettings before;
+    bool hb = pjWait(P, 1, 5000, pjBuf) && bmsw::parseJkSettings(pjBuf, before);
+    bool is32 = true;
+    if (pjWait(P, 2, 2500, pjBuf2)) { jk::Sample t; is32 = jk::decode(pjBuf2, true, t) || !jk::decode(pjBuf2, false, t); }
+    std::array<uint8_t, 20> f;
+    if (j.isSwitch) f = bmsw::jkWriteFrame(bmsw::JK_SW_REG[j.idx], j.on ? 1 : 0);
+    else {
+      const auto &p = bmsw::JK_PARAMS[j.idx];
+      if (hb) {
+        const char *e = bmsw::checkJkValue(before, j.idx, j.value);
+        if (e) { client->disconnect(); pwSet(j.id, j.a, String("refused: ") + e, 3); return; }
+      }
+      f = bmsw::jkWriteFrame(is32 ? p.reg32 : p.reg24, bmsw::jkRaw(j.idx, j.value));
+    }
+    w->writeValue(f.data(), f.size(), !w->canWriteNoResponse());
+    pwSet(j.id, j.a, "", 1);
+    delay(600);
+    xQueueReset(queue);
+    P.reset();
+    pjSend(w, 0x96);
+    bmsw::JkSettings after;
+    bool ha = pjWait(P, 1, 6000, pjBuf) && bmsw::parseJkSettings(pjBuf, after);
+    bool same = false;
+    if (ha) same = j.isSwitch ? after.sw[j.idx] == j.on : std::fabs(after.v[j.idx] - j.value) <= bmsw::JK_PARAMS[j.idx].step / 2 + 1e-4f;
+    client->disconnect();
+    {
+      Guard g;
+      if (ha) { shared.packs[j.a].js = after; shared.packs[j.a].setStamp = millis(); }
+      shared.lastWrite = String("Pack #") + j.a + (same ? ": verified" : ha ? ": BMS kept the old value" : ": no answer after writing");
+    }
+    pwSet(j.id, j.a, "", same ? 2 : 3);
+  };
+  auto packJobs = [&]() {
+    if (btClearWanted) {
+      btClearWanted = false;
+      { Guard g; for (auto &b : btMap) b = BtLink(); btmStatus = ""; }
+      btSave();
+    }
+    if (btMatchWanted) { btMatchWanted = false; runMatch(); }
+    PackJob j;
+    bool have = false;
+    {
+      Guard g;
+      if (pjN) { j = pjQ[0]; memmove(pjQ, pjQ + 1, sizeof(PackJob) * (pjN - 1)); pjN--; have = true; }
+    }
+    if (have) runJob(j);
+  };
+#endif
   for (;;) {
-    if (otaBusy || linkRs485) { // firmware download, or the BMS is on the RS485 cable
+    if (otaBusy || bleOtaBusy) { // firmware download: Bluetooth client stays idle
       if (client->isConnected()) client->disconnect();
       vTaskDelay(pdMS_TO_TICKS(300));
+      continue;
+    }
+    if (linkRs485) { // BMS on the RS485 cable: Bluetooth only for bank jobs
+#ifndef BATTLAB_DISPLAY
+      if (client->isConnected()) client->disconnect();
+      packJobs();
+#endif
+      vTaskDelay(pdMS_TO_TICKS(200));
       continue;
     }
     if (bleTxApplyWanted) {
@@ -595,6 +878,7 @@ void bleWorker(void *) {
         bool candidate =
             upper.startsWith("JK") || upper.startsWith("ANT") ||
             upper.startsWith("JBD") || upper.startsWith("XIAOXIANG") ||
+            upper.startsWith("DL-") || upper.startsWith("DALY") ||
             (dev.haveServiceUUID() &&
              (dev.isAdvertisingService(NimBLEUUID(uint16_t(0xffe0))) ||
               dev.isAdvertisingService(NimBLEUUID(uint16_t(0xff00)))));
@@ -779,6 +1063,14 @@ void bleWorker(void *) {
                 if (auto cs = sv->getCharacteristics(false))
                   for (auto cc : *cs)
                     if (cc->getUUID() == NimBLEUUID(uint16_t(0xff02))) jbdCh = cc;
+          dalyCh = nullptr;
+          if (auto svcs = client->getServices(false))
+            for (auto sv : *svcs)
+              if (sv->getUUID() == NimBLEUUID(uint16_t(0xfff0)))
+                if (auto cs = sv->getCharacteristics(false))
+                  for (auto cc : *cs)
+                    if (cc->getUUID() == NimBLEUUID(uint16_t(0xfff2))) dalyCh = cc;
+          dD2.reset(); dA5.reset(); dA5st.reset(); dalySub = 0; dalyIdx = 0;
           fam = forcedFamily(c.protocol);
           if (!fam && jbdCh) fam = 3; // service FF00 is specific to JBD
           antF.reset();
@@ -796,7 +1088,7 @@ void bleWorker(void *) {
             Guard g;
             shared.gatt = gatt;
           }
-          if (subscribed && (ch || jbdCh || !steps.empty())) {
+          if (subscribed && (ch || jbdCh || dalyCh || !steps.empty())) {
             linkedLocal = true;
             probeStep = -1; // run quick identification first
             probeAt = 0;
@@ -893,6 +1185,21 @@ void bleWorker(void *) {
             shared.rejected++;
           }
         });
+        dD2.feed(chunk.data, chunk.n, [&](uint8_t st, uint8_t fn, const uint8_t *d, size_t n) {
+          if (st != 0xD2 || fn != 3) return;
+          jk::Sample smp;
+          uint8_t bal;
+          if (daly::decodeBle(d, n, smp, bal)) {
+            if (!fam) fam = 4;
+            if (fam == 4) { dalySub = 1; publishOther(smp, "DALY"); }
+          }
+        });
+        dA5.feed(chunk.data, chunk.n, [&](uint8_t id, const uint8_t *d) {
+          if (dA5st.add(id, d)) {
+            if (!fam) fam = 4;
+            if (fam == 4) { dalySub = 2; publishOther(dA5st.s, "DALY (A5)"); }
+          } else if (!fam && id == 0x90) dalySub = 2;
+        });
         jbdF.feed(chunk.data, chunk.n, [&](uint8_t cmd, const uint8_t *d, size_t n) {
           if (fam == 3 && cmd >= 0x10 && cmd <= 0x2F && n == 2) { // settings register read back
             for (int i = 0; i < bset::JBD_N; i++)
@@ -974,6 +1281,16 @@ void bleWorker(void *) {
             ok = antCh->writeValue(f.data(), f.size(), !antCh->canWriteNoResponse());
             result = String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") +
                      (cmd.on ? " ON" : " OFF");
+          } else if (fam == 4 && cmd.isSwitch) {
+            uint8_t fr[16];
+            int k = 0;
+            NimBLERemoteCharacteristic *w = dalyCh ? dalyCh : ch;
+            if (dalySub == 2) {
+              if (cmd.idx < 2) k = daly::a5Frame(fr, 0x80, cmd.idx == 0 ? 0xDA : 0xD9, cmd.on ? 1 : 0);
+            } else k = daly::d2Frame(fr, 0xD2, 6, daly::BLE_MOS_REG[cmd.idx], cmd.on ? 1 : 0);
+            if (k && w) ok = w->writeValue(fr, k, !w->canWriteNoResponse());
+            result = String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") + (cmd.on ? " ON" : " OFF") +
+                     (k ? "" : " (not on this DALY)");
           } else if (fam == 3 && cmd.isSwitch) {
             bool chg = jbdSample.charge, dsg = jbdSample.discharge;
             if (cmd.idx == 0) chg = cmd.on;
@@ -1053,17 +1370,34 @@ void bleWorker(void *) {
           else
             writeRaw(jbdCh ? jbdCh : ch, bms::JBD_CELLS_REQUEST, 7, "JBD cells");
           lastOtherPoll = t;
+        } else if (fam == 4 && t - lastOtherPoll > (dalySub == 2 ? 250u : 1000u)) {
+          uint8_t fr[16];
+          NimBLERemoteCharacteristic *w = dalyCh ? dalyCh : ch;
+          if (dalySub == 2) {
+            int k = daly::a5Frame(fr, 0x80, daly::A5_POLL[dalyIdx++ % 5]);
+            writeRaw(w, fr, k, "DALY A5");
+          } else {
+            int k = daly::d2Frame(fr, 0xD2, 3, 0, daly::BLE_STATUS_REGS);
+            writeRaw(w, fr, k, "DALY status");
+          }
+          lastOtherPoll = t;
         } else if (fam == 0 && probeStep == -1) {
-          // Quick identification: rotate JK / ANT / JBD requests.
+          // Quick identification: rotate JK / ANT / JBD / DALY requests.
           uint32_t gap = fullProbeDone ? 3000 : 1200;
           if (!identAt || t - identAt > gap) {
             identAt = t;
             auto j7 = jk::request(0x97), j6 = jk::request(0x96);
-            switch (identIdx++ % 4) {
+            uint8_t fr[16];
+            switch (identIdx++ % (dalyCh ? 6 : 4)) {
               case 0: writeRaw(ch, j7.data(), j7.size(), "ident JK 0x97"); break;
               case 1: writeRaw(antCh, bms::ANT_STATUS_REQUEST, 10, "ident ANT"); break;
               case 2: writeRaw(jbdCh ? jbdCh : ch, bms::JBD_BASIC_REQUEST, 7, "ident JBD"); break;
-              default: writeRaw(ch, j6.data(), j6.size(), "ident JK 0x96"); break;
+              case 3: writeRaw(ch, j6.data(), j6.size(), "ident JK 0x96"); break;
+              case 4: { int k = daly::d2Frame(fr, 0xD2, 3, 0, daly::BLE_STATUS_REGS); writeRaw(dalyCh, fr, k, "ident DALY"); break; }
+              default: { int k = daly::a5Frame(fr, 0x80, 0x90); writeRaw(dalyCh, fr, k, "ident DALY A5"); break; }
+            }
+            if (dalySub == 2 && !fam) { // A5 answered 0x90: finish reading as DALY
+              fam = 4;
             }
             {
               Guard g;
@@ -1642,6 +1976,9 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     int count = a["count"] | int(linkCfg.count);
     if (bus != "auto" && bus != "listen" && bus != "poll") { ok = false; return "bus auto, listen or poll"; }
     if (count < 1 || count > 15 || addr + count > 16) { ok = false; return "1-15 packs, last address 15"; }
+    String brand = a["brand"] | (linkCfg.brand == 1 ? "jk" : linkCfg.brand == 2 ? "daly" : "auto");
+    if (brand != "auto" && brand != "jk" && brand != "daly") { ok = false; return "brand auto, jk or daly"; }
+    linkCfg.brand = brand == "jk" ? 1 : brand == "daly" ? 2 : 0;
     linkCfg.rs485 = mode == "rs485";
     linkCfg.rx = rx; linkCfg.tx = tx; linkCfg.baud = baud; linkCfg.addr = addr;
     linkCfg.bus = bus == "listen" ? 1 : bus == "poll" ? 2 : 0;
@@ -1655,6 +1992,7 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     p.putUChar("laddr", linkCfg.addr);
     p.putUChar("lbus", linkCfg.bus);
     p.putUChar("lcnt", linkCfg.count);
+    p.putUChar("lbrand", linkCfg.brand);
     p.end();
     {
       Guard g;
@@ -1666,6 +2004,32 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     }
     linkRs485 = linkCfg.rs485;
     return linkCfg.rs485 ? String("RS485: RX ") + rx + " TX " + tx + " " + baud + " addr " + addr + " x" + count + " " + bus : String("Bluetooth");
+#endif
+  }
+  if (c == "profile") {
+    String t = a["type"] | "solar";
+    int k = -1;
+    for (int i = 0; i < 5; i++) if (t == PROF_NAME[i]) k = i;
+    int wh = a["whkm"] | int(profCfg.whkm), ra = a["range_alarm"] | int(profCfg.rangeAlarm);
+    if (k < 0 || wh < 0 || wh > 2000 || ra < 0 || ra > 200) { ok = false; return "type solar|ev|car|ups|camp, whkm 0-2000"; }
+    profCfg.type = k; profCfg.whkm = wh; profCfg.rangeAlarm = ra;
+    Preferences p;
+    p.begin("battlab-jk", false);
+    p.putUChar("ptype", profCfg.type);
+    p.putUShort("pwhkm", profCfg.whkm);
+    p.putUChar("prange", profCfg.rangeAlarm);
+    p.end();
+    return String("profile ") + t;
+  }
+  if (c == "bt_match" || c == "bt_clear") {
+#ifdef BATTLAB_DISPLAY
+    ok = false;
+    return "needs the ESP32-S3 RS485 board";
+#else
+    if (!linkRs485) { ok = false; return "RS485 bank only"; }
+    if (c == "bt_match") { btMatchWanted = true; Guard g; btmStatus = "queued"; return "matching packs over Bluetooth (~1 min)"; }
+    btClearWanted = true;
+    return "cleared";
 #endif
   }
   if (c == "ota") {
@@ -1729,7 +2093,7 @@ static void cloudTask(void *) {
 #else
   http.setReuse(true); // S3 has RAM to keep the connection open
   const uint32_t FAST_MS = 2500;
-  const size_t DOC = 32768; // room for a 15-pack RS485 bank
+  size_t DOC = 10240; // grows with the RS485 bank (see below)
 #endif
   uint32_t nextAt = 0;
   bool fast = false;
@@ -1766,6 +2130,9 @@ static void cloudTask(void *) {
     String json;
     bool sentWscan = false;
     {
+#ifndef BATTLAB_DISPLAY
+      { Guard g; DOC = 10240 + size_t(shared.bankN) * 1700; }
+#endif
       DynamicJsonDocument body(DOC);
       body["p_token"] = devToken;
       body["p_pair"] = pairCode;
@@ -1800,7 +2167,28 @@ static void cloudTask(void *) {
       c["laddr"] = linkCfg.addr;
       c["lbus"] = linkCfg.bus == 1 ? "listen" : linkCfg.bus == 2 ? "poll" : "auto";
       c["lcnt"] = linkCfg.count;
+      c["lbrand"] = linkCfg.brand == 1 ? "jk" : linkCfg.brand == 2 ? "daly" : "auto";
+      if (linkRs485) {
+        Guard g;
+        auto bt = c.createNestedObject("bt");
+        for (int a = 0; a < 16; a++)
+          if (btMap[a].mac[0]) { auto o = bt.createNestedObject(String(a)); o["mac"] = btMap[a].mac; o["name"] = btMap[a].name; }
+        if (btmStatus.length()) c["btm"] = btmStatus;
+        auto pw = c.createNestedArray("pw");
+        uint32_t now = millis();
+        for (auto &e : pwLog)
+          if (e.id && now - e.at < 600000) {
+            auto o = pw.createNestedObject();
+            o["a"] = e.a; o["what"] = e.what;
+            static const char *const ST[5] = {"bt", "sent", "ok", "nochg", "nobt"};
+            o["st"] = ST[e.st > 4 ? 4 : e.st];
+            o["age"] = (now - e.at) / 1000;
+          }
+      }
 #endif
+      c["prof"] = PROF_NAME[profCfg.type];
+      c["whkm"] = profCfg.whkm;
+      c["bleota"] = 1;
       auto lo = c.createNestedObject("led");
       lo["on"] = led.on;
       lo["mode"] = led.mode;
@@ -1902,6 +2290,8 @@ static void cloudTask(void *) {
             o["chg"] = x.charge;
             o["dsg"] = x.discharge;
             if (pk.model.length()) o["model"] = pk.model;
+            if (pk.serial[0]) o["sn"] = pk.serial;
+            if (btMap[a].mac[0]) o["bt"] = 1;
             float pmn = 9, pmx = 0;
             auto cl = o.createNestedArray("cells");
             for (int k = 0; k < 32; k++)
@@ -2022,15 +2412,86 @@ static void cloudTask(void *) {
 // Android / PC) can set up and control this board without joining its
 // hotspot. Values are JSON (max 512 bytes each), refreshed by loop().
 #define BSV_UUID "7a1e0000-5b3c-4f6a-9d2e-b47710ba7700"
-static const char *const B_CHR_UUID[7] = {
+static const char *const B_CHR_UUID[9] = {
     "7a1e0001-5b3c-4f6a-9d2e-b47710ba7700",  // 0 live data (read)
     "7a1e0002-5b3c-4f6a-9d2e-b47710ba7700",  // 1 settings (read)
     "7a1e0003-5b3c-4f6a-9d2e-b47710ba7700",  // 2 JK parameters (read)
     "7a1e0004-5b3c-4f6a-9d2e-b47710ba7700",  // 3 BMS scan list (read)
     "7a1e0005-5b3c-4f6a-9d2e-b47710ba7700",  // 4 Wi-Fi scan list (read)
     "7a1e0006-5b3c-4f6a-9d2e-b47710ba7700",  // 5 command (write)
-    "7a1e0007-5b3c-4f6a-9d2e-b47710ba7700"}; // 6 result (read, notify)
-static NimBLECharacteristic *bChr[7] = {};
+    "7a1e0007-5b3c-4f6a-9d2e-b47710ba7700",  // 6 result (read, notify)
+    "7a1e0008-5b3c-4f6a-9d2e-b47710ba7700",  // 7 firmware update control (write, notify)
+    "7a1e0009-5b3c-4f6a-9d2e-b47710ba7700"}; // 8 firmware update data (write)
+static NimBLECharacteristic *bChr[9] = {};
+// ---- firmware update over Bluetooth ----
+// Website: {"begin":<size>,"sha":"<sha256 hex>"} on 7, then the .bin in chunks on 8
+// (write with response = flow control), then {"end":1}. The image is checked
+// against the SHA-256 before the board switches to it.
+static mbedtls_sha256_context bOtaSha;
+static size_t bOtaSize = 0, bOtaGot = 0;
+static uint8_t bOtaWant[32];
+static uint32_t bOtaLast = 0, bOtaRestartAt = 0, bOtaNext = 0;
+static void bOtaNotify(const String &m) {
+  if (!bChr[7]) return;
+  bChr[7]->setValue((const uint8_t *)m.c_str(), m.length());
+  bChr[7]->notify();
+}
+static void bOtaFail(const String &why) {
+  if (bleOtaBusy) Update.abort();
+  bleOtaBusy = false;
+  otaPct = -1;
+  bOtaNotify(String("{\"st\":\"error\",\"msg\":\"") + why + "\"}");
+}
+class BleOtaCtl : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c) override {
+    NimBLEAttValue v = c->getValue();
+    StaticJsonDocument<256> in;
+    if (deserializeJson(in, (const char *)v.data(), v.length())) return bOtaFail("bad JSON");
+    if (in.containsKey("begin")) {
+      size_t sz = in["begin"] | 0;
+      String sha = in["sha"] | "";
+      const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+      if (bleOtaBusy) Update.abort();
+      if (!next || !sz || sz > next->size) return bOtaFail("image too big for this board");
+      if (sha.length() != 64) return bOtaFail("sha256 missing");
+      for (int i = 0; i < 32; i++) bOtaWant[i] = strtoul(sha.substring(i * 2, i * 2 + 2).c_str(), nullptr, 16);
+      if (!Update.begin(sz)) return bOtaFail("cannot start update");
+      mbedtls_sha256_init(&bOtaSha);
+      mbedtls_sha256_starts(&bOtaSha, 0);
+      bOtaSize = sz; bOtaGot = 0; bOtaNext = 32768;
+      bOtaLast = millis();
+      bleOtaBusy = true;
+      otaPct = 0;
+      bOtaNotify("{\"st\":\"ready\"}");
+    } else if (in.containsKey("end")) {
+      if (!bleOtaBusy) return bOtaFail("no update running");
+      if (bOtaGot != bOtaSize) return bOtaFail("incomplete image");
+      uint8_t got[32];
+      mbedtls_sha256_finish(&bOtaSha, got);
+      mbedtls_sha256_free(&bOtaSha);
+      if (memcmp(got, bOtaWant, 32)) return bOtaFail("sha256 mismatch");
+      if (!Update.end(true)) return bOtaFail(String("verify failed ") + Update.getError());
+      bleOtaBusy = false;
+      otaPct = 100;
+      bOtaNotify("{\"st\":\"done\"}");
+      bOtaRestartAt = millis() + 1500;
+    } else if (in.containsKey("abort")) bOtaFail("aborted");
+  }
+};
+class BleOtaData : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c) override {
+    if (!bleOtaBusy) return;
+    NimBLEAttValue v = c->getValue();
+    size_t n = v.length();
+    if (bOtaGot + n > bOtaSize) return bOtaFail("too much data");
+    if (Update.write((uint8_t *)v.data(), n) != n) return bOtaFail(String("flash write ") + Update.getError());
+    mbedtls_sha256_update(&bOtaSha, v.data(), n);
+    bOtaGot += n;
+    bOtaLast = millis();
+    otaPct = int(uint64_t(bOtaGot) * 100 / bOtaSize);
+    if (bOtaGot >= bOtaNext) { bOtaNext += 32768; bOtaNotify(String("{\"st\":\"rx\",\"got\":") + bOtaGot + "}"); }
+  }
+};
 static SemaphoreHandle_t bleQmx = nullptr;
 static std::vector<std::string> bleQ;
 static volatile bool bleClient = false;
@@ -2053,14 +2514,17 @@ void bleSetupStart() {
   NimBLEServer *srv = NimBLEDevice::createServer();
   srv->setCallbacks(new BleSrvCb());
   NimBLEService *svc = srv->createService(BSV_UUID);
-  for (int i = 0; i < 7; i++) {
-    uint32_t props = i == 5 ? (NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR)
+  for (int i = 0; i < 9; i++) {
+    uint32_t props = i == 5 || i == 8 ? (NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR)
+                   : i == 7 ? (NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ)
                    : i == 6 ? (NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY)
                             : NIMBLE_PROPERTY::READ;
     bChr[i] = svc->createCharacteristic(B_CHR_UUID[i], props, 512);
     bChr[i]->setValue("{}");
   }
   bChr[5]->setCallbacks(new BleCmdCb());
+  bChr[7]->setCallbacks(new BleOtaCtl());
+  bChr[8]->setCallbacks(new BleOtaData());
   svc->start();
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(BSV_UUID);
@@ -2105,6 +2569,8 @@ static void bleRefresh(bool slow) {
 #endif
     c["remote"] = 1;
     c["ota"] = 1;
+    c["bleota"] = 1;
+    c["fw"] = BATTLAB_FW;
     auto lo = c.createNestedObject("led");
     lo["on"] = led.on;
     lo["mode"] = led.mode;
@@ -2209,6 +2675,8 @@ static void bleRefresh(bool slow) {
 }
 static void bleSetupTick() {
   if (!bleQmx) return;
+  if (bOtaRestartAt && int32_t(millis() - bOtaRestartAt) > 0) ESP.restart();
+  if (bleOtaBusy && millis() - bOtaLast > 30000) bOtaFail("no data for 30 s");
   std::string m;
   xSemaphoreTake(bleQmx, portMAX_DELAY);
   if (!bleQ.empty()) { m = bleQ.front(); bleQ.erase(bleQ.begin()); }
@@ -2268,6 +2736,7 @@ static void rs485Publish(const jk::Sample &s, const char *what) {
   shared.detected = what;
   shared.good++;
 }
+static uint8_t rsFam = 1; // family on the cable: 1 JK, 4 DALY
 // Rebuild the main sample from the packs (call with the Guard held).
 static void rs485Recompute() {
   uint32_t now = millis(), win = shared.busMode == 1 ? 90000 : 15000;
@@ -2290,15 +2759,18 @@ static void rs485Recompute() {
     m.charge = t.chg; m.discharge = t.dsg;
     shared.sample = m;
   }
-  int sel = linkCfg.addr;
-  if (!shared.packs[sel].js.valid)
-    for (int k = 0; k < 16; k++) if (shared.packs[k].js.valid) { sel = k; break; }
-  if (shared.packs[sel].js.valid) { shared.jk = shared.packs[sel].js; shared.jkStamp = shared.packs[sel].setStamp; shared.haveParams = true; }
+  if (rsFam == 1) {
+    int sel = linkCfg.addr;
+    if (!shared.packs[sel].js.valid)
+      for (int k = 0; k < 16; k++) if (shared.packs[k].js.valid) { sel = k; break; }
+    if (shared.packs[sel].js.valid) { shared.jk = shared.packs[sel].js; shared.jkStamp = shared.packs[sel].setStamp; shared.haveParams = true; }
+  }
   shared.have = shared.linked = true;
   shared.stamp = now;
   shared.state = "LIVE";
-  shared.family = 1;
-  shared.detected = shared.busMode == 1 ? String("JK RS485 bank (master DIP 0)") : bank ? String("JK RS485 bank") : String("JK RS485");
+  shared.family = rsFam;
+  const char *b = rsFam == 4 ? "DALY" : "JK";
+  shared.detected = shared.busMode == 1 ? String("JK RS485 bank (master DIP 0)") : String(b) + (bank ? " RS485 bank" : " RS485");
   shared.good++;
 }
 static void rs485Task(void *) {
@@ -2307,21 +2779,39 @@ static void rs485Task(void *) {
   int8_t rx = -1, tx = -1;
   uint32_t baud = 0, nextTx = 0, lastOk = 0, startAt = 0, bytes = 0, ourTxEnd = 0, lastReqAt = 0, lastByteAt = 0;
   uint32_t lastSet[16] = {0}, lastInfo[16] = {0}, lastCells = 0;
-  uint8_t proto = 0, tries = 0; // proto 1 = JK-PB Modbus, 2 = older 4E 57
+  uint8_t proto = 0, tries = 0; // 1 JK-PB Modbus, 2 older JK 4E 57, 3 DALY (Modbus-like), 4 DALY A5
   uint8_t mode = 0;             // 0 deciding (listening), 1 listen (master present), 2 poll
-  uint8_t lastReqAddr = 0xFF, pollIdx = 0, cfgBus = 0xFF, cfgCount = 0, cfgAddr = 0xFF;
+  uint8_t lastReqAddr = 0xFF, pollIdx = 0, cfgBus = 0xFF, cfgCount = 0, cfgAddr = 0xFF, cfgBrand = 0xFF;
+  uint8_t dBlock = 0, a5Idx = 0;
+  bool everOk = false;
   jk::Parser parser;
   jk485::OldFramer old;
   jk485::BusWatcher watch;
+  daly::D2Framer dF;
+  daly::A5Framer aF;
+  daly::A5State aS;
+  static daly::WireRegs dRegs[16];
   uint8_t f[32];
   auto setMode = [&](uint8_t m) {
     mode = m;
     Guard g;
     shared.busMode = m == 1 ? 1 : (m == 2 && linkCfg.count > 1) ? 2 : 0;
   };
+  auto storePack = [&](uint8_t a, const jk::Sample &s, uint8_t fam) {
+    rsFam = fam;
+    proto = fam == 4 ? proto : 1;
+    lastOk = millis();
+    everOk = true;
+    Guard g;
+    shared.packs[a].s = s;
+    shared.packs[a].stamp = millis();
+    rs485Recompute();
+  };
   auto handlePb = [&](const uint8_t *b) {
     proto = 1;
+    rsFam = 1;
     lastOk = millis();
+    everOk = true;
     uint8_t a = jk485::frameOwner(lastReqAddr, lastReqAt, millis(), 600);
     if (mode == 2 && linkCfg.count == 1) a = linkCfg.addr;
     Guard g;
@@ -2334,6 +2824,7 @@ static void rs485Task(void *) {
       if (bmsw::parseJkSettings(b, js)) { pk.js = js; pk.setStamp = millis(); rs485Recompute(); }
     } else if (b[4] == 3) {
       pk.model = asciiField(b + 6, 16);
+      serialOf(b, pk.serial);
       if (a == linkCfg.addr || shared.model.length() == 0) {
         shared.model = pk.model;
         shared.hardware = asciiField(b + 22, 8);
@@ -2346,16 +2837,17 @@ static void rs485Task(void *) {
     U.flush();
     ourTxEnd = millis() + (uint32_t(k) * 10000UL) / baud + 40;
   };
+  bool tryJk = true, tryDaly = true;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(10));
-    if (!linkRs485 || otaBusy) {
+    if (!linkRs485 || otaBusy || bleOtaBusy) {
       if (started) { U.end(); started = false; }
       proto = 0;
       vTaskDelay(pdMS_TO_TICKS(400));
       continue;
     }
     int8_t wr = swapped ? linkCfg.tx : linkCfg.rx, wt = swapped ? linkCfg.rx : linkCfg.tx;
-    bool cfgChanged = cfgBus != linkCfg.bus || cfgCount != linkCfg.count || cfgAddr != linkCfg.addr;
+    bool cfgChanged = cfgBus != linkCfg.bus || cfgCount != linkCfg.count || cfgAddr != linkCfg.addr || cfgBrand != linkCfg.brand;
     if (!started || rx != wr || tx != wt || baud != linkCfg.baud || cfgChanged) {
       if (started) U.end();
       U.setRxBufferSize(2048);
@@ -2365,56 +2857,80 @@ static void rs485Task(void *) {
       proto = 0; tries = 0; bytes = 0;
       startAt = lastByteAt = millis();
       if (cfgChanged) {
-        cfgBus = linkCfg.bus; cfgCount = linkCfg.count; cfgAddr = linkCfg.addr;
+        cfgBus = linkCfg.bus; cfgCount = linkCfg.count; cfgAddr = linkCfg.addr; cfgBrand = linkCfg.brand;
+        everOk = false;
         Guard g;
-        for (auto &pk : shared.packs) { pk.stamp = 0; pk.setStamp = 0; pk.js.valid = false; pk.model = ""; }
+        for (auto &pk : shared.packs) { pk.stamp = 0; pk.setStamp = 0; pk.js.valid = false; pk.model = ""; pk.serial[0] = 0; }
         shared.bankN = 0;
+        for (auto &w : dRegs) w.have = 0;
       }
-      setMode(linkCfg.bus == 1 ? 1 : linkCfg.bus == 2 ? 2 : 0);
+      tryJk = linkCfg.brand != 2;
+      tryDaly = linkCfg.brand != 1;
+      // DALY has no "master" on the bus: auto goes straight to polling for a DALY-only setup
+      setMode(linkCfg.bus == 1 ? 1 : (linkCfg.bus == 2 || linkCfg.brand == 2) ? 2 : 0);
       if (mode == 0) { Guard g; shared.state = "RS485_LISTENING"; }
     }
     uint32_t t = millis();
+    bool heard = false;
     while (U.available()) {
       uint8_t c = U.read();
       bytes++;
       lastByteAt = t;
+      if (int32_t(millis() - ourTxEnd) > 0) heard = true;
       jk485::BusReq r;
       if (watch.feed(c, r) && !r.write) {
         lastReqAddr = r.addr;
         lastReqAt = millis();
         // a request we did not send = another master (a JK pack with DIP 0) runs the bus
-        if (int32_t(millis() - ourTxEnd) > 0 && mode != 1 && linkCfg.bus != 2) setMode(1);
+        if (int32_t(millis() - ourTxEnd) > 0 && mode != 1 && linkCfg.bus != 2 && tryJk) setMode(1);
       }
-      parser.feed(&c, 1, handlePb);
-      if (mode == 2 && linkCfg.count == 1 && old.feed(c)) {
+      if (tryJk) parser.feed(&c, 1, handlePb);
+      if (mode == 2 && linkCfg.count == 1 && tryJk && old.feed(c)) {
         jk::Sample s;
-        if (jk485::decodeOld(old.data, old.dataLen, s)) { proto = 2; lastOk = millis(); rs485Publish(s, "JK RS485 (older)"); }
+        if (jk485::decodeOld(old.data, old.dataLen, s)) { proto = 2; rsFam = 1; lastOk = millis(); everOk = true; rs485Publish(s, "JK RS485 (older)"); }
+      }
+      if (mode == 2 && tryDaly) {
+        dF.feed(&c, 1, [&](uint8_t st, uint8_t fn, const uint8_t *d, size_t n) {
+          if (fn != 3 || st < 0x50 || st > 0x5F) return;
+          uint8_t a = st - 0x50;
+          if (a > 15 || dBlock > 2) return;
+          proto = 3;
+          dRegs[a].store(dBlock, d, n);
+          jk::Sample smp;
+          if (dBlock == 2 && daly::decodeWire(dRegs[a], smp)) storePack(a, smp, 4);
+          lastOk = millis();
+        });
+        aF.feed(&c, 1, [&](uint8_t id, const uint8_t *d) {
+          proto = 4;
+          lastOk = millis();
+          if (aS.add(id, d)) storePack(linkCfg.addr, aS.s, 4);
+        });
       }
     }
     // keep the bank fresh-count current even when a pack goes quiet
     static uint32_t lastRecalc = 0;
     if (t - lastRecalc > 2000) { lastRecalc = t; Guard g; if (shared.bankN || mode == 1) rs485Recompute(); }
 
-    if (mode == 0) { // auto: listen first, poll only if nobody else talks
-      if (t - startAt > 16000) setMode(2);
+    if (mode == 0) { // auto: listen first; any traffic we did not cause means a master runs the bus
+      if (heard && tryJk) setMode(1);
+      else if (t - startAt > 40000) setMode(2);
       continue;
     }
     if (mode == 1) { // listen only: never transmit while a master owns the bus
-      BmsCmd cmd;
-      bool haveCmd = false;
       {
         Guard g;
-        if (cmdN) { cmd = cmdQ[0]; memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); memmove(cmdAddrQ, cmdAddrQ + 1, cmdN - 1); cmdN--; haveCmd = true; }
-        if (haveCmd) shared.lastWrite = "Read only: a master pack (DIP 0) is running the RS485 bus";
+        if (cmdN) { // single-pack writes cannot go out on a bus we do not own
+          memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); memmove(cmdAddrQ, cmdAddrQ + 1, cmdN - 1); cmdN--;
+          shared.lastWrite = "Choose a pack: settings go to it over Bluetooth while a master (DIP 0) runs the bus";
+        }
         readWanted = false;
       }
-      (void)cmd;
-      if (t - lastByteAt > 20000) { // silence: maybe RX is on the other pin
+      if (!everOk && t - lastByteAt > 45000) { // never heard anything: maybe RX is on the other pin
         lastByteAt = t;
         swapped = !swapped;
         Guard g;
         shared.state = "RS485_NO_ANSWER";
-        if (!shared.bankN) shared.linked = shared.have = false;
+        shared.linked = shared.have = false;
       } else if (bytes > 200 && t - lastOk > 60000) {
         lastOk = t;
         Guard g;
@@ -2434,26 +2950,30 @@ static void rs485Task(void *) {
       if (readWanted) { readWanted = false; memset(lastSet, 0, sizeof lastSet); memset(lastInfo, 0, sizeof lastInfo); }
     }
     if (haveCmd) {
-      String result;
+      String result = cmd.isSwitch ? String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") + (cmd.on ? " ON" : " OFF") : String("");
       uint8_t to = cmdAddr <= 15 ? cmdAddr : linkCfg.addr;
+      int k = 0;
       if (proto == 1) {
         uint16_t reg;
         uint32_t raw;
         if (cmd.isSwitch) {
           reg = 0x1000 + (bmsw::JK_SW_OFFSET[cmd.idx] - 6);
           raw = cmd.on ? 1 : 0;
-          result = String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") + (cmd.on ? " ON" : " OFF");
         } else {
           const auto &p = bmsw::JK_PARAMS[cmd.idx];
           reg = 0x1000 + (p.offset - 6);
           raw = bmsw::jkRaw(cmd.idx, cmd.value);
           result = String(p.name) + " = " + String(cmd.value, int(p.decimals)) + " " + p.unit;
         }
-        int k = jk485::pbWrite(f, to, reg, raw);
-        send(f, k);
-        result = String("Sent (RS485 pack ") + to + "): " + result;
+        k = jk485::pbWrite(f, to, reg, raw);
         lastSet[to] = 0; // read the settings back
-      } else result = "Writing needs a JK-PB / inverter BMS on RS485";
+      } else if (proto == 3 && cmd.isSwitch && cmd.idx < 2) {
+        k = daly::d2Frame(f, 0x80 + to, 6, daly::WIRE_MOS_REG[cmd.idx], cmd.on ? 1 : 0);
+      } else if (proto == 4 && cmd.isSwitch && cmd.idx < 2) {
+        k = daly::a5Frame(f, 0x40, cmd.idx == 0 ? 0xDA : 0xD9, cmd.on ? 1 : 0);
+      }
+      if (k) { send(f, k); result = String("Sent (RS485 pack ") + to + "): " + result; }
+      else result = proto == 3 || proto == 4 ? "DALY: only charge / discharge MOS can be switched" : "Writing needs a JK-PB / inverter BMS on RS485";
       Guard g;
       shared.lastWrite = result;
       nextTx = t + 400;
@@ -2462,17 +2982,22 @@ static void rs485Task(void *) {
     int k = 0;
     uint8_t first = linkCfg.addr, cnt = linkCfg.count;
     if (proto == 0) {
-      uint8_t a = first + (tries / 2) % cnt;
-      if (tries % 2 == 0 || cnt > 1) { k = jk485::pbRequest(f, a, 2); lastReqAddr = a; lastReqAt = t; }
-      else k = jk485::oldReadAll(f);
-      if (++tries >= 8 + 2 * cnt) { // nothing answered: try the other wiring
+      // try every protocol the brand setting allows, one per slot
+      uint8_t a = first + (tries / 4) % cnt;
+      switch (tries % 4) {
+        case 0: if (tryJk) { k = jk485::pbRequest(f, a, 2); lastReqAddr = a; lastReqAt = t; } break;
+        case 1: if (tryDaly) { dBlock = 0; k = daly::d2Frame(f, 0x80 + a, 3, daly::WIRE_BLOCKS[0].reg, daly::WIRE_BLOCKS[0].count); } break;
+        case 2: if (tryJk && cnt == 1) k = jk485::oldReadAll(f); break;
+        default: if (tryDaly && cnt == 1) k = daly::a5Frame(f, 0x40, 0x90); break;
+      }
+      if (++tries >= 8 + 4 * cnt) { // nothing answered: try the other wiring
         tries = 0;
         swapped = !swapped;
         Guard g;
         shared.state = "RS485_NO_ANSWER";
         shared.linked = false;
       }
-      nextTx = t + 600;
+      nextTx = t + 500;
     } else if (proto == 1) {
       // one pack per slot: cells round-robin (~1 s per pack), settings 30 s, info 120 s
       uint8_t a = first + pollIdx % cnt;
@@ -2485,6 +3010,16 @@ static void rs485Task(void *) {
       k = jk485::pbRequest(f, a, type);
       lastReqAddr = a; lastReqAt = t;
       nextTx = t + (cnt > 1 ? max(150, 1000 / cnt) : 250);
+    } else if (proto == 3) { // DALY: three register blocks per pack
+      uint8_t a = first + (pollIdx / 3) % cnt;
+      dBlock = pollIdx % 3;
+      pollIdx++;
+      uint16_t regs = dBlock == 0 ? std::max<uint16_t>(16, std::min<uint16_t>(32, dRegs[a].r[0x3C] ? dRegs[a].r[0x3C] : 32)) : daly::WIRE_BLOCKS[dBlock].count;
+      k = daly::d2Frame(f, 0x80 + a, 3, daly::WIRE_BLOCKS[dBlock].reg, regs);
+      nextTx = t + (cnt > 1 ? 120 : 300);
+    } else if (proto == 4) {
+      k = daly::a5Frame(f, 0x40, daly::A5_POLL[a5Idx++ % 5]);
+      nextTx = t + 200;
     } else {
       k = jk485::oldReadAll(f);
       nextTx = t + 1500;
@@ -2506,7 +3041,7 @@ void bmsScan() {
 }
 bool bmsConnect(const String &mac, uint8_t type, const String &p) {
   if (!validMac(mac) ||
-      (p != "AUTO" && p != "JK02_24S" && p != "JK02_32S" && p != "ANT" && p != "JBD") ||
+      (p != "AUTO" && p != "JK02_24S" && p != "JK02_32S" && p != "ANT" && p != "JBD" && p != "DALY") ||
       type > 1)
     return false;
   {
@@ -2670,10 +3205,17 @@ void setup() {
   linkCfg.addr = prefs.getUChar("laddr", 1);
   linkCfg.bus = prefs.getUChar("lbus", 0);
   linkCfg.count = prefs.getUChar("lcnt", 1);
+  linkCfg.brand = prefs.getUChar("lbrand", 0);
+  if (linkCfg.brand > 2) linkCfg.brand = 0;
   if (linkCfg.bus > 2) linkCfg.bus = 0;
   if (linkCfg.count < 1 || linkCfg.addr + linkCfg.count > 16) linkCfg.count = 1;
   linkRs485 = linkCfg.rs485;
+  btLoad();
 #endif
+  profCfg.type = prefs.getUChar("ptype", 0);
+  if (profCfg.type > 4) profCfg.type = 0;
+  profCfg.whkm = prefs.getUShort("pwhkm", 0);
+  profCfg.rangeAlarm = prefs.getUChar("prange", 10);
   netLoad();
   wifiApply();
   configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com"); // Thailand time for the screen clock
