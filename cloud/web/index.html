@@ -116,6 +116,7 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 .shareban{background:rgba(54,196,168,.12);border:1px solid rgba(54,196,168,.3);color:var(--text);border-radius:12px;padding:8px 12px;font-size:13px;margin-bottom:10px}.shareban a{color:var(--accent);cursor:pointer;font-weight:700}
 body.shared #btnLogin,body.shared #btnBack{display:none!important}
 .abadge.upd{border:0;cursor:pointer;font:inherit;font-size:11px;font-weight:700;color:#fff;background:var(--s1);box-shadow:0 0 0 0 rgba(57,135,229,.6);animation:updPulse 2s infinite}.abadge.upd:disabled{opacity:.45;cursor:not-allowed;animation:none}.abadge.upd.busy{background:var(--warn);animation:none}@keyframes updPulse{70%{box-shadow:0 0 0 7px rgba(57,135,229,0)}100%{box-shadow:0 0 0 0 rgba(57,135,229,0)}}
+.pk-tag{display:block;font-style:normal;font-size:11.5px;font-weight:600;margin-top:2px}.pk-tag.warn{color:var(--warn)}.pk-tag.ok{color:var(--good)}.pk-tag.info{color:var(--s1)}.pk-row.used{opacity:.72}
 .gview{margin-left:8px;color:var(--accent);font-weight:700;cursor:pointer;white-space:nowrap}
 .gtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .gtiles>div{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px}.gtiles span{font-size:12px;color:var(--muted)}.gtiles b{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:2px}
@@ -967,19 +968,27 @@ function barsHtml(r){const n=r>=-60?4:r>=-70?3:r>=-80?2:1;return '<span class="b
 function openPicker(kind,scan){pick={kind,t0:Date.now(),sel:null,pass:'',all:false,scanned:!!scan,before:JSON.stringify(((latest[cur.id]||{}).data||{})[kind==='bms'?'devs':'wscan']||null)};$('mPick').classList.remove('hide');renderPicker()}
 function closePicker(){pick=null;$('mPick').classList.add('hide')}
 $('mPick').onclick=e=>{if(e.target.id==='mPick')closePicker()};
+// Which board in this account already reads this BMS (by Bluetooth MAC), and is a scan entry one of our own boards?
+function bmsUsers(mac){mac=String(mac||'').toLowerCase();if(!mac)return [];const out=[];
+ for(const d of devs){if(d.ble||d.demo)continue;const c=((latest[d.id]||{}).data||{}).cfg||{};const ms=[c.mac,...Object.values(c.bt||{}).map(b=>b&&(b.mac||b))].filter(Boolean).map(m=>String(m).toLowerCase());
+  if(ms.includes(mac))out.push(d)}return out}
+function boardOfBle(name,mac){name=String(name||'');mac=String(mac||'').toLowerCase();if(!/^BATTLAB-/i.test(name)&&!mac)return null;
+ return devs.find(d=>{if(d.ble||d.demo)return false;const c=((latest[d.id]||{}).data||{}).cfg||{};return (c.name&&c.name===name)||(c.hwid&&mac&&c.hwid.toLowerCase().slice(0,14)===mac.slice(0,14))})||null}
 function renderPicker(){if(!pick||!cur)return;const ae=document.activeElement;if(ae&&ae.id==='pkPass')return;
  const d=(latest[cur.id]||{}).data||{},c=d.cfg||{},bms=pick.kind==='bms';
  let L=Array.isArray(bms?d.devs:d.wscan)?(bms?d.devs:d.wscan).slice():[];
  const fresh=JSON.stringify(bms?d.devs||null:d.wscan||null)!==pick.before;
  const scanning=pick.scanned&&(bms?(c.scanning||(!fresh&&Date.now()-pick.t0<15000)):(!fresh&&Date.now()-pick.t0<15000));
- if(bms){L.sort((a,b)=>(b.candidate-a.candidate)||(b.rssi-a.rssi))}else{const m={};L.forEach(w=>{if(w.ssid&&(!m[w.ssid]||m[w.ssid].rssi<w.rssi))m[w.ssid]=w});L=Object.values(m).sort((a,b)=>b.rssi-a.rssi)}
+ if(bms){const rk=x=>(/^BATTLAB-/i.test(x.name||'')?2:0)+(bmsUsers(x.mac).some(u=>cur.ble||u.id!==cur.id)?1:0);L.sort((a,b)=>(rk(a)-rk(b))||(b.candidate-a.candidate)||(b.rssi-a.rssi))}else{const m={};L.forEach(w=>{if(w.ssid&&(!m[w.ssid]||m[w.ssid].rssi<w.rssi))m[w.ssid]=w});L=Object.values(m).sort((a,b)=>b.rssi-a.rssi)}
  const nCand=bms?L.filter(x=>x.candidate).length:0,shown=bms&&nCand&&!pick.all?L.filter(x=>x.candidate):L;
  let h='<div class="row"><div class="big">'+(bms?'🔋 เลือก BMS':'📶 เลือก Wi-Fi บ้าน')+'</div><button class="ghost icon nf" id="pkClose" aria-label="ปิด">✕</button></div>'+
   '<div class="small muted" style="margin:4px 0 8px">'+(scanning?'<span class="pk-spin"></span> กำลังค้นหา… (~10 วินาที) รายการจะขึ้นเอง':(L.length?'พบ '+L.length+' รายการ · แตะเพื่อเชื่อมต่อ':'ยังไม่พบ · กดค้นหาอีกครั้ง'))+'</div>';
  if(bms&&nCand&&nCand<L.length)h+='<div class="chips" style="margin-bottom:6px"><span class="chip'+(!pick.all?' on':'')+'" data-pa="0">เฉพาะ BMS ('+nCand+')</span><span class="chip'+(pick.all?' on':'')+'" data-pa="1">ทั้งหมด ('+L.length+')</span></div>';
  h+=shown.map((x,i)=>{const id=bms?x.mac:x.ssid,on=pick.sel===id;
-  if(bms)return '<div class="pk-row'+(on?' on':'')+'" data-pk="'+esc(id)+'"><span class="ic">'+(x.candidate?'🔋':'📡')+'</span><div class="l"><b>'+esc(x.name||'(ไม่มีชื่อ)')+'</b><span>'+esc(x.mac)+' · '+x.rssi+' dBm</span></div>'+barsHtml(x.rssi)+'</div>'+
-   (on?'<div class="pk-pass"><select id="pkProto"><option value="AUTO">ตรวจรุ่นอัตโนมัติ</option><option value="JK02_32S">JK 32S</option><option value="JK02_24S">JK 24S</option><option value="ANT">ANT</option><option value="JBD">JBD</option><option value="DALY">DALY</option></select><button id="pkGo" data-type="'+(x.type|0)+'">เชื่อมต่อ</button></div>':'');
+  if(bms){const us=bmsUsers(x.mac),meId=cur.ble?null:cur.id,mine=us.find(u=>u.id===meId),other=us.filter(u=>u.id!==meId),bb=/^BATTLAB-/i.test(x.name||'')?(boardOfBle(x.name)||true):null;
+   const tag=bb?'<em class="pk-tag info">บอร์ด BATTLAB'+(bb!==true?' · '+esc(bb.name):'')+' · ไม่ใช่ BMS</em>':other.length?'<em class="pk-tag warn">⚠ ใช้อยู่กับ '+other.map(u=>esc(u.name)).join(', ')+'</em>':mine?'<em class="pk-tag ok">✓ ต่ออยู่กับบอร์ดนี้</em>':'';
+   return '<div class="pk-row'+(on?' on':'')+(other.length||bb?' used':'')+'" data-pk="'+esc(id)+'"><span class="ic">'+(bb?'🔵':x.candidate?'🔋':'📡')+'</span><div class="l"><b>'+esc(x.name||'(ไม่มีชื่อ)')+'</b><span>'+esc(x.mac)+' · '+x.rssi+' dBm</span>'+tag+'</div>'+barsHtml(x.rssi)+'</div>'+
+   (on&&other.length?'<div class="small" style="color:var(--warn);padding:2px 10px 6px">BMS ตัวนี้มีบอร์ด '+other.map(u=>esc(u.name)).join(', ')+' ต่ออยู่แล้ว · BMS ส่งข้อมูลให้ได้ทีละเครื่อง ถ้าต่อซ้ำ บอร์ดเดิมจะหลุดหรือไม่ได้ข้อมูล</div>':'')+(on?'<div class="pk-pass"><select id="pkProto"><option value="AUTO">ตรวจรุ่นอัตโนมัติ</option><option value="JK02_32S">JK 32S</option><option value="JK02_24S">JK 24S</option><option value="ANT">ANT</option><option value="JBD">JBD</option><option value="DALY">DALY</option></select><button id="pkGo" data-type="'+(x.type|0)+'">เชื่อมต่อ</button></div>':'')}
   return '<div class="pk-row'+(on?' on':'')+'" data-pk="'+esc(id)+'"><span class="ic">'+(x.lock?'🔒':'📶')+'</span><div class="l"><b>'+esc(x.ssid)+'</b><span>'+(x.lock?'มีรหัสผ่าน':'ไม่มีรหัสผ่าน')+' · '+x.rssi+' dBm'+(c.ssid===x.ssid?' · ใช้อยู่':'')+'</span></div>'+barsHtml(x.rssi)+'</div>'+
    (on?'<div class="pk-pass">'+(x.lock?'<input id="pkPass" type="password" maxlength="64" placeholder="รหัสผ่าน Wi-Fi" value="'+esc(pick.pass)+'">':'')+'<button id="pkGo">เชื่อมต่อ</button></div>':'')}).join('');
  if(!bms)h+='<div class="pk-row" data-pk="__other"><span class="ic">✏️</span><div class="l"><b>พิมพ์ชื่อ Wi-Fi เอง</b><span>เครือข่ายที่ซ่อนชื่อ หรือไม่อยู่ในรายการ</span></div></div>'+(pick.sel==='__other'?'<div class="pk-pass" style="flex-wrap:wrap"><input id="pkSsid" maxlength="32" placeholder="ชื่อ Wi-Fi" style="flex-basis:100%"><input id="pkPass" type="password" maxlength="64" placeholder="รหัสผ่าน"><button id="pkGo">เชื่อมต่อ</button></div>':'');
@@ -992,7 +1001,7 @@ function renderPicker(){if(!pick||!cur)return;const ae=document.activeElement;if
  const pp=$('pkPass');if(pp){pp.oninput=()=>pick.pass=pp.value;pp.onkeydown=e=>{if(e.key==='Enter')$('pkGo').click()}}
  const rs=$('pkRescan');if(rs)rs.onclick=()=>{sendCmd(bms?'bms_scan':'wifi_scan');pick.t0=Date.now();pick.scanned=true;pick.before=JSON.stringify(bms?d.devs||null:d.wscan||null);renderPicker()};
  const go=$('pkGo');if(go)go.onclick=()=>{
-  if(bms){const x=L.find(y=>y.mac===pick.sel);if(!x)return;sendCmd('bms_connect',{mac:x.mac,type:x.type|0,protocol:$('pkProto').value});toast('กำลังเชื่อม '+(x.name||x.mac)+' …');closePicker();return}
+  if(bms){const x=L.find(y=>y.mac===pick.sel);if(!x)return;const oth=bmsUsers(x.mac).filter(u=>cur.ble||u.id!==cur.id);if(oth.length&&!confirm('BMS "'+(x.name||x.mac)+'" ต่ออยู่กับบอร์ด '+oth.map(u=>u.name).join(', ')+' แล้ว\nต่อซ้ำจะทำให้บอร์ดเดิมหลุดหรือไม่ได้ข้อมูล ยืนยันจะต่อ?'))return;sendCmd('bms_connect',{mac:x.mac,type:x.type|0,protocol:$('pkProto').value});toast('กำลังเชื่อม '+(x.name||x.mac)+' …');closePicker();return}
   const ss=pick.sel==='__other'?($('pkSsid').value||'').trim():pick.sel,pw=$('pkPass')?$('pkPass').value:'';
   if(!ss){toast('ใส่ชื่อ Wi-Fi');return}const w=L.find(y=>y.ssid===ss);if(w&&w.lock&&pw.length<8){toast('รหัสผ่าน Wi-Fi ต้องมีอย่างน้อย 8 ตัว');return}
   if(!cur.ble&&!confirm('เปลี่ยนบอร์ดไปใช้ Wi-Fi "'+ss+'"?\nถ้าต่อไม่ได้ภายใน 90 วินาทีจะกลับไปใช้ "'+(c.ssid||'')+'"'))return;
@@ -1125,6 +1134,7 @@ async function setupAttach(dev,gatt,ch){
   dev.addEventListener('gattserverdisconnected',()=>{toast(dev.usb?'สาย USB หลุด / ปิดพอร์ตแล้ว':'บลูทูธหลุดการเชื่อมต่อ');if(ble&&ble.dev===dev){clearInterval(ble.t);ble=null}if(cur&&cur.ble){go('')}});
   await ch[6].startNotifications();ch[6].addEventListener('characteristicvaluechanged',e=>bleResult(new TextDecoder().decode(e.target.value)));
   let d=devs.find(x=>x.id===BLE_ID);if(!d){d={id:BLE_ID,ble:true,name:dev.name||'BATTLAB',pair_code:'',settings:{icon:'🔵'}};devs.push(d)}else d.name=dev.name||d.name;
+  {const known=boardOfBle(dev.name);if(known)setTimeout(()=>toast('บอร์ดนี้ ('+(dev.name||'')+') อยู่ในบัญชีแล้ว ชื่อ "'+known.name+'"'),900)}
   await blePoll(true);ble.t=setInterval(()=>blePoll(false),1500);
   go('d/'+BLE_ID+'/ctl')}
 // ---------- set up over USB (Web Serial): same screens as Bluetooth, no phone needed
