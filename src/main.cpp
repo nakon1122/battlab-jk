@@ -30,9 +30,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.3-cyd35"
+#define BATTLAB_FW "2.8.4-cyd35"
 #else
-#define BATTLAB_FW "2.8.3-s3"
+#define BATTLAB_FW "2.8.4-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -81,6 +81,9 @@ struct Shared {
   uint8_t family = 0;       // 0 unknown, 1 JK, 2 ANT, 3 JBD, 4 DALY
   String lastWrite;         // result of the last BMS write, for the UI
   bool probeLogFrozen = false;
+  uint32_t ftype[4] = {0, 0, 0, 0}; // JK frames by type (0 other, 1 settings, 2 cells, 3 info)
+  String f2hex;                     // last JK cell frame, for checking the layout remotely
+  uint32_t links = 0, lastLinkMs = 0; // link losses and how long the last link lasted
   String state = "UNCONFIGURED", devices = "[]";
   uint32_t devStamp = 0;
   float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
@@ -93,6 +96,7 @@ struct Shared {
   uint8_t busMode = 0;          // 0 single pack, 1 listening to a master (DIP 0), 2 board polls the packs
   uint8_t bankN = 0;            // packs seen recently (>1 = bank view)
 } shared;
+volatile uint16_t bleMtu = 0; // negotiated ATT MTU of the current BMS link
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
 bool persistWanted = false;
@@ -528,6 +532,14 @@ void bleWorker(void *) {
   auto receive = [&](const uint8_t *b) {
     if (!fam && (b[4] == 2 || b[4] == 3)) fam = 1;
     Guard g;
+    shared.ftype[b[4] <= 3 ? b[4] : 0]++;
+    if (b[4] == 2) {
+      static const char hx[] = "0123456789ABCDEF";
+      String h;
+      h.reserve(600);
+      for (int i = 0; i < 300; i++) { h += hx[b[i] >> 4]; h += hx[b[i] & 15]; }
+      shared.f2hex = h;
+    }
     if (generation != seen)
       return;
     shared.good = parser.good;
@@ -979,6 +991,7 @@ void bleWorker(void *) {
       prDone = false;
       vIdx = -1;
       if (ch)
+        { Guard g; shared.links++; shared.lastLinkMs = millis() - linkedAt; }
         Serial.printf("[BLE] link lost after %lu ms (frames ok=%lu)\n",
                       (unsigned long)(millis() - linkedAt),
                       (unsigned long)parser.good);
@@ -1051,16 +1064,19 @@ void bleWorker(void *) {
                         c.mac.c_str(), service ? "FFE0" : "none",
                         ch ? "ok" : "none", notifyCh ? "ok" : "none",
                         (unsigned)client->getMTU());
+          bleMtu = client->getMTU();
           Serial.printf("[BLE] GATT: %s\n", gatt.c_str());
           bool subscribed = false;
           steps.clear();
           probeStep = -1;
           if (auto svcs = client->getServices(false))
             for (auto sv : *svcs) {
-              if (sv->getUUID() == NimBLEUUID(uint16_t(0x1800)) ||
-                  sv->getUUID() == NimBLEUUID(uint16_t(0x1801)) ||
-                  sv->getUUID() == NimBLEUUID(uint16_t(0x180a)) ||
-                  sv->getUUID() == NimBLEUUID(uint16_t(0xfee7))) // vendor service on the new JK module: leave it alone
+              // Only the BMS data services (JK/ANT FFE0, JBD FF00, DALY FFF0). Never touch
+              // anything else: the new JK module (ZX-D30, Nordic) exposes its own
+              // firmware-update service (FE59) and vendor services.
+              if (!(sv->getUUID() == NimBLEUUID(uint16_t(0xffe0)) ||
+                    sv->getUUID() == NimBLEUUID(uint16_t(0xff00)) ||
+                    sv->getUUID() == NimBLEUUID(uint16_t(0xfff0))))
                 continue;
               auto cs = sv->getCharacteristics(false);
               if (!cs) continue;
@@ -1593,7 +1609,12 @@ void bleWorker(void *) {
         send(0x97);
         delay(300);
       }
-      if (!probing && (firstRequest || streamStalled || wantRead)) {
+      // Some JK modules (new ZX-D30) send one cell frame per request instead of a
+      // stream: ask again every 2 s while no new cell frame came in.
+      bool pollDue = !probing && lastCellRequest && !streamStalled &&
+                     now - lastCellRequest > 2000 &&
+                     (!gotCellFrame || now - lastCellFrame > 2000);
+      if (!probing && (firstRequest || streamStalled || wantRead || pollDue)) {
         delay(gotInfo ? 0 : 100);
         send(0x96);
         lastCellRequest = millis();
@@ -2285,6 +2306,12 @@ static void cloudTask(void *) {
         bd["wr"] = shared.writeWithResponse;
         bd["try"] = shared.retries;
         if (shared.probeLog.length()) bd["log"] = shared.probeLog.substring(0, 1500);
+        auto ft = bd.createNestedArray("ft");
+        for (int i = 0; i < 4; i++) ft.add(shared.ftype[i]);
+        if (shared.f2hex.length()) bd["f2"] = shared.f2hex;
+        bd["links"] = shared.links;
+        bd["linkms"] = shared.lastLinkMs;
+        bd["mtu"] = bleMtu;
       }
       c["mac"] = cfg.mac;
       c["proto"] = cfg.protocol;
