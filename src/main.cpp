@@ -30,9 +30,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.2-cyd35"
+#define BATTLAB_FW "2.8.3-cyd35"
 #else
-#define BATTLAB_FW "2.8.2-s3"
+#define BATTLAB_FW "2.8.3-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -1058,7 +1058,9 @@ void bleWorker(void *) {
           if (auto svcs = client->getServices(false))
             for (auto sv : *svcs) {
               if (sv->getUUID() == NimBLEUUID(uint16_t(0x1800)) ||
-                  sv->getUUID() == NimBLEUUID(uint16_t(0x1801)))
+                  sv->getUUID() == NimBLEUUID(uint16_t(0x1801)) ||
+                  sv->getUUID() == NimBLEUUID(uint16_t(0x180a)) ||
+                  sv->getUUID() == NimBLEUUID(uint16_t(0xfee7))) // vendor service on the new JK module: leave it alone
                 continue;
               auto cs = sv->getCharacteristics(false);
               if (!cs) continue;
@@ -1115,7 +1117,7 @@ void bleWorker(void *) {
           jbdF.reset();
           jbdHaveBasic = false;
           jbdSample = jk::Sample();
-          identAt = 0;
+          identAt = millis(); // let the module settle ~1 s before the first request
           identIdx = 0;
           identStartedAt = millis();
           fullProbeDone = false;
@@ -1426,7 +1428,22 @@ void bleWorker(void *) {
             identAt = t;
             auto j7 = jk::request(0x97), j6 = jk::request(0x96);
             uint8_t fr[16];
-            switch (identIdx++ % (dalyCh ? 6 : 4)) {
+            uint8_t idx = identIdx++;
+            if (idx < 8 && ch && !jbdCh && !dalyCh) {
+              // JK first (FFE1 only). New JK modules (ZX-D30, MAC A4:C1:38) may only
+              // answer one write type, so alternate it every two requests.
+              bool resp = ((idx / 2) & 1) ? ch->canWrite() : !ch->canWriteNoResponse();
+              auto j = (idx & 1) ? j6 : j7;
+              bool ok = ch->writeValue(j.data(), j.size(), resp);
+              Serial.printf("[BLE] -> ident JK 0x%02X %s %s\n", (idx & 1) ? 0x96 : 0x97, resp ? "resp" : "noresp", ok ? "ok" : "FAILED");
+              Guard g;
+              if (ok) shared.txOk++; else shared.txFail++;
+              shared.writeWithResponse = resp;
+              if (!ok) shared.bleError = client->getLastError();
+              withResp = resp;
+              shared.probe = "identifying JK";
+            } else
+            switch (idx % (dalyCh ? 6 : 4)) {
               case 0: writeRaw(ch, j7.data(), j7.size(), "ident JK 0x97"); break;
               case 1: writeRaw(antCh, bms::ANT_STATUS_REQUEST, 10, "ident ANT"); break;
               case 2: writeRaw(jbdCh ? jbdCh : ch, bms::JBD_BASIC_REQUEST, 7, "ident JBD"); break;
@@ -2250,6 +2267,25 @@ static void cloudTask(void *) {
       d["up"] = millis() / 1000;
       d["heap"] = ESP.getFreeHeap();
       d["blk"] = ESP.getMaxAllocHeap();
+      if (shared.state != "LIVE") {
+        // BLE diagnostics so a stuck connection can be read from the cloud
+        auto bd = d.createNestedObject("bd");
+        bd["gatt"] = shared.gatt.substring(0, 400);
+        bd["probe"] = shared.probe;
+        bd["rx"] = shared.rxBytes;
+        bd["rxc"] = shared.rxChunks;
+        bd["hex"] = shared.lastRxHex.substring(0, 200);
+        bd["from"] = shared.lastRxChar;
+        bd["err"] = shared.bleError;
+        bd["tok"] = shared.txOk;
+        bd["tfail"] = shared.txFail;
+        bd["good"] = shared.good;
+        bd["bad"] = shared.bad;
+        bd["rej"] = shared.rejected;
+        bd["wr"] = shared.writeWithResponse;
+        bd["try"] = shared.retries;
+        if (shared.probeLog.length()) bd["log"] = shared.probeLog.substring(0, 1500);
+      }
       c["mac"] = cfg.mac;
       c["proto"] = cfg.protocol;
       c["auto"] = cfg.automatic;

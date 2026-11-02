@@ -24,7 +24,7 @@
 #include "improv_serial.h"
 #include <string>
 
-#define BATTLAB_FW "2.8.2-cloudscreen"
+#define BATTLAB_FW "2.8.3-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
