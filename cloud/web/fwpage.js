@@ -32,6 +32,14 @@ const GART = [
     ['เลือกบอร์ด', 'หน้าเฟิร์มแวร์ → แท็บติดตั้ง/อัปเดต → เลือกบอร์ด'],
     ['เสียบสายแล้วกดติดตั้ง', 'กด "เชื่อมต่อบอร์ดและติดตั้ง" เลือกพอร์ต (COM / usbserial) → ติดตั้ง · ถ้าถาม "Erase device" เลือกล้างเฉพาะติดตั้งครั้งแรกหรืออยากเริ่มใหม่'],
     ['ถ้าเชื่อมต่อไม่ได้', 'กดปุ่ม BOOT ค้างไว้ แล้วกด RESET 1 ครั้ง ปล่อย BOOT แล้วลองใหม่ · Windows บางเครื่องต้องลงไดรเวอร์ CH340 / CP210x']]},
+  {id: 'first-pc', c: 'setup', t: 'ตั้งค่าครั้งแรกด้วยคอมพิวเตอร์ (ไม่ต้องใช้มือถือ)', s: [
+    ['เสียบสาย USB', 'ต่อบอร์ดเข้าคอมพิวเตอร์ เปิดเว็บนี้ด้วย Chrome หรือ Edge'],
+    ['ติดตั้งเฟิร์มแวร์', 'ปุ่ม ⬇️ เฟิร์มแวร์ → เลือกบอร์ด → ผ่านสาย USB → เชื่อมต่อบอร์ดและติดตั้ง'],
+    ['ตั้ง Wi-Fi บ้านทันที', 'ติดตั้งเสร็จ หน้าต่างจะถามชื่อและรหัส Wi-Fi บ้านต่อเลย (ปุ่ม Connect to Wi-Fi) บอร์ดจะต่อเน็ตเอง'],
+    ['เพิ่มเข้าบัญชีในคลิกเดียว', 'ต่อ Wi-Fi ได้แล้วกด Visit device / ไปที่อุปกรณ์ เว็บจะเพิ่มบอร์ดเข้าบัญชีให้เอง (ต้องเข้าสู่ระบบ)'],
+    ['บอร์ดที่ติดตั้งแล้ว', 'ใช้ปุ่ม "ตั้งค่าผ่าน USB" ที่หน้าแรกหรือหน้าอุปกรณ์ของฉัน ได้หน้าตั้งค่าเหมือนบลูทูธทุกอย่าง (Wi-Fi, BMS, RS485, จับคู่บัญชี)'],
+    ['Windows หาบอร์ดไม่เจอ', 'จอ CYD ใช้ชิป USB CH340 ต้องลงไดรเวอร์ CH340 ครั้งแรก · บอร์ด S3 ใช้ USB ในตัว ไม่ต้องลงไดรเวอร์ (ใช้ช่อง USB ที่เขียนว่า USB ไม่ใช่ UART)'],
+    ['คอมที่มีบลูทูธ', 'ใช้ปุ่ม "ตั้งค่าบอร์ดผ่านบลูทูธ" บน Chrome ของ Windows 10/11 หรือ Mac ได้เช่นกัน']]},
   {id: 'usb-bat', c: 'install', t: 'ติดตั้งด้วยไฟล์ .bat (Windows)', s: [
     ['ดาวน์โหลดชุดเต็ม', 'แท็บดาวน์โหลด → ดาวน์โหลดชุดเต็ม (.zip) แล้วแตกไฟล์'],
     ['ลง Python 3.11', 'ครั้งแรกเท่านั้น ไฟล์ .bat จะติดตั้ง esptool ให้เอง'],
@@ -59,7 +67,7 @@ const GART = [
     ['ทำได้', 'อ่านค่าครบทุกเซลล์ + เปิด/ปิด MOS ชาร์จ/จ่าย · การตั้งพารามิเตอร์ DALY จะเพิ่มทีหลัง']]},
   {id: 'ble-setup', c: 'setup', t: 'ตั้ง Wi-Fi บ้านผ่านบลูทูธ', s: [
     ['เปิดเว็บบนมือถือ', 'Chrome บน Android / คอมพิวเตอร์ (iPhone ใช้แอป Bluefy)'],
-    ['กด "ตั้งค่าบอร์ดผ่านบลูทูธ"', 'เลือกชื่อ BATTLAB-XXXX ของบอร์ดคุณ (ชื่อไม่ซ้ำกันทุกบอร์ด)'],
+    ['กด "ตั้งค่าบอร์ดผ่านบลูทูธ"', 'เลือกชื่อ BATTLAB-XXXXXX ของบอร์ดคุณ (6 หลักท้าย = MAC ของชิป ดูได้จากบรรทัด MAC: ตอนติดตั้ง หรือหน้า INFO ของจอ CYD)'],
     ['ใส่ Wi-Fi บ้าน', 'ค้นหา Wi-Fi → เลือก → ใส่รหัส → บอร์ดต่อเน็ตและขึ้น online ใน ~20 วินาที'],
     ['เพิ่มเข้าบัญชี', 'กด "เพิ่มเข้าบัญชีของฉัน" หรือใช้รหัสจับคู่ในหน้าอุปกรณ์']]},
   {id: 'pair', c: 'setup', t: 'จับคู่บอร์ดกับบัญชี', s: [
@@ -143,6 +151,7 @@ function renderFw() {
   if (q) { q.oninput = () => { FWB.q = q.value; FWB.cat = null; const p = q.selectionStart; renderFw(); const n = $('fwQ'); n.focus(); n.setSelectionRange(p, p); }; }
   const b = $('fwBle'); if (b) b.onclick = fwBleFind;
   const st = $('fwBleStart'); if (st) st.onclick = fwBleStart;
+  const us = $('fwUsbSetup'); if (us) us.onclick = () => serialConnect();
   e.querySelectorAll('[data-fm]').forEach(x => x.onclick = () => { fwBle.mode = x.dataset.fm; renderFw(); });
   enterAnim('vFw');
   if (FWB.tab === 'install') fwLoadWebTools();
@@ -161,6 +170,8 @@ function fwInstallHtml() {
     (B && B.webtools ? '<esp-web-install-button manifest="' + esc(FW_BASE + B.webtools) + '"><button slot="activate">เชื่อมต่อบอร์ดและติดตั้ง</button><span slot="unsupported" class="small" style="color:var(--warn)">เบราว์เซอร์นี้ติดตั้งผ่าน USB ไม่ได้ ใช้ Chrome หรือ Edge บนคอมพิวเตอร์</span><span slot="not-allowed" class="small" style="color:var(--warn)">ต้องเปิดผ่าน https</span></esp-web-install-button>'
       : '<div class="small muted">ชุดติดตั้งของเวอร์ชันนี้ยังไม่พร้อม ใช้ไฟล์ .bat ในแท็บดาวน์โหลด</div>') +
     '<div class="small muted" style="margin-top:8px">เชื่อมต่อไม่ได้: กด BOOT ค้าง แล้วกด RESET 1 ครั้ง ปล่อย BOOT แล้วลองใหม่ · ใช้สาย USB ที่ส่งข้อมูลได้</div></div>';
+  h += '<div class="meth"><h4>🖥️ ตั้งค่าบอร์ดผ่าน USB</h4><div class="small muted">บอร์ดที่ติดตั้ง BATTLAB 2.8.1 แล้ว · ตั้ง Wi-Fi บ้าน เพิ่มเข้าบัญชี เชื่อม BMS ได้จากคอมพิวเตอร์ ไม่ต้องใช้มือถือ' + (cs ? ' · จอ Cloud Screen: ใช้ปุ่มติดตั้งด้านบน แล้วกด Connect to Wi-Fi' : '') + '</div>' + (cs ? '' : '<button class="soft" id="fwUsbSetup" style="margin-top:6px">เชื่อมต่อบอร์ดผ่าน USB</button>') + '</div>';
+  h += '<div class="small muted" style="margin-top:10px">ติดตั้งผ่าน USB เสร็จ หน้าต่างจะถาม Wi-Fi บ้านต่อทันที (Connect to Wi-Fi) แล้วกด Visit device เพื่อเพิ่มเข้าบัญชีในคลิกเดียว · <a href="#fw/guide/first-pc">ดูขั้นตอน</a></div>';
   h += '<div class="tiny muted" style="margin-top:10px">iPhone: ใช้แอป Bluefy สำหรับบลูทูธ · ติดตั้งผ่าน USB ต้องใช้คอมพิวเตอร์</div></div>';
   return h;
 }

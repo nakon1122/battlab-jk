@@ -271,7 +271,7 @@ esp-web-install-button button{width:100%}
   <div class="lmore">
 
    <div class="feat"><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><span><b>ค่าสดทุก 3 วินาที</b><br><span class="muted small">SOC, แรงดัน, กระแส, อุณหภูมิ</span></span></div><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 20h18"/><path d="M4 16l5-6 4 3 7-8"/></svg><span><b>กราฟและพลังงาน</b><br><span class="muted small">ย้อนหลัง 30 วัน · kWh รายวัน</span></span></div><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/></svg><span><b>สั่งงานระยะไกล</b><br><span class="muted small">MOS, พารามิเตอร์, ไฟ, Wi-Fi</span></span></div><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10-5 5V2l5 5L7 17"/></svg><span><b>ตั้งค่าผ่านบลูทูธ</b><br><span class="muted small">ไม่ต้องต่อ Wi-Fi ของบอร์ด</span></span></div></div>
-   <div class="quick"><button class="soft" id="btnDemo">✨ ดูตัวอย่าง</button><button class="soft" id="btnBleL">🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</button><button class="soft" id="btnInstallL">📲 ติดตั้งแอป</button><button class="soft" id="btnFwL">📘 คู่มือติดตั้ง · เฟิร์มแวร์</button>  </div>
+   <div class="quick"><button class="soft" id="btnDemo">✨ ดูตัวอย่าง</button><button class="soft" id="btnBleL">🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</button><button class="soft" id="btnUsbL">🔌 ตั้งค่าผ่าน USB (คอมพิวเตอร์)</button><button class="soft" id="btnInstallL">📲 ติดตั้งแอป</button><button class="soft" id="btnFwL">📘 คู่มือติดตั้ง · เฟิร์มแวร์</button>  </div>
   </div>
  </div>
 </section>
@@ -280,7 +280,7 @@ esp-web-install-button button{width:100%}
  <div class="card" id="fleet"></div>
  <div class="grid" id="devList"></div>
  <div class="card hide" style="margin-top:14px" id="viewList"></div>
- <div class="card row wrap" style="margin-top:14px" id="bleCard"><div><b>🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</b><div class="small muted">ตั้ง Wi-Fi บ้าน ดูรหัสจับคู่ และสั่งงานบอร์ดที่อยู่ใกล้ โดยไม่ต้องต่อ Wi-Fi ของบอร์ด</div></div><button class="nf" id="btnBle">เชื่อมต่อบลูทูธ</button></div>
+ <div class="card row wrap" style="margin-top:14px" id="bleCard"><div><b>🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</b><div class="small muted">ตั้ง Wi-Fi บ้าน ดูรหัสจับคู่ และสั่งงานบอร์ดที่อยู่ใกล้ โดยไม่ต้องต่อ Wi-Fi ของบอร์ด</div></div><div class="nf row" style="gap:8px"><button id="btnBle">เชื่อมต่อบลูทูธ</button><button class="soft" id="btnUsb">🔌 ผ่าน USB</button></div></div>
  <div class="card" style="margin-top:14px" id="addCard"><h3>เพิ่มอุปกรณ์</h3><p class="muted small">บนจอ BattLab ไปที่ INFO → CLOUD แล้วกรอกรหัสจับคู่ที่เห็น (บอร์ดต้องต่อ Wi-Fi บ้านและขึ้นว่า online แล้ว) · บอร์ด S3: ดูรหัสในหน้าเว็บ 192.168.4.1 → ตั้งค่า · จอ Cloud Screen: รหัสขึ้นบนจอตอนเปิดครั้งแรก (หรือ SETUP → PAIRING)</p>
   <div class="row wrap"><label style="min-width:180px">รหัสจับคู่<input id="pair" placeholder="K7Q2-9XMA" autocapitalize="characters" maxlength="9"></label><label style="min-width:180px">ตั้งชื่อ (ไม่บังคับ)<input id="pairName" placeholder="แบตรถ 72V" maxlength="40"></label></div>
   <button id="btnPair">เพิ่มอุปกรณ์</button></div>
@@ -468,12 +468,13 @@ $('btnDemo').onclick=()=>{demo=true;devs=[demoDev()];go('d/'+DEMO_ID+'/ov')};
 sb.auth.onAuthStateChange(async(e,s)=>{
  if(e==='PASSWORD_RECOVERY'){const np=prompt('ตั้งรหัสผ่านใหม่ (อย่างน้อย 8 ตัว)');if(np&&np.length>=8){const {error}=await sb.auth.updateUser({password:np});toast(error?thErr(error):'เปลี่ยนรหัสผ่านแล้ว')}afterLogin()}
  else if(e==='SIGNED_OUT'&&!demo){stopAll();show('vLogin')}});
-async function afterLogin(){demo=false;const {data}=await sb.auth.getUser();const up=data&&data.user&&data.user.user_metadata&&data.user.user_metadata.prefs;if(up){P={...PREF_DEF,...up};ls.set('bl_prefs',P);applyTheme()}await loadDevices();route()}
-async function boot(){updInstall();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[0]==='fw')route();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
+async function afterLogin(){demo=false;const {data}=await sb.auth.getUser();const up=data&&data.user&&data.user.user_metadata&&data.user.user_metadata.prefs;if(up){P={...PREF_DEF,...up};ls.set('bl_prefs',P);applyTheme()}await loadDevices();if(ls.get('bl_claim',null)){history.replaceState(null,'','#');if(await claimPending())return}route()}
+async function boot(){updInstall();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});const {data}=await sb.auth.getSession();if(data.session)afterLogin();else if(ROUTE()[0]==='fw'||ROUTE()[0]==='claim'||ROUTE()[0]==='claimv')route();else if(ROUTE()[1]===DEMO_ID){demo=true;devs=[demoDev()];route()}else show('vLogin')}
 
 // ---------- routing
 function stopAll(){clearTimeout(cmdT);cmdT=null;cmds=[];clearInterval(pollT);clearInterval(listT);pollT=listT=null;if(rt){sb.removeChannel(rt);rt=null}rtOn=false;cur=null;destroyCharts()}
 async function route(){const [a,id,t]=ROUTE();
+ if(a==='claim'||a==='claimv'){claimLater(a==='claimv'?'v':'d',id,decodeURIComponent(t||''));const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');msg('เข้าสู่ระบบ (หรือสมัคร) แล้วบอร์ดจะถูกเพิ่มเข้าบัญชีให้เอง',true);return}history.replaceState(null,'','#');if(await claimPending())return;go('');return}
  if(a==='fw'){stopAll();fwShow(id||'install',t);return}
  if(!demo&&!(id===BLE_ID&&ble)){const {data}=await sb.auth.getSession();if(!data.session){show('vLogin');return}}
  if(a==='d'&&id){const dev=devs.find(d=>d.id===id);if(!dev){go('');return}openDev(dev,t||'ov');return}
@@ -528,7 +529,7 @@ async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(
  trackAlerts(dev,evalAlerts(dev,latest[dev.id]))}
 function energyOf(rows){let i=0,o=0;for(const r of rows){if(!num(r.power))continue;const wh=r.power*(r.n||1)/60;if(wh>0)i+=wh;else o-=wh}return {in:i/1000,out:o/1000}}
 function renderHeader(){const l=latest[cur.id],s=dset(cur),[st,txt]=statusOf(l),d=l&&l.data||{};$('dName').textContent=s.icon+' '+cur.name;
- $('dSub').innerHTML='<span class="dot '+st+'"></span> '+esc(txt)+(l?' · อัปเดต '+ago(l.ts):'')+(rtOn||cur.ble?' · <b style="color:var(--good)">'+(cur.ble?'🔵 บลูทูธ':'สด')+'</b>':'')+(d.bms?' · '+esc(d.bms):'')}
+ $('dSub').innerHTML='<span class="dot '+st+'"></span> '+esc(txt)+(l?' · อัปเดต '+ago(l.ts):'')+(rtOn||cur.ble?' · <b style="color:var(--good)">'+(cur.ble?(ble&&ble.dev&&ble.dev.usb?'🔌 USB':'🔵 บลูทูธ'):'สด')+'</b>':'')+(d.bms?' · '+esc(d.bms):'')}
 function renderDev(){if(!cur)return;renderHeader();if(tab==='ov')renderOv();else if(tab==='cells')renderCells();else if(tab==='alert')renderAlert();else if(tab==='set')renderSet();else if(tab==='ctl')renderCtl()}
 
 function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
@@ -549,7 +550,7 @@ function tileHtml(k,d,x,s){const a=s.alerts;let n,v,u='',cls='',sub='';
   case 'rssi':n='สัญญาณ Bluetooth';v=num(d.rssi)&&d.rssi?d.rssi:'--';u='dBm';sub=!num(d.rssi)||!d.rssi?'':d.rssi>-70?'ดี':d.rssi>-85?'พอใช้':'อ่อน';break;
   case 'up':n='บอร์ดทำงานมา';v=dur(d.up);break}
  return '<div class="tile '+cls+'"><small>'+n+'</small><b>'+v+'</b><i>'+u+'</i>'+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div>'}
-function infoHtml(d,l){const rows=[['สถานะบอร์ด',d.state||'--'],['ชนิด BMS',d.bms||'ยังไม่ระบุ'],['รุ่น BMS',d.model||'--'],['เฟิร์มแวร์',d.fw||'--'],['บอร์ดทำงานมา',dur(d.up)],['RAM ว่าง / ก้อนใหญ่สุด',num(d.heap)?Math.round(d.heap/1024)+' / '+Math.round((d.blk||0)/1024)+' KB':'--'],['ส่งข้อมูลล่าสุด',l?new Date(l.ts).toLocaleString('th-TH'):'--'],['รหัสจับคู่',cur.pair_code||'--']];
+function infoHtml(d,l){const c0=d.cfg||{};const rows=[['ชื่อบอร์ด (Wi-Fi / บลูทูธ)',c0.name||'--'],['Hardware ID (MAC)',c0.hwid||'--'],['สถานะบอร์ด',d.state||'--'],['ชนิด BMS',d.bms||'ยังไม่ระบุ'],['รุ่น BMS',d.model||'--'],['เฟิร์มแวร์',d.fw||'--'],['บอร์ดทำงานมา',dur(d.up)],['RAM ว่าง / ก้อนใหญ่สุด',num(d.heap)?Math.round(d.heap/1024)+' / '+Math.round((d.blk||0)/1024)+' KB':'--'],['ส่งข้อมูลล่าสุด',l?new Date(l.ts).toLocaleString('th-TH'):'--'],['รหัสจับคู่',cur.pair_code||'--']];
  return '<div class="card"><h3>ข้อมูลบอร์ด</h3><div class="info">'+rows.map(r=>'<div><span>'+r[0]+'</span><b>'+esc(r[1])+'</b></div>').join('')+'</div></div>'}
 const seenAl=new Set();function alertsHtml(al){return al.length?'<div class="alerts">'+al.map(a=>{const nw=!seenAl.has(a.k);seenAl.add(a.k);return '<div class="al '+a.lv+(nw?' new':'')+'">'+(a.lv==='bad'?'⛔':'⚠️')+'<span>'+esc(a.t)+'</span></div>'}).join('')+'</div>':''}
 function renderOv(){const l=latest[cur.id],s=dset(cur),d=l&&l.data||{},x=derive(l,s),al=evalAlerts(cur,l);let h=alertsHtml(al);
@@ -714,7 +715,7 @@ async function sendCmd(cmd,args,okMsg){if(!cur)return;args=args||{};if(cur.ble)r
  touchAt=Date.now();cmds.unshift({id:data,cmd,args,status:'pending',created_at:new Date().toISOString()});renderCmdLog();toast('ส่งคำสั่งแล้ว รอบอร์ดรับ…');clearTimeout(cmdT);cmdT=setTimeout(loadCmds,1200)}
 function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length?cmds.map(c=>'<div class="cl"><b>'+esc(CMD_TH[c.cmd]||c.cmd)+(c.args&&Object.keys(c.args).length&&c.cmd!=='home_wifi'&&c.cmd!=='ota'?' <span class="muted tiny">'+esc(JSON.stringify(c.args))+'</span>':'')+'</b><span class="muted tiny">'+new Date(c.created_at).toLocaleTimeString('th-TH')+'</span><span class="st '+c.status+'" title="'+esc(c.result||'')+'">'+(c.status==='done'?OKMARK:'')+(ST_TH[c.status]||c.status)+'</span></div>'+(c.result&&c.status!=='done'?'<div class="tiny muted" style="padding:0 0 6px">'+esc(c.result)+'</div>':'')).join(''):'<div class="small muted">ยังไม่มีคำสั่ง</div>'}
 function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
-function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>🔵 '+esc(c.name||'')+'</b><div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
+function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>'+(ble&&ble.dev&&ble.dev.usb?'🔌 ':'🔵 ')+esc(c.name||'')+'</b>'+(c.hwid?'<span class="tiny muted"> · '+esc(c.hwid)+'</span>':'')+'<div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
 function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
  const PK=packsOf(d);let pkS=null;if(PK){if(packSel==null||!PK.some(p=>p.a===packSel))packSel=PK[0].a;pkS=PK.find(p=>p.a===packSel)}
  const BT=c&&c.bt||{},BTM=pkS?BT[pkS.a]:null,RO=!!PK&&d.busm===1&&!BTM,J=pkS?pkS.jk:d.jk,PA=pkS?{a:pkS.a}:{};
@@ -722,7 +723,7 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  if(key===ctlKey&&$('cmdLog'))return;if(ae&&$('tab_ctl').contains(ae)&&/INPUT|SELECT/.test(ae.tagName)&&$('cmdLog'))return;ctlKey=key;
  if(!l||!c){$('tab_ctl').innerHTML='<div class="card empty"><div class="e">🛰️</div><b>'+(!l?'บอร์ดยังไม่เคยส่งข้อมูลขึ้น cloud':'ต้องอัปเดตเฟิร์มแวร์เป็น 2.1.0 ขึ้นไปก่อน')+'</b><div class="small muted">'+(!l?'ตั้ง Wi-Fi บ้านบนบอร์ดก่อน':'เฟิร์มแวร์ตอนนี้: '+esc(d.fw||'--')+' · ใช้ไฟล์ UPDATE_*.bat เพื่ออัปเดตโดยไม่ลบการตั้งค่า')+'</div></div><div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';renderCmdLog();return}
  const off=!x.online,fam=c.fam||0,famN=['ยังไม่รู้จัก','JK','ANT','JBD','DALY'][fam]||'?',isCyd=c.board==='cyd35';
- let h=bleInfoHtml(c)+'<div class="card"><div class="row"><div><b>'+(off?'⛔ บอร์ดออฟไลน์ คำสั่งจะรอจนบอร์ดกลับมา (หมดอายุใน 5 นาที)':'🟢 พร้อมรับคำสั่ง')+'</b><div class="small muted">'+(isCyd?'ESP32 CYD 3.5"':'ESP32-S3')+(cur.ble?' · เชื่อมตรงผ่านบลูทูธ':' · ตอบสนองภายใน ~'+(isCyd?'5':'3')+' วินาทีขณะเปิดหน้านี้')+' · เฟิร์มแวร์ '+esc(d.fw||'')+'</div>'+(c.note?'<div class="small" style="color:var(--warn);margin-top:4px">'+esc(c.note)+'</div>':'')+'</div><button class="ghost nf" id="cPing" style="padding:8px 12px">ทดสอบ</button></div></div>';
+ let h=bleInfoHtml(c)+'<div class="card"><div class="row"><div><b>'+(off?'⛔ บอร์ดออฟไลน์ คำสั่งจะรอจนบอร์ดกลับมา (หมดอายุใน 5 นาที)':'🟢 พร้อมรับคำสั่ง')+'</b><div class="small muted">'+(isCyd?'ESP32 CYD 3.5"':'ESP32-S3')+(cur.ble?(ble&&ble.dev&&ble.dev.usb?' · เชื่อมตรงผ่าน USB':' · เชื่อมตรงผ่านบลูทูธ'):' · ตอบสนองภายใน ~'+(isCyd?'5':'3')+' วินาทีขณะเปิดหน้านี้')+' · เฟิร์มแวร์ '+esc(d.fw||'')+'</div>'+(c.note?'<div class="small" style="color:var(--warn);margin-top:4px">'+esc(c.note)+'</div>':'')+'</div><button class="ghost nf" id="cPing" style="padding:8px 12px">ทดสอบ</button></div></div>';
  // MOS
  const sw=J&&J.sw,chg=sw?sw[0]:pkS?pkS.chg:d.chg,dsg=sw?sw[1]:pkS?pkS.dsg:d.dsg,bal=sw?sw[2]:null,noBms=!fam||!x.live||RO;
  if(PK)h+='<div class="card"><h3>เลือกลูกที่จะดู/ตั้งค่า</h3>'+packChips(PK,d,packSel,'data-sp')+(RO?'<div class="small" style="color:var(--warn)">👀 '+esc(packName(pkS,d))+' ยังไม่ได้จับคู่บลูทูธ จึงดูได้อย่างเดียว · กด "จับคู่อัตโนมัติ" ในการ์ดบลูทูธของแต่ละลูกด้านล่าง</div>':BTM?'<div class="small" style="color:var(--s1)">🔵 ตั้งค่า '+esc(packName(pkS,d))+' ผ่านบลูทูธ '+esc(BTM.mac)+' · บอร์ดจะเชื่อม เขียนค่า อ่านกลับมาตรวจ แล้วตัดการเชื่อม (~10 วินาที) ระหว่างนั้นยังอ่าน RS485 ทุกลูกตามปกติ</div>':'<div class="small muted">คำสั่งด้านล่างจะส่งไปที่ '+esc(packName(pkS,d))+' เท่านั้น</div>')+'</div>'+pwHtml(c,d);
@@ -833,13 +834,49 @@ async function bleConnect(){
   toast('กำลังเชื่อมต่อ '+dev.name+' …');
   const gatt=await dev.gatt.connect();const svc=await gatt.getPrimaryService(BLE_SVC);
   const ch=[];for(const u of BLE_CH)ch.push(await svc.getCharacteristic(u));
+  await setupAttach(dev,gatt,ch)
+ }catch(e){if(!/cancel/i.test(e.message||''))toast('เชื่อมต่อไม่สำเร็จ: '+e.message)}}
+async function setupAttach(dev,gatt,ch){
   ble={dev,gatt,ch,busy:false,last:{}};
-  dev.addEventListener('gattserverdisconnected',()=>{toast('บลูทูธหลุดการเชื่อมต่อ');if(ble&&ble.dev===dev){clearInterval(ble.t);ble=null}if(cur&&cur.ble){go('')}});
+  dev.addEventListener('gattserverdisconnected',()=>{toast(dev.usb?'สาย USB หลุด / ปิดพอร์ตแล้ว':'บลูทูธหลุดการเชื่อมต่อ');if(ble&&ble.dev===dev){clearInterval(ble.t);ble=null}if(cur&&cur.ble){go('')}});
   await ch[6].startNotifications();ch[6].addEventListener('characteristicvaluechanged',e=>bleResult(new TextDecoder().decode(e.target.value)));
   let d=devs.find(x=>x.id===BLE_ID);if(!d){d={id:BLE_ID,ble:true,name:dev.name||'BATTLAB',pair_code:'',settings:{icon:'🔵'}};devs.push(d)}else d.name=dev.name||d.name;
   await blePoll(true);ble.t=setInterval(()=>blePoll(false),1500);
-  go('d/'+BLE_ID+'/ctl')
- }catch(e){if(!/cancel/i.test(e.message||''))toast('เชื่อมต่อไม่สำเร็จ: '+e.message)}}
+  go('d/'+BLE_ID+'/ctl')}
+// ---------- set up over USB (Web Serial): same screens as Bluetooth, no phone needed
+async function serialConnect(){
+ if(!navigator.serial){toast('ตั้งค่าผ่าน USB ต้องใช้ Chrome หรือ Edge บนคอมพิวเตอร์');return}
+ let port;try{port=await navigator.serial.requestPort()}catch(e){return}
+ try{await port.open({baudRate:115200})}catch(e){toast('เปิดพอร์ตไม่ได้: '+e.message+' (ปิดโปรแกรมอื่นที่ใช้พอร์ตนี้อยู่)');return}
+ try{await port.setSignals({dataTerminalReady:false,requestToSend:false})}catch(e){}
+ const enc=new TextEncoder(),waits={},lis={},closers=[];let buf='',alive=true,hello=null;
+ const writer=port.writable.getWriter();const send=t=>writer.write(enc.encode(t+'\n'));
+ const reader=port.readable.pipeThrough(new TextDecoderStream()).getReader();
+ (async()=>{try{for(;;){const {value,done}=await reader.read();if(done)break;buf+=value;let k;while((k=buf.indexOf('\n'))>=0){const ln=buf.slice(0,k).replace(/\r$/,'');buf=buf.slice(k+1);
+   const m=ln.match(/^@BL (\S+) ?(.*)$/);if(!m)continue;
+   if(m[1]==='hello'){hello=m[2]}else if(m[1]==='R'){(lis.r||[]).forEach(f=>f({target:{value:new DataView(enc.encode(m[2]).buffer)}}))}else if(waits[m[1]]){waits[m[1]](m[2]);delete waits[m[1]]}}}}catch(e){}
+  alive=false;closers.forEach(f=>f())})();
+ toast('กำลังติดต่อบอร์ดทาง USB… (บอร์ดอาจรีสตาร์ท ~5 วินาที)');
+ for(let i=0;i<24&&!hello&&alive;i++){await send('@BL hello');await new Promise(r=>setTimeout(r,600))}
+ if(!hello){toast('บอร์ดไม่ตอบทาง USB · ต้องเป็นเฟิร์มแวร์ 2.8.1 ขึ้นไป (อัปเดตได้ที่หน้าเฟิร์มแวร์)');try{reader.cancel();writer.releaseLock();await port.close()}catch(e){}return}
+ const get=i=>new Promise((res,rej)=>{waits[String(i)]=res;send('@BL get '+i);setTimeout(()=>{if(waits[String(i)]){delete waits[String(i)];rej(new Error('timeout'))}},2500)});
+ const ch=[0,1,2,3,4,5,6].map(i=>({readValue:async()=>new DataView(enc.encode(await get(i)).buffer),
+   writeValueWithResponse:async b=>{await send('@BL cmd '+new TextDecoder().decode(b))},
+   startNotifications:async()=>{},addEventListener:(ev,f)=>{(lis.r=lis.r||[]).push(f)}}));
+ const name=hello.split(' ')[0]||'BATTLAB';
+ const dev={name,usb:true,addEventListener:(ev,f)=>closers.push(f)};
+ const gatt={connected:true,disconnect:async()=>{try{reader.cancel();writer.releaseLock();await port.close()}catch(e){}}};
+ toast('เชื่อมต่อ '+name+' ทาง USB แล้ว');
+ await setupAttach(dev,gatt,ch)}
+// ---------- add a board from the link the USB installer opens (#claim/PAIR/NAME, #claimv/PAIR)
+function claimLater(kind,pair,name){if(!/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/.test(pair||''))return false;ls.set('bl_claim',{kind,pair,name:name||'',at:Date.now()});return true}
+async function claimPending(){const c=ls.get('bl_claim',null);if(!c||Date.now()-c.at>3600e3){ls.set('bl_claim',null);return false}
+ const fn=c.kind==='v'?'claim_viewer':'claim_device';toast('กำลังเพิ่ม '+(c.name||c.pair)+' เข้าบัญชี…');
+ for(let i=0;i<14;i++){const {error}=await sb.rpc(fn,{p_pair:c.pair,p_name:c.name||null});
+  if(!error){ls.set('bl_claim',null);toast('✓ เพิ่ม '+(c.name||c.pair)+' เข้าบัญชีแล้ว');await loadDevices();const d=devs.find(x=>x.pair_code===c.pair);go(d?'d/'+d.id+'/ov':'');return true}
+  if(!/not found/i.test(error.message)){ls.set('bl_claim',null);toast('เพิ่มไม่สำเร็จ: '+thErr(error));return false}
+  if(i===0)toast('รอบอร์ดต่อ cloud ครั้งแรก (อาจใช้ถึง 1 นาที)…');await new Promise(r=>setTimeout(r,5000))}
+ toast('บอร์ดยังไม่ขึ้น cloud · ตรวจว่าต่อ Wi-Fi บ้านได้ แล้วเปิดลิงก์นี้อีกครั้ง');return false}
 const bleRead=async i=>{try{return JSON.parse(new TextDecoder().decode(await ble.ch[i].readValue()))}catch(e){return null}};
 async function blePoll(all){if(!ble||ble.busy)return;ble.busy=true;try{
  const live=await bleRead(0),cfg=await bleRead(1);ble.n=(ble.n||0)+1;
@@ -853,7 +890,7 @@ async function bleSend(cmd,args,label){if(!ble){toast('ยังไม่ได�
  try{await ble.ch[5].writeValueWithResponse(new TextEncoder().encode(JSON.stringify({id,cmd,args})))}catch(e){c.status='error';c.result=e.message;renderCmdLog();toast('ส่งไม่สำเร็จ: '+e.message)}}
 function bleResult(txt){let r;try{r=JSON.parse(txt)}catch(e){return}const c=cmds.find(x=>x.id===r.id);if(c){c.status=r.ok?'done':'error';c.result=r.msg}
  toast((r.ok?'✓ ':'✗ ')+(c?(CMD_TH[c.cmd]||c.cmd)+': ':'')+(r.msg||''));renderCmdLog();setTimeout(()=>blePoll(true),400)}
-['btnBle','btnBleL'].forEach(id=>{const b=$(id);if(b)b.onclick=bleConnect});
+['btnBle','btnBleL'].forEach(id=>{const b=$(id);if(b)b.onclick=bleConnect});['btnUsb','btnUsbL'].forEach(id=>{const b=$(id);if(b)b.onclick=serialConnect});
 const bil=$('btnInstallL');if(bil)bil.onclick=installApp;
 // ---------- app settings (gear)
 $('btnSet').onclick=openSettings;$('mSet').onclick=e=>{if(e.target.id==='mSet')$('mSet').classList.add('hide')};
