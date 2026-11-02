@@ -140,6 +140,14 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 .modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center}
 .modal .card{width:100%;max-width:560px;max-height:88vh;overflow:auto;border-radius:20px 20px 0 0;margin:0;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
 @media(min-width:700px){.modal{align-items:center}.modal .card{border-radius:20px}}
+#mPick .card{max-height:92vh;animation:sheetUp .28s cubic-bezier(.2,.8,.2,1)}@keyframes sheetUp{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+.pk-row{display:flex;align-items:center;gap:12px;padding:14px 12px;margin:6px 0;border-radius:14px;background:var(--card2);border:1px solid var(--line);cursor:pointer;min-height:56px;transition:border-color .15s,transform .1s}
+.pk-row:active{transform:scale(.99)}.pk-row.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.pk-row .l{flex:1;min-width:0}.pk-row .l b{display:block;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pk-row .l span{font-size:12px;color:var(--muted)}
+.pk-row .ic{font-size:22px;width:28px;text-align:center}
+.bars{display:inline-flex;align-items:flex-end;gap:2px;height:16px}.bars i{width:4px;border-radius:2px;background:var(--line)}.bars i.on{background:var(--good)}
+.pk-spin{display:inline-block;width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px}@keyframes spin{to{transform:rotate(360deg)}}
+.pk-pass{display:flex;gap:8px;margin:2px 0 10px;padding:0 4px}.pk-pass input,.pk-pass select{flex:1;margin:0;min-width:0}.pk-pass button{white-space:nowrap}
 .tg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}.tg:last-child{border-bottom:0}.tg .l{flex:1}.tg .l small{display:block;color:var(--muted);font-size:12px}
 .sw2{position:relative;width:52px;height:30px;border-radius:15px;background:var(--line);border:0;padding:0;flex:none;transition:background .25s}.sw2:after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .45s cubic-bezier(.3,1.6,.5,1)}.sw2.on{background:var(--good)}.sw2.on:after{left:25px}
 .prm{display:grid;grid-template-columns:1fr 110px auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.prm input{margin:0;padding:8px 10px}.prm button{padding:8px 12px}.prm small{display:block;color:var(--muted);font-size:12px}
@@ -306,6 +314,7 @@ esp-web-install-button button{width:100%}
 </section>
 </main>
 <div class="modal hide" id="mSet"><div class="card" id="mSetBody"></div></div>
+<div class="modal hide" id="mPick"><div class="card" id="mPickBody"></div></div>
 <div class="toast hide" id="toast"></div>
 <script>
 'use strict';
@@ -716,7 +725,44 @@ async function sendCmd(cmd,args,okMsg){if(!cur)return;args=args||{};if(cur.ble)r
 function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length?cmds.map(c=>'<div class="cl"><b>'+esc(CMD_TH[c.cmd]||c.cmd)+(c.args&&Object.keys(c.args).length&&c.cmd!=='home_wifi'&&c.cmd!=='ota'?' <span class="muted tiny">'+esc(JSON.stringify(c.args))+'</span>':'')+'</b><span class="muted tiny">'+new Date(c.created_at).toLocaleTimeString('th-TH')+'</span><span class="st '+c.status+'" title="'+esc(c.result||'')+'">'+(c.status==='done'?OKMARK:'')+(ST_TH[c.status]||c.status)+'</span></div>'+(c.result&&c.status!=='done'?'<div class="tiny muted" style="padding:0 0 6px">'+esc(c.result)+'</div>':'')).join(''):'<div class="small muted">ยังไม่มีคำสั่ง</div>'}
 function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
 function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>'+(ble&&ble.dev&&ble.dev.usb?'🔌 ':'🔵 ')+esc(c.name||'')+'</b>'+(c.hwid?'<span class="tiny muted"> · '+esc(c.hwid)+'</span>':'')+'<div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
-function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
+// ---------- full-screen pickers for BMS (Bluetooth) and Wi-Fi scan results
+let pick=null;
+function barsHtml(r){const n=r>=-60?4:r>=-70?3:r>=-80?2:1;return '<span class="bars" title="'+r+' dBm">'+[1,2,3,4].map(k=>'<i class="'+(k<=n?'on':'')+'" style="height:'+(k*4)+'px"></i>').join('')+'</span>'}
+function openPicker(kind,scan){pick={kind,t0:Date.now(),sel:null,pass:'',all:false,scanned:!!scan,before:JSON.stringify(((latest[cur.id]||{}).data||{})[kind==='bms'?'devs':'wscan']||null)};$('mPick').classList.remove('hide');renderPicker()}
+function closePicker(){pick=null;$('mPick').classList.add('hide')}
+$('mPick').onclick=e=>{if(e.target.id==='mPick')closePicker()};
+function renderPicker(){if(!pick||!cur)return;const ae=document.activeElement;if(ae&&ae.id==='pkPass')return;
+ const d=(latest[cur.id]||{}).data||{},c=d.cfg||{},bms=pick.kind==='bms';
+ let L=Array.isArray(bms?d.devs:d.wscan)?(bms?d.devs:d.wscan).slice():[];
+ const fresh=JSON.stringify(bms?d.devs||null:d.wscan||null)!==pick.before;
+ const scanning=pick.scanned&&(bms?(c.scanning||(!fresh&&Date.now()-pick.t0<15000)):(!fresh&&Date.now()-pick.t0<15000));
+ if(bms){L.sort((a,b)=>(b.candidate-a.candidate)||(b.rssi-a.rssi))}else{const m={};L.forEach(w=>{if(w.ssid&&(!m[w.ssid]||m[w.ssid].rssi<w.rssi))m[w.ssid]=w});L=Object.values(m).sort((a,b)=>b.rssi-a.rssi)}
+ const nCand=bms?L.filter(x=>x.candidate).length:0,shown=bms&&nCand&&!pick.all?L.filter(x=>x.candidate):L;
+ let h='<div class="row"><div class="big">'+(bms?'🔋 เลือก BMS':'📶 เลือก Wi-Fi บ้าน')+'</div><button class="ghost icon nf" id="pkClose" aria-label="ปิด">✕</button></div>'+
+  '<div class="small muted" style="margin:4px 0 8px">'+(scanning?'<span class="pk-spin"></span> กำลังค้นหา… (~10 วินาที) รายการจะขึ้นเอง':(L.length?'พบ '+L.length+' รายการ · แตะเพื่อเชื่อมต่อ':'ยังไม่พบ · กดค้นหาอีกครั้ง'))+'</div>';
+ if(bms&&nCand&&nCand<L.length)h+='<div class="chips" style="margin-bottom:6px"><span class="chip'+(!pick.all?' on':'')+'" data-pa="0">เฉพาะ BMS ('+nCand+')</span><span class="chip'+(pick.all?' on':'')+'" data-pa="1">ทั้งหมด ('+L.length+')</span></div>';
+ h+=shown.map((x,i)=>{const id=bms?x.mac:x.ssid,on=pick.sel===id;
+  if(bms)return '<div class="pk-row'+(on?' on':'')+'" data-pk="'+esc(id)+'"><span class="ic">'+(x.candidate?'🔋':'📡')+'</span><div class="l"><b>'+esc(x.name||'(ไม่มีชื่อ)')+'</b><span>'+esc(x.mac)+' · '+x.rssi+' dBm</span></div>'+barsHtml(x.rssi)+'</div>'+
+   (on?'<div class="pk-pass"><select id="pkProto"><option value="AUTO">ตรวจรุ่นอัตโนมัติ</option><option value="JK02_32S">JK 32S</option><option value="JK02_24S">JK 24S</option><option value="ANT">ANT</option><option value="JBD">JBD</option><option value="DALY">DALY</option></select><button id="pkGo" data-type="'+(x.type|0)+'">เชื่อมต่อ</button></div>':'');
+  return '<div class="pk-row'+(on?' on':'')+'" data-pk="'+esc(id)+'"><span class="ic">'+(x.lock?'🔒':'📶')+'</span><div class="l"><b>'+esc(x.ssid)+'</b><span>'+(x.lock?'มีรหัสผ่าน':'ไม่มีรหัสผ่าน')+' · '+x.rssi+' dBm'+(c.ssid===x.ssid?' · ใช้อยู่':'')+'</span></div>'+barsHtml(x.rssi)+'</div>'+
+   (on?'<div class="pk-pass">'+(x.lock?'<input id="pkPass" type="password" maxlength="64" placeholder="รหัสผ่าน Wi-Fi" value="'+esc(pick.pass)+'">':'')+'<button id="pkGo">เชื่อมต่อ</button></div>':'')}).join('');
+ if(!bms)h+='<div class="pk-row" data-pk="__other"><span class="ic">✏️</span><div class="l"><b>พิมพ์ชื่อ Wi-Fi เอง</b><span>เครือข่ายที่ซ่อนชื่อ หรือไม่อยู่ในรายการ</span></div></div>'+(pick.sel==='__other'?'<div class="pk-pass" style="flex-wrap:wrap"><input id="pkSsid" maxlength="32" placeholder="ชื่อ Wi-Fi" style="flex-basis:100%"><input id="pkPass" type="password" maxlength="64" placeholder="รหัสผ่าน"><button id="pkGo">เชื่อมต่อ</button></div>':'');
+ h+='<div class="row" style="margin-top:12px"><button class="soft" id="pkRescan" '+(scanning?'disabled':'')+'>'+(scanning?'กำลังค้นหา…':'🔄 ค้นหาอีกครั้ง')+'</button><button class="ghost" id="pkClose2">ปิด</button></div>'+
+  (bms?'<div class="tiny muted" style="margin-top:8px">ไม่เจอแบต: ปิดแอป BMS บนมือถือก่อน (BMS รับบลูทูธได้ทีละเครื่อง) · DALY: ปิดโหมด Wi-Fi/Cloud ในแอป DALY</div>':'<div class="tiny muted" style="margin-top:8px">'+(cur.ble?'บอร์ดจะต่อ Wi-Fi ใหม่ทันที':'ถ้าต่อเครือข่ายใหม่ไม่ได้ภายใน 90 วินาที บอร์ดจะกลับไปใช้ Wi-Fi เดิมเอง')+' · ใช้ Wi-Fi 2.4 GHz (บอร์ดไม่รองรับ 5 GHz)</div>');
+ $('mPickBody').innerHTML=h;
+ const B=$('mPickBody');B.querySelectorAll('#pkClose,#pkClose2').forEach(e=>e.onclick=closePicker);
+ B.querySelectorAll('[data-pa]').forEach(e=>e.onclick=()=>{pick.all=e.dataset.pa==='1';renderPicker()});
+ B.querySelectorAll('[data-pk]').forEach(e=>e.onclick=()=>{const v=e.dataset.pk;pick.sel=pick.sel===v?null:v;pick.pass='';renderPicker();const pp=$('pkSsid')||$('pkPass');if(pp)pp.focus()});
+ const pp=$('pkPass');if(pp){pp.oninput=()=>pick.pass=pp.value;pp.onkeydown=e=>{if(e.key==='Enter')$('pkGo').click()}}
+ const rs=$('pkRescan');if(rs)rs.onclick=()=>{sendCmd(bms?'bms_scan':'wifi_scan');pick.t0=Date.now();pick.scanned=true;pick.before=JSON.stringify(bms?d.devs||null:d.wscan||null);renderPicker()};
+ const go=$('pkGo');if(go)go.onclick=()=>{
+  if(bms){const x=L.find(y=>y.mac===pick.sel);if(!x)return;sendCmd('bms_connect',{mac:x.mac,type:x.type|0,protocol:$('pkProto').value});toast('กำลังเชื่อม '+(x.name||x.mac)+' …');closePicker();return}
+  const ss=pick.sel==='__other'?($('pkSsid').value||'').trim():pick.sel,pw=$('pkPass')?$('pkPass').value:'';
+  if(!ss){toast('ใส่ชื่อ Wi-Fi');return}const w=L.find(y=>y.ssid===ss);if(w&&w.lock&&pw.length<8){toast('รหัสผ่าน Wi-Fi ต้องมีอย่างน้อย 8 ตัว');return}
+  if(!cur.ble&&!confirm('เปลี่ยนบอร์ดไปใช้ Wi-Fi "'+ss+'"?\nถ้าต่อไม่ได้ภายใน 90 วินาทีจะกลับไปใช้ "'+(c.ssid||'')+'"'))return;
+  sendCmd('home_wifi',{ssid:ss,pass:pw});toast('กำลังเปลี่ยนไปใช้ '+ss+' …');closePicker()};
+ if(scanning)clearTimeout(pick.tm),pick.tm=setTimeout(renderPicker,1500)}
+function renderCtl(){if(pick)setTimeout(renderPicker,0);const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
  const PK=packsOf(d);let pkS=null;if(PK){if(packSel==null||!PK.some(p=>p.a===packSel))packSel=PK[0].a;pkS=PK.find(p=>p.a===packSel)}
  const BT=c&&c.bt||{},BTM=pkS?BT[pkS.a]:null,RO=!!PK&&d.busm===1&&!BTM,J=pkS?pkS.jk:d.jk,PA=pkS?{a:pkS.a}:{};
  const key=JSON.stringify([c,J,PK&&PK.map(p=>p.bt),pkS&&[pkS.a,pkS.chg,pkS.dsg],PK&&PK.map(p=>p.a),d.busm,d.pa,d.devs,d.wscan,d.chg,d.dsg,x.online,P.tempUnit,d.fw,!!MAN]);const ae=document.activeElement;
@@ -750,7 +796,7 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
   '<button id="lkSave">บันทึกและเชื่อมผ่าน RS485</button></div></div>'}
  h+='<div class="card"><h3>การเชื่อมต่อ BMS</h3><div class="info" style="margin-bottom:10px"><div><span>สถานะ</span><b>'+esc(d.state||'--')+'</b></div><div><span>MAC</span><b>'+esc(c.mac||'—')+'</b></div><div><span>โปรโตคอล</span><b>'+esc(c.auto?'อัตโนมัติ':c.proto||'—')+'</b></div><div><span>ตรวจพบ</span><b>'+esc(d.bms||'—')+'</b></div></div>'+
   '<div class="row wrap"><button id="cScan">'+(c.scanning?'กำลังค้นหา…':'ค้นหา BMS')+'</button><button class="soft" id="cAuto">เชื่อมอัตโนมัติ</button><button class="danger" id="cDisc">ตัดการเชื่อม</button></div>'+
-  (devs.length?'<div style="margin-top:10px">'+devs.slice().sort((a,b)=>(b.candidate-a.candidate)||(b.rssi-a.rssi)).map((v,j)=>'<div class="devrow"><div class="l"><b>'+(v.candidate?'🔋 ':'')+esc(v.name||'(ไม่มีชื่อ)')+'</b><span class="tiny muted">'+esc(v.mac)+' · '+v.rssi+' dBm</span></div><select id="dp'+j+'"><option value="AUTO">AUTO</option><option value="JK02_32S">JK 32S</option><option value="JK02_24S">JK 24S</option><option value="ANT">ANT</option><option value="JBD">JBD</option><option value="DALY">DALY</option></select><button data-mac="'+esc(v.mac)+'" data-type="'+(v.type|0)+'" data-j="'+j+'">เชื่อม</button></div>').join('')+'</div>':'<div class="small muted" style="margin-top:8px">กด "ค้นหา BMS" แล้วรายการจะขึ้นที่นี่ (~10 วินาที)</div>')+'</div>';
+  (devs.length?'<button class="soft" id="cPickBms" style="width:100%;margin-top:10px">📋 ดูรายการทั้งหมด ('+devs.length+') · แตะเพื่อเชื่อมต่อ</button>':'')+(devs.length?'<div style="margin-top:10px">'+devs.slice().sort((a,b)=>(b.candidate-a.candidate)||(b.rssi-a.rssi)).slice(0,3).map((v,j)=>'<div class="devrow"><div class="l"><b>'+(v.candidate?'🔋 ':'')+esc(v.name||'(ไม่มีชื่อ)')+'</b><span class="tiny muted">'+esc(v.mac)+' · '+v.rssi+' dBm</span></div><select id="dp'+j+'"><option value="AUTO">AUTO</option><option value="JK02_32S">JK 32S</option><option value="JK02_24S">JK 24S</option><option value="ANT">ANT</option><option value="JBD">JBD</option><option value="DALY">DALY</option></select><button data-mac="'+esc(v.mac)+'" data-type="'+(v.type|0)+'" data-j="'+j+'">เชื่อม</button></div>').join('')+'</div>':'<div class="small muted" style="margin-top:8px">กด "ค้นหา BMS" แล้วรายการจะขึ้นที่นี่ (~10 วินาที)</div>')+'</div>';
  // LED
  const L=c.led||{};h+='<div class="card"><h3>ไฟ RGB</h3>'+tgl('cLed','เปิดไฟ','',L.on)+'<div class="small muted" style="margin-top:10px">โหมด</div><div class="chips" style="margin:6px 0">'+LED_MODES.map((m,i)=>'<span class="chip'+(L.mode===i?' on':'')+'" data-lm="'+i+'">'+m+'</span>').join('')+'</div><div class="small muted" style="margin-top:8px">สี</div><div class="ledc">'+LED_PAL.map((p,i)=>'<span class="'+(L.color===i?'on':'')+'" data-lc="'+i+'" title="'+p[1]+'" style="background:'+p[0]+'"></span>').join('')+'</div><div class="small muted">ความสว่าง</div><div class="chips" style="margin:6px 0">'+[1,2,3,4].map(v=>'<span class="chip'+(L.level===v?' on':'')+'" data-ll="'+v+'">'+['ต่ำ','กลาง','สูง','สุด'][v-1]+'</span>').join('')+'</div></div>';
  // display
@@ -760,7 +806,7 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  const ws=Array.isArray(d.wscan)?d.wscan:[];
  h+='<div class="card"><h3>Wi-Fi และวิทยุ</h3>'+tgl('cAp','ฮอตสปอต BATTLAB (192.168.4.1)',isCyd?'ใช้ตั้งค่าผ่านมือถือในพื้นที่':'บอร์ด S3 จะเปิดกลับเองเมื่อรีสตาร์ท',c.ap)+tgl('cTx','กำลังส่งสูงสุด (TX MAX)','Bluetooth + Wi-Fi แรงสุด กินไฟเพิ่มเล็กน้อย',c.tx)+
   '<div class="info" style="margin:10px 0"><div><span>Wi-Fi บ้าน</span><b>'+esc(c.ssid||'—')+'</b></div><div><span>IP</span><b>'+esc(c.ip||'—')+'</b></div><div><span>สัญญาณ</span><b>'+(c.wrssi?c.wrssi+' dBm':'—')+'</b></div></div>'+
-  '<div class="row wrap"><button class="soft" id="cWscan">ค้นหา Wi-Fi</button></div>'+
+  '<div class="row wrap"><button class="soft" id="cWscan">📶 ค้นหาและเลือก Wi-Fi</button>'+(ws.length?'<button class="ghost" id="cPickWifi">รายการล่าสุด ('+ws.length+')</button>':'')+'</div>'+
   '<label style="margin-top:10px">ชื่อ Wi-Fi ใหม่<input id="wSsid" list="wList" maxlength="32" placeholder="เลือกหรือพิมพ์ชื่อ"><datalist id="wList">'+ws.map(w=>'<option value="'+esc(w.ssid)+'">'+(w.rssi||'')+' dBm</option>').join('')+'</datalist></label>'+(ws.length?'<div class="small muted" style="margin:-6px 0 8px">พบ '+ws.length+' เครือข่าย: '+ws.slice(0,6).map(w=>esc(w.ssid)).join(', ')+'</div>':'')+
   '<label>รหัสผ่าน<input id="wPass" type="password" maxlength="64"></label><button class="soft" id="cWifi">เปลี่ยน Wi-Fi บ้าน</button><div class="tiny muted" style="margin-top:6px">ถ้าต่อเครือข่ายใหม่ไม่ได้ภายใน 90 วินาที บอร์ดจะกลับไปใช้ Wi-Fi เดิมเอง</div></div>';
  // system
@@ -784,7 +830,7 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  bind('btMatch',()=>{if(confirm('จับคู่บลูทูธกับแต่ละลูก?\n\nปิดแอป JK บนมือถือก่อน (BMS รับบลูทูธได้ทีละเครื่อง) · ใช้เวลาประมาณ 1 นาที ระหว่างนั้นยังอ่าน RS485 ตามปกติ'))sendCmd('bt_match')});
  bind('btClear',()=>{if(confirm('ล้างการจับคู่บลูทูธทุกลูก?'))sendCmd('bt_clear')});
  bind('lkSave',()=>{const a={mode:'rs485',rx:+$('lkRx').value,tx:+$('lkTx').value,baud:+$('lkBaud').value,addr:+$('lkAddr').value};if($('lkBrand'))a.brand=$('lkBrand').value;if($('lkBus')){a.bus=$('lkBus').value;a.count=Math.max(1,Math.min(15,+$('lkCnt').value||1));if(a.addr+a.count>16){toast('address สุดท้ายต้องไม่เกิน 15');return}}if(a.rx===a.tx){toast('ขา RX กับ TX ต้องไม่ซ้ำกัน');return}sendCmd('link',a)});
- bind('cScan',()=>sendCmd('bms_scan'));bind('cAuto',()=>sendCmd('bms_auto'));bind('cDisc',()=>{if(confirm('ตัดการเชื่อม BMS?'))sendCmd('bms_disconnect')});
+ bind('cScan',()=>{sendCmd('bms_scan');openPicker('bms',true)});bind('cPickBms',()=>openPicker('bms'));bind('cPickWifi',()=>openPicker('wifi'));bind('cAuto',()=>sendCmd('bms_auto'));bind('cDisc',()=>{if(confirm('ตัดการเชื่อม BMS?'))sendCmd('bms_disconnect')});
  $('tab_ctl').querySelectorAll('[data-mac]').forEach(b=>b.onclick=()=>sendCmd('bms_connect',{mac:b.dataset.mac,type:+b.dataset.type,protocol:$('dp'+b.dataset.j).value}));
  bind('cLed',()=>sendCmd('led',{on:!on('cLed')}));
  $('tab_ctl').querySelectorAll('[data-lm]').forEach(e=>e.onclick=()=>sendCmd('led',{mode:+e.dataset.lm,on:true}));
@@ -796,7 +842,7 @@ function renderCtl(){const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,d
  bind('dBeep',()=>sendCmd('display',{beep:!on('dBeep')}));
  bind('cAp',()=>{const t=!on('cAp');if(!t&&!confirm('ปิดฮอตสปอต BATTLAB? (ยังควบคุมผ่านเว็บนี้ได้)'))return;sendCmd('wifi_ap',{on:t})});
  bind('cTx',()=>sendCmd('radio_max',{on:!on('cTx')}));
- bind('cWscan',()=>sendCmd('wifi_scan'));
+ bind('cWscan',()=>{sendCmd('wifi_scan');openPicker('wifi',true)});
  bind('cWifi',()=>{const ss=$('wSsid').value.trim(),pw=$('wPass').value;if(!ss){toast('ใส่ชื่อ Wi-Fi');return}if(!confirm('เปลี่ยนบอร์ดไปใช้ Wi-Fi "'+ss+'"?\nถ้าต่อไม่ได้ภายใน 90 วินาทีจะกลับไปใช้ "'+(c.ssid||'')+'"'))return;sendCmd('home_wifi',{ssid:ss,pass:pw})});
  bind('cRestart',()=>{if(confirm('รีสตาร์ทบอร์ด? (ใช้เวลาประมาณ 20 วินาทีจึงกลับมาออนไลน์)'))sendCmd('restart')})}
 // demo: commands change the simulated board
