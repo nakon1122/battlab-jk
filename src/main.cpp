@@ -30,9 +30,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.4-cyd35"
+#define BATTLAB_FW "2.8.5-cyd35"
 #else
-#define BATTLAB_FW "2.8.4-s3"
+#define BATTLAB_FW "2.8.5-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -84,6 +84,7 @@ struct Shared {
   uint32_t ftype[4] = {0, 0, 0, 0}; // JK frames by type (0 other, 1 settings, 2 cells, 3 info)
   String f2hex;                     // last JK cell frame, for checking the layout remotely
   uint32_t links = 0, lastLinkMs = 0; // link losses and how long the last link lasted
+  String subLog, peerName;            // CCCD subscribe results, GAP device name of the BMS
   String state = "UNCONFIGURED", devices = "[]";
   uint32_t devStamp = 0;
   float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
@@ -520,6 +521,7 @@ void bleWorker(void *) {
   jk::Sample jbdSample;
   bool jbdHaveBasic = false;
   uint32_t identAt = 0, identStartedAt = 0, lastOtherPoll = 0;
+  bool peerIsAnt = false;
   uint8_t identIdx = 0, jbdToggle = 0;
   bool fullProbeDone = false;
   auto forcedFamily = [](const String &p) -> uint8_t {
@@ -1067,6 +1069,11 @@ void bleWorker(void *) {
           bleMtu = client->getMTU();
           Serial.printf("[BLE] GATT: %s\n", gatt.c_str());
           bool subscribed = false;
+          String subLog;
+          String peer;
+          if (auto gap = client->getService(NimBLEUUID(uint16_t(0x1800))))
+            if (auto nm = gap->getCharacteristic(NimBLEUUID(uint16_t(0x2a00))))
+              if (nm->canRead()) peer = nm->readValue().c_str();
           steps.clear();
           probeStep = -1;
           if (auto svcs = client->getServices(false))
@@ -1081,15 +1088,20 @@ void bleWorker(void *) {
               auto cs = sv->getCharacteristics(false);
               if (!cs) continue;
               for (auto cc : *cs) {
-                if (cc->canNotify() || cc->canIndicate()) {
+                bool jkOnlyFfe1 = sv->getUUID() == NimBLEUUID(uint16_t(0xffe0)) &&
+                                  cc->getUUID() != NimBLEUUID(uint16_t(0xffe1)) &&
+                                  sv->getCharacteristic(NimBLEUUID(uint16_t(0xffe1)));
+                if ((cc->canNotify() || cc->canIndicate()) && !jkOnlyFfe1) {
                   bool ok = false;
                   for (int attempt = 0; attempt < 2 && !ok; attempt++) {
-                    ok = cc->canNotify() ? cc->subscribe(true, notify)
-                                         : cc->subscribe(false, notify);
+                    // CCCD write with response (a write command is ignored by some stacks)
+                    ok = cc->canNotify() ? cc->subscribe(true, notify, true)
+                                         : cc->subscribe(false, notify, true);
                     if (!ok) delay(200);
                   }
                   Serial.printf("[BLE] subscribe %s -> %s\n",
                                 cc->getUUID().toString().c_str(), ok ? "ok" : "FAILED");
+                  subLog += String(cc->getUUID().toString().c_str()) + (ok ? ":ok " : ":FAIL ");
                   subscribed |= ok;
                 }
                 for (uint8_t pi = 0; pi < 5; pi++) {
@@ -1140,9 +1152,12 @@ void bleWorker(void *) {
           lastOtherPoll = 0;
           Serial.printf("[BLE] channels: jk/ant=%s jbd=%s family=%u\n",
                         ch ? "FFE1" : "-", jbdCh ? "FF02" : "-", fam);
+          peerIsAnt = peer.startsWith("ANT");
           {
             Guard g;
             shared.gatt = gatt;
+            shared.subLog = subLog;
+            shared.peerName = peer;
           }
           if (subscribed && (ch || jbdCh || dalyCh || !steps.empty())) {
             linkedLocal = true;
@@ -1445,7 +1460,7 @@ void bleWorker(void *) {
             auto j7 = jk::request(0x97), j6 = jk::request(0x96);
             uint8_t fr[16];
             uint8_t idx = identIdx++;
-            if (idx < 8 && ch && !jbdCh && !dalyCh) {
+            if (ch && !jbdCh && !dalyCh && !peerIsAnt && t - identStartedAt < 60000) {
               // JK first (FFE1 only). New JK modules (ZX-D30, MAC A4:C1:38) may only
               // answer one write type, so alternate it every two requests.
               bool resp = ((idx / 2) & 1) ? ch->canWrite() : !ch->canWriteNoResponse();
@@ -1474,7 +1489,9 @@ void bleWorker(void *) {
               Guard g;
               shared.probe = fullProbeDone ? "identifying (slow)" : "identifying";
             }
-            if (!fullProbeDone && t - identStartedAt > 20000 && !steps.empty()) {
+            if (!fullProbeDone && t - identStartedAt > 20000 && !steps.empty() && !ch) {
+              // (FFE0 devices never get the brute-force probe: junk frames can wedge
+              //  the command parser of newer JK BMS until the BMS restarts)
               // Nothing recognised: run the full diagnostic probe once.
               Serial.println("[BLE] no known BMS answered, starting full probe");
               fullProbeDone = true;
@@ -2312,6 +2329,8 @@ static void cloudTask(void *) {
         bd["links"] = shared.links;
         bd["linkms"] = shared.lastLinkMs;
         bd["mtu"] = bleMtu;
+        bd["sub"] = shared.subLog;
+        bd["peer"] = shared.peerName;
       }
       c["mac"] = cfg.mac;
       c["proto"] = cfg.protocol;
