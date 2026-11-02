@@ -33,7 +33,7 @@ struct DisplaySnap {
 };
 // Home Wi-Fi + cloud (main.cpp)
 struct NetInfo {
-  String ssid, ip, cloud, pair, site, name;
+  String ssid, ip, cloud, pair, site, name, hw; // name = BATTLAB-XXXXXX, hw = chip MAC
   bool connected = false, configured = false, paired = false;
   int rssi = 0;
   long lastOkAgo = -1;

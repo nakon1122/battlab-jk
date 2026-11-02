@@ -21,8 +21,10 @@
 #include "bms_settings.h"
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
+#include "improv_serial.h"
+#include <string>
 
-#define BATTLAB_FW "2.8.0-cloudscreen"
+#define BATTLAB_FW "2.8.1-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -282,6 +284,64 @@ static void netSetHomeWifi(const String &ssid, const String &pass) {
   p.end();
   WiFi.disconnect(false);
   wifiApply();
+}
+// Improv Wi-Fi over USB serial: the website's USB installer asks for the home
+// Wi-Fi right after flashing (no phone needed), then opens the website with the
+// pair code so the screen is added to the account in one click.
+static String hwMac() {
+  uint64_t mac = ESP.getEfuseMac();
+  char hm[18];
+  snprintf(hm, sizeof hm, "%02X:%02X:%02X:%02X:%02X:%02X", unsigned(mac & 0xff), unsigned(mac >> 8 & 0xff), unsigned(mac >> 16 & 0xff),
+           unsigned(mac >> 24 & 0xff), unsigned(mac >> 32 & 0xff), unsigned(mac >> 40 & 0xff));
+  return hm;
+}
+static void improvSend(uint8_t type, const std::vector<uint8_t> &d) {
+  auto p = improv::packet(type, d);
+  Serial.write(p.data(), p.size());
+  Serial.write('\n');
+  Serial.flush();
+}
+static void improvTask(void *) {
+  improv::Parser ip;
+  String hw = hwMac();
+  std::string name = std::string("BATTLAB-SCREEN-") + (hw.substring(9, 11) + hw.substring(12, 14) + hw.substring(15, 17)).c_str();
+  auto url = [&]() { return std::string("https://") + CLOUD_SITE + "/#claimv/" + pairCode.c_str(); };
+  for (;;) {
+    while (Serial.available()) {
+      uint8_t type;
+      std::vector<uint8_t> d;
+      if (!ip.feed(Serial.read(), type, d) || type != improv::T_RPC || d.empty()) continue;
+      bool conn = WiFi.status() == WL_CONNECTED;
+      if (d[0] == improv::C_STATE) {
+        improvSend(improv::T_STATE, {uint8_t(conn ? improv::S_PROVISIONED : improv::S_AUTHORIZED)});
+        if (conn) improvSend(improv::T_RESULT, improv::result(improv::C_STATE, {url()}));
+      } else if (d[0] == improv::C_INFO) {
+        improvSend(improv::T_RESULT, improv::result(improv::C_INFO, {"BATTLAB Cloud Screen", BATTLAB_FW, "ESP32", name}));
+      } else if (d[0] == improv::C_SCAN) {
+        int n = -1;
+        for (int k = 0; k < 3 && n < 0; k++) { n = WiFi.scanNetworks(false, false); if (n < 0) vTaskDelay(pdMS_TO_TICKS(800)); }
+        for (int i = 0; i < n && i < 20; i++)
+          improvSend(improv::T_RESULT, improv::result(improv::C_SCAN, {WiFi.SSID(i).c_str(), std::to_string(WiFi.RSSI(i)), WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "NO" : "YES"}));
+        if (n >= 0) WiFi.scanDelete();
+        improvSend(improv::T_RESULT, improv::result(improv::C_SCAN, {}));
+      } else if (d[0] == improv::C_WIFI) {
+        std::string ss, pw;
+        if (!improv::wifiSettings(d, ss, pw) || ss.size() > 32 || pw.size() > 64) { improvSend(improv::T_ERROR, {improv::E_INVALID}); continue; }
+        improvSend(improv::T_STATE, {improv::S_PROVISIONING});
+        netSetHomeWifi(String(ss.c_str()), String(pw.c_str()));
+        uint32_t t0 = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) vTaskDelay(pdMS_TO_TICKS(250));
+        if (WiFi.status() == WL_CONNECTED) {
+          improvSend(improv::T_STATE, {improv::S_PROVISIONED});
+          improvSend(improv::T_RESULT, improv::result(improv::C_WIFI, {url()}));
+        } else {
+          improvSend(improv::T_ERROR, {improv::E_CONNECT});
+          improvSend(improv::T_STATE, {improv::S_AUTHORIZED});
+        }
+      } else improvSend(improv::T_ERROR, {improv::E_UNKNOWN_RPC});
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
 }
 // A scan fails while the station keeps retrying a network that is not there
 // (ESP_ERR_WIFI_STATE -> "no networks"). Pause the retries, scan, resume.
@@ -2103,6 +2163,7 @@ static void pairOverlayDraw(const Model &m, bool force) {
   tft.drawString(String("Firmware ") + BATTLAB_FW + "   IP " + WiFi.localIP().toString() + "   RAM " +
                      (ESP.getFreeHeap() / 1024) + "k",
                  12, 232);
+  tft.drawString(String("Hardware ID ") + hwMac(), 12, 254);
 }
 static bool overlayTouch(int x, int y) {
   if (overlay == OV_PAIR) {
@@ -2513,6 +2574,7 @@ void setup() {
   mx = xSemaphoreCreateMutex();
   dcfgLoad();
   netLoad();
+  xTaskCreatePinnedToCore(improvTask, "improv", 6144, nullptr, 1, nullptr, 1);
   Preferences p;
   p.begin("battlab-disp", true);
   bool invert = p.getBool("inv", false), rgb = p.getBool("rgb", false);

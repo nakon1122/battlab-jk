@@ -3,6 +3,7 @@
 #include "bms_params.h"
 #include "bms_settings.h"
 #include "jk_rs485.h"
+#include "improv_serial.h"
 #include "bms_daly.h"
 #include <mbedtls/sha256.h>
 #include <Update.h>
@@ -28,9 +29,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.0-cyd35"
+#define BATTLAB_FW "2.8.1-cyd35"
 #else
-#define BATTLAB_FW "2.8.0-s3"
+#define BATTLAB_FW "2.8.1-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -126,7 +127,9 @@ static volatile bool otaBusy = false; // firmware update running: Bluetooth stay
 static volatile bool bleOtaBusy = false; // firmware arriving over the Bluetooth setup link
 static volatile int otaPct = -1;
 int otaProgress() { return otaPct; }
-static String devName = "BATTLAB"; // BATTLAB-XXXX: hotspot + Bluetooth name, unique per board
+static String devName = "BATTLAB"; // BATTLAB-XXXXXX: hotspot + Bluetooth name = last 6 hex digits of the chip MAC
+static String hwMac;                // chip MAC (the "MAC:" line shown while flashing)
+static volatile uint32_t serialSetupAt = 0; // a computer is setting the board up over USB (website)
 void bleSetupStart();               // Bluetooth setup service (defined below)
 class Guard {
 public:
@@ -1888,6 +1891,7 @@ NetInfo netInfo() {
   }
   n.pair = pairCode;
   n.name = devName;
+  n.hw = hwMac;
   n.site = CLOUD_SITE;
   n.configured = strlen(CLOUD_URL) > 0;
   Guard g;
@@ -2187,6 +2191,8 @@ static void cloudTask(void *) {
       }
 #endif
       c["prof"] = PROF_NAME[profCfg.type];
+      c["name"] = devName;
+      c["hwid"] = hwMac;
       c["whkm"] = profCfg.whkm;
       c["bleota"] = 1;
       auto lo = c.createNestedObject("led");
@@ -2552,6 +2558,7 @@ static void bleRefresh(bool slow) {
   {
     DynamicJsonDocument d(1536), c(1024);
     c["name"] = devName;
+    c["hwid"] = hwMac;
     c["pair"] = n.pair;
     c["paired"] = n.paired;
     c["cloud"] = n.cloud;
@@ -2709,11 +2716,12 @@ static void bleSetupTick() {
     String rs;
     serializeJson(r, rs);
     if (bChr[6]) { bleSet(6, rs); bChr[6]->notify(); }
+    if (millis() - serialSetupAt < 120000) Serial.printf("\n@BL R %s\n", rs.c_str());
     Serial.printf("[BLE-SETUP] %s -> %s\n", m.c_str(), msg.c_str());
     if (reboot) { delay(600); ESP.restart(); }
     lastFast = 0; // push the new state right away
   }
-  if (!bleClient) return;
+  if (!bleClient && millis() - serialSetupAt > 15000) return;
   uint32_t now = millis();
   if (now - lastFast < 1000) return;
   lastFast = now;
@@ -3158,6 +3166,88 @@ void takeDisplaySnapshot(DisplaySnap &o) {
   o.uptimeMs = millis();
   o.stations = WiFi.softAPgetStationNum();
 }
+// ---- setup from a computer over USB (website "Set up over USB") ----------
+//  "@BL get N"      -> "@BL N <json>"  (N = the Bluetooth setup values 0..4)
+//  "@BL cmd {json}" -> same commands as Bluetooth; reply "@BL R <json>"
+//  Improv Wi-Fi packets (ESP Web Tools) -> join the home Wi-Fi right after flashing
+static void improvSend(uint8_t type, const std::vector<uint8_t> &d) {
+  auto p = improv::packet(type, d);
+  Serial.write(p.data(), p.size());
+  Serial.write('\n');
+  Serial.flush();
+}
+static std::string claimUrl() {
+  return std::string("https://") + CLOUD_SITE + "/#claim/" + pairCode.c_str() + "/" + devName.c_str();
+}
+static void serialSetupTask(void *) {
+  improv::Parser ip;
+  String line;
+  for (;;) {
+    while (Serial.available()) {
+      uint8_t c = Serial.read();
+      uint8_t type;
+      std::vector<uint8_t> d;
+      if (ip.feed(c, type, d)) {
+        serialSetupAt = millis();
+        if (type != improv::T_RPC || d.empty()) continue;
+        uint8_t cmd = d[0];
+        bool conn = WiFi.status() == WL_CONNECTED;
+        if (cmd == improv::C_STATE) {
+          improvSend(improv::T_STATE, {uint8_t(conn ? improv::S_PROVISIONED : improv::S_AUTHORIZED)});
+          if (conn) improvSend(improv::T_RESULT, improv::result(improv::C_STATE, {claimUrl()}));
+        } else if (cmd == improv::C_INFO) {
+#ifdef BATTLAB_DISPLAY
+          const char *chip = "ESP32";
+#else
+          const char *chip = "ESP32-S3";
+#endif
+          improvSend(improv::T_RESULT, improv::result(improv::C_INFO, {"BATTLAB", BATTLAB_FW, chip, devName.c_str()}));
+        } else if (cmd == improv::C_SCAN) {
+          int n = -1;
+          for (int k = 0; k < 3 && n < 0; k++) { n = WiFi.scanNetworks(false, false); if (n < 0) vTaskDelay(pdMS_TO_TICKS(800)); }
+          for (int i = 0; i < n && i < 20; i++)
+            improvSend(improv::T_RESULT, improv::result(improv::C_SCAN, {WiFi.SSID(i).c_str(), std::to_string(WiFi.RSSI(i)),
+                                                                          WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "NO" : "YES"}));
+          if (n >= 0) WiFi.scanDelete();
+          improvSend(improv::T_RESULT, improv::result(improv::C_SCAN, {}));
+        } else if (cmd == improv::C_WIFI) {
+          std::string ss, pw;
+          if (!improv::wifiSettings(d, ss, pw) || ss.size() > 32 || pw.size() > 64) { improvSend(improv::T_ERROR, {improv::E_INVALID}); continue; }
+          improvSend(improv::T_STATE, {improv::S_PROVISIONING});
+          netSetHomeWifi(String(ss.c_str()), String(pw.c_str()));
+          uint32_t t0 = millis();
+          while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) vTaskDelay(pdMS_TO_TICKS(250));
+          if (WiFi.status() == WL_CONNECTED) {
+            improvSend(improv::T_STATE, {improv::S_PROVISIONED});
+            improvSend(improv::T_RESULT, improv::result(improv::C_WIFI, {claimUrl()}));
+          } else {
+            improvSend(improv::T_ERROR, {improv::E_CONNECT});
+            improvSend(improv::T_STATE, {improv::S_AUTHORIZED});
+          }
+        } else improvSend(improv::T_ERROR, {improv::E_UNKNOWN_RPC});
+        continue;
+      }
+      if (c == '\n' || c == '\r') {
+        if (line.startsWith("@BL ")) {
+          serialSetupAt = millis();
+          if (line.startsWith("@BL get ")) {
+            int i = line.substring(8).toInt();
+            String v = "{}";
+            if (i >= 0 && i < 9 && bChr[i]) { NimBLEAttValue a = bChr[i]->getValue(); v = String((const char *)a.data(), a.length()); }
+            Serial.printf("\n@BL %d %s\n", i, v.c_str());
+          } else if (line.startsWith("@BL cmd ") && bleQmx) {
+            std::string m = line.substring(8).c_str();
+            xSemaphoreTake(bleQmx, portMAX_DELAY);
+            if (bleQ.size() < 8) bleQ.push_back(m);
+            xSemaphoreGive(bleQmx);
+          } else if (line == "@BL hello") Serial.printf("\n@BL hello %s %s %s\n", devName.c_str(), hwMac.c_str(), BATTLAB_FW);
+        }
+        line = "";
+      } else if (line.length() < 700) line += char(c);
+    }
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
+}
 void setup() {
   Serial.begin(115200);
   readResetReason();
@@ -3187,8 +3277,13 @@ void setup() {
   {
     uint64_t mac = ESP.getEfuseMac();
     char nm[16];
-    snprintf(nm, sizeof nm, "BATTLAB-%02X%02X", unsigned((mac >> 32) & 0xff), unsigned((mac >> 40) & 0xff));
+    uint8_t m6[6];
+    for (int i = 0; i < 6; i++) m6[i] = (mac >> (8 * i)) & 0xff;
+    snprintf(nm, sizeof nm, "BATTLAB-%02X%02X%02X", m6[3], m6[4], m6[5]);
     devName = nm;
+    char hm[18];
+    snprintf(hm, sizeof hm, "%02X:%02X:%02X:%02X:%02X:%02X", m6[0], m6[1], m6[2], m6[3], m6[4], m6[5]);
+    hwMac = hm;
   }
   lock = xSemaphoreCreateMutex();
   prefs.begin("battlab-jk", false);
@@ -3220,6 +3315,7 @@ void setup() {
   profCfg.whkm = prefs.getUShort("pwhkm", 0);
   profCfg.rangeAlarm = prefs.getUChar("prange", 10);
   netLoad();
+  xTaskCreatePinnedToCore(serialSetupTask, "usbsetup", 6144, nullptr, 1, nullptr, 1);
   wifiApply();
   configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com"); // Thailand time for the screen clock
   bool apStarted = wifiOn;

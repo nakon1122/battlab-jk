@@ -1112,15 +1112,15 @@ static void setupTouch(const DisplaySnap &d, int x, int y) {
 static void infoRow(int y, const char *k, const String &v) {
   LGFX_Sprite s(&tft);
   s.setColorDepth(8);
-  if (!s.createSprite(462, 27)) return;
+  if (!s.createSprite(462, 25)) return;
   s.fillSprite(C_BG);
   s.setFont(&fonts::FreeSans9pt7b);
   s.setTextDatum(textdatum_t::middle_left);
   s.setTextColor(C_MUTED, C_BG);
-  s.drawString(k, 4, 13);
+  s.drawString(k, 4, 12);
   s.setTextColor(C_TEXT, C_BG);
-  s.drawString(v, 130, 13);
-  s.drawFastHLine(0, 26, 462, C_LINE);
+  s.drawString(v, 130, 12);
+  s.drawFastHLine(0, 24, 462, C_LINE);
   s.pushSprite(9, y);
   s.deleteSprite();
 }
@@ -1129,15 +1129,16 @@ static String infoKey;
 static void info(const DisplaySnap &d, bool force) {
   NetInfo n = netInfo();
   int y = 44;
+  infoRow(y, "Hardware ID", n.name + "   " + n.hw); y += 25;
   infoRow(y, "BMS", (d.detected.length() ? d.detected : String("not identified")) +
-                        (d.model.length() ? "   " + d.model : String(""))); y += 29;
+                        (d.model.length() ? "   " + d.model : String(""))); y += 25;
   infoRow(y, "Bluetooth", (d.mac.length() ? d.mac : String(d.automatic ? "auto find" : "none")) +
-                              "  " + d.protocol + "  TX " + d.bleTx); y += 29;
-  infoRow(y, "State", d.state + "   rx " + d.rxBytes + " B, " + d.good + " frames"); y += 29;
+                              "  " + d.protocol + "  TX " + d.bleTx); y += 25;
+  infoRow(y, "State", d.state + "   rx " + d.rxBytes + " B, " + d.good + " frames"); y += 25;
   infoRow(y, "Home Wi-Fi", !n.ssid.length() ? String("not set")
                            : n.connected ? n.ssid + "  " + n.ip + "  " + n.rssi + " dBm"
-                                         : n.ssid + "  connecting..."); y += 29;
-  infoRow(y, "Cloud", n.cloud + (n.sent ? String("   sent ") + n.sent : String(""))); y += 29;
+                                         : n.ssid + "  connecting..."); y += 25;
+  infoRow(y, "Cloud", n.cloud + (n.sent ? String("   sent ") + n.sent : String(""))); y += 25;
   infoRow(y, "System", d.firmware + "  " + d.resetReason + "  RAM " + (d.freeHeap / 1024) + "/" + (d.maxBlock / 1024) + "k");
   String key = String(n.connected ? "C" : "-") + n.paired;
   if (!force && key == infoKey) return;
