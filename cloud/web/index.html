@@ -133,6 +133,11 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 body.shared #btnLogin,body.shared #btnBack{display:none!important}
 .abadge.upd{border:0;cursor:pointer;font:inherit;font-size:11px;font-weight:700;color:#fff;background:var(--s1);box-shadow:0 0 0 0 rgba(57,135,229,.6);animation:updPulse 2s infinite}.abadge.upd:disabled{opacity:.45;cursor:not-allowed;animation:none}.abadge.upd.busy{background:var(--warn);animation:none}@keyframes updPulse{70%{box-shadow:0 0 0 7px rgba(57,135,229,0)}100%{box-shadow:0 0 0 0 rgba(57,135,229,0)}}
 .pk-tag{display:block;font-style:normal;font-size:11.5px;font-weight:600;margin-top:2px}.pk-tag.warn{color:var(--warn)}.pk-tag.ok{color:var(--good)}.pk-tag.info{color:var(--s1)}.pk-row.used{opacity:.72}
+.invline{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;margin:6px 0 2px}.invline b{font-variant-numeric:tabular-nums}
+.iHero .iflow{width:100%;max-width:380px;display:block;margin:6px auto 0}.iflow .ilab{fill:#8fa3ae;font-size:12px}.iflow .ival{fill:#ecf1f4;font-size:14px;font-weight:700}
+.ifl{stroke-dasharray:3 12;animation:iflow .9s linear infinite}.ifl.rev{animation-direction:reverse}@keyframes iflow{to{stroke-dashoffset:-15}}
+.inode.on circle{filter:drop-shadow(0 0 6px rgba(255,255,255,.18))}.iTiles{grid-template-columns:repeat(auto-fit,minmax(100px,1fr))}
+@media (prefers-reduced-motion:reduce){.ifl{animation:none}}
 .gview{margin-left:8px;color:var(--accent);font-weight:700;cursor:pointer;white-space:nowrap}
 .gtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .gtiles>div{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px}.gtiles span{font-size:12px;color:var(--muted)}.gtiles b{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:2px}
@@ -184,7 +189,7 @@ body.shared #btnLogin,body.shared #btnBack{display:none!important}
 .gHero.chg .gSide.in,.gHero.dsg .gSide.out{opacity:1}
 .gFlow{display:flex;justify-content:center;gap:6px;height:10px}.gFlow i{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:0}
 .gSide.in{color:#40c878}.gSide.out{color:#e8a040}.gSide span{color:#8fa3ae}
-.gHero.chg .gSide.in .gFlow i{animation:gDotR 1.2s infinite}.gHero.dsg .gSide.out .gFlow i{animation:gDotR 1.2s infinite}
+.gHero.chg .gSide.in .gFlow i{animation:gDotR 1.2s infinite}.gHero.pv .gSide.in .gFlow i,.gHero.ld .gSide.out .gFlow i{animation:gDotR 1.2s infinite}.gHero.dsg .gSide.out .gFlow i{animation:gDotR 1.2s infinite}
 .gFlow i:nth-child(2){animation-delay:.2s!important}.gFlow i:nth-child(3){animation-delay:.4s!important}
 @keyframes gDotR{0%{opacity:0;transform:translateX(-8px)}40%{opacity:1}100%{opacity:0;transform:translateX(8px)}}
 .gRing{position:relative;width:min(200px,46vw);aspect-ratio:1}.gRing svg{width:100%;height:100%}
@@ -383,6 +388,7 @@ esp-web-install-button button{width:100%}
 <section id="vList" class="hide">
  <div class="card" id="fleet"></div>
  <div class="grid" id="devList"></div>
+  <details class="card hide" id="luxCard"><summary style="cursor:pointer;font-weight:700">☀️ อินเวอร์เตอร์ LuxPower <span class="tiny muted" id="luxSum"></span></summary><div id="luxBox" style="margin-top:8px"></div></details>
   <details class="card hide" id="shareAll"><summary style="cursor:pointer;font-weight:700">🔗 แชร์หน้านี้ทั้งหมดแบบดูอย่างเดียว</summary><div class="small muted" style="margin-top:6px">ส่งลิงก์เดียวให้คนที่ไม่มีบัญชีดูแบตทุกเครื่องในบัญชีนี้แบบสด ๆ (แยกตามกรุ๊ป · ยอดรวม · กดดูรายเครื่องได้) ควบคุมหรือแก้ค่าอะไรไม่ได้ · บอร์ดที่เพิ่มทีหลังจะขึ้นในลิงก์เดิมเอง · กดยกเลิกเมื่อไหร่ลิงก์ใช้ไม่ได้ทันที</div><div id="shareAllBox" style="margin-top:8px"></div></details>
  <div class="card hide" style="margin-top:14px" id="viewList"></div>
  <div class="card row wrap" style="margin-top:14px" id="bleCard"><div><b>🔵 ตั้งค่าบอร์ดผ่านบลูทูธ</b><div class="small muted">ตั้ง Wi-Fi บ้าน ดูรหัสจับคู่ และสั่งงานบอร์ดที่อยู่ใกล้ โดยไม่ต้องต่อ Wi-Fi ของบอร์ด</div></div><div class="nf row" style="gap:8px"><button id="btnBle">เชื่อมต่อบลูทูธ</button><button class="soft" id="btnUsb">🔌 ผ่าน USB</button></div></div>
@@ -622,12 +628,12 @@ async function openGroup(g){packH=null;const ds=devs.filter(d=>(dset(d).group||'
 function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(dset(d).group||'')===g),T=groupTotals(ds),ev=ds.every(d=>isEvP(dset(d))),K='g:'+g+':';
  const soc=T.soc!=null?Math.round(T.soc):0,C=2*Math.PI*86,oS=twOld(K+'ring',soc),oSoc=twOld(K+'soc',soc),pw=T.live?T.pw:0,mode=pw>30?'chg':pw<-30?'dsg':'idle',col=socColor(soc);
  const cnt=(key,v,dec,suf,pre)=>{const o=twOld(K+key,v);return '<b data-count="'+v+'" data-from="'+(o??0)+'" data-dec="'+(dec||0)+'" data-suf="'+(suf||'')+'">'+(pre||'')+(o??v).toFixed(dec||0)+(suf||'')+'</b>'};
- let h='<div class="gHero '+mode+'"><div class="gHead"><div><div class="big">'+(ev?'🛵 ':'☀️ ')+esc(g)+'</div><div class="small muted">'+ds.length+' แบต · ออนไลน์ '+T.live+'</div></div><span class="gLive"><i></i>สด</span></div>'+
-  '<div class="gStage"><div class="gSide in"><span>'+(ev?'⚡ ชาร์จเข้า':'☀️ ชาร์จเข้า')+'</span><b>'+(pw>0?kw(pw).replace('+',''):'0 W')+'</b><div class="gFlow"><i></i><i></i><i></i></div></div>'+
+ let h='<div class="gHero '+mode+(T.hasInv&&T.ppv>10?' pv':'')+(T.hasInv&&T.pload>10?' ld':'')+'"><div class="gHead"><div><div class="big">'+(ev?'🛵 ':'☀️ ')+esc(g)+'</div><div class="small muted">'+ds.length+' อุปกรณ์ · ออนไลน์ '+(T.live+(T.liveInv||0))+'</div></div><span class="gLive"><i></i>สด</span></div>'+
+  '<div class="gStage"><div class="gSide in"'+(T.hasInv&&T.ppv>10?' style="opacity:1"':'')+'><span>'+(T.hasInv?'☀️ โซลาร์':ev?'⚡ ชาร์จเข้า':'☀️ ชาร์จเข้า')+'</span><b>'+(T.hasInv?kw(T.ppv).replace('+',''):pw>0?kw(pw).replace('+',''):'0 W')+'</b><div class="gFlow"><i></i><i></i><i></i></div></div>'+
   '<div class="gRing"><svg viewBox="0 0 200 200"><defs><linearGradient id="gGr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#36c4a8"/><stop offset="1" stop-color="'+col+'"/></linearGradient></defs><circle cx="100" cy="100" r="86" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="14"/><circle class="gArc" cx="100" cy="100" r="86" fill="none" stroke="url(#gGr)" stroke-width="14" stroke-linecap="round" transform="rotate(-90 100 100)" stroke-dasharray="'+(C*(oS??0)/100).toFixed(1)+' 999" data-dash="'+(C*soc/100).toFixed(1)+' 999"/><circle class="gPulse" cx="100" cy="100" r="70" fill="none" stroke="'+col+'" stroke-width="1.5"/></svg>'+
   '<div class="gC"><b data-count="'+soc+'" data-from="'+(oSoc??0)+'">'+(oSoc??soc)+'</b><span>% SOC เฉลี่ย</span></div></div>'+
-  '<div class="gSide out"><span>'+(ev?'🛵 ขับขี่':'🏠 จ่ายโหลด')+'</span><b>'+(pw<0?kw(pw).replace('−',''):'0 W')+'</b><div class="gFlow"><i></i><i></i><i></i></div></div></div>'+
-  '<div class="gTiles"><div><span>แรงดัน'+(T.vn>1?'เฉลี่ย':'')+'</span>'+(T.v!=null?cnt('v',+T.v.toFixed(2),2,' V'):'<b>--</b>')+'</div><div><span>กระแส'+(T.live>1?'รวม':'')+'</span>'+(T.live?cnt('a',+T.ia.toFixed(1),1,' A'):'<b>--</b>')+'</div><div><span>คงเหลือ</span>'+cnt('kwh',+T.kwh.toFixed(1),1,' kWh')+'</div><div><span>วันนี้ชาร์จเข้า</span>'+(T.hasE?cnt('ei',+T.ei.toFixed(2),2,' kWh','+'):'<b>--</b>')+'</div><div><span>วันนี้จ่ายออก</span>'+(T.hasE?cnt('eo',+T.eo.toFixed(2),2,' kWh','−'):'<b>--</b>')+'</div>'+(T.hasKm?'<div><span>ระยะทางรวม</span>'+cnt('km',Math.round(T.km),0,' กม.')+'</div>':'')+'</div></div>';
+  '<div class="gSide out"'+(T.hasInv&&T.pload>10?' style="opacity:1"':'')+'><span>'+(T.hasInv?'🏠 ไฟบ้าน':ev?'🛵 ขับขี่':'🏠 จ่ายโหลด')+'</span><b>'+(T.hasInv?kw(T.pload).replace('+',''):pw<0?kw(pw).replace('−',''):'0 W')+'</b><div class="gFlow"><i></i><i></i><i></i></div></div></div>'+
+  (T.hasInv?'<div class="gTiles" style="margin-bottom:8px"><div><span>🔌 การไฟฟ้า</span><b>'+(T.pgrid>10?'ซื้อ '+kw(T.pgrid).replace('+',''):T.pgrid<-10?'ขาย '+kw(T.pgrid).replace('−',''):'0 W')+'</b></div>'+(T.epv!=null?'<div><span>☀️ วันนี้ผลิต</span>'+cnt('epv',+T.epv.toFixed(1),1,' kWh')+'</div>':'')+(T.eload!=null?'<div><span>🏠 วันนี้ใช้</span>'+cnt('eload',+T.eload.toFixed(1),1,' kWh')+'</div>':'')+'</div>':'')+'<div class="gTiles"><div><span>แรงดัน'+(T.vn>1?'เฉลี่ย':'')+'</span>'+(T.v!=null?cnt('v',+T.v.toFixed(2),2,' V'):'<b>--</b>')+'</div><div><span>กระแส'+(T.live>1?'รวม':'')+'</span>'+(T.live?cnt('a',+T.ia.toFixed(1),1,' A'):'<b>--</b>')+'</div><div><span>คงเหลือ</span>'+cnt('kwh',+T.kwh.toFixed(1),1,' kWh')+'</div><div><span>วันนี้ชาร์จเข้า</span>'+(T.hasE?cnt('ei',+T.ei.toFixed(2),2,' kWh','+'):'<b>--</b>')+'</div><div><span>วันนี้จ่ายออก</span>'+(T.hasE?cnt('eo',+T.eo.toFixed(2),2,' kWh','−'):'<b>--</b>')+'</div>'+(T.hasKm?'<div><span>ระยะทางรวม</span>'+cnt('km',Math.round(T.km),0,' กม.')+'</div>':'')+'</div></div>';
  const H=grpView.hist;
  if(!H)h+='<div class="card"><i class="sk"></i><i class="sk" style="width:70%"></i></div>';
  else if(!H.length)h+='<div class="card small muted">ยังไม่มีประวัติของกรุ๊ปนี้</div>';
@@ -648,7 +654,7 @@ function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(d
  $('vGrp').innerHTML=h;enterAnim('vGrp');runTweens($('vGrp'));if($('gShareBox'))shareCard($('gShareBox'),{group:g});shareBanner();$('vGrp').querySelectorAll('[data-gd]').forEach(e=>e.onclick=()=>go('d/'+e.dataset.gd+'/ov'))}
 // ---------- list
 let viewers=[];
-async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}fetchOkAt=Date.now();
+async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,kind,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}fetchOkAt=Date.now();
  devs=data.map(d=>{const l=Array.isArray(d.latest)?d.latest[0]:d.latest;latest[d.id]=l||null;delete d.latest;return d})}
 // A phone that slept or a background tab freezes the timers; do not call boards offline on stale data.
 let fetchOkAt=Date.now(),resumedAt=0;
@@ -667,8 +673,11 @@ function subListRT(){if(demo||share||listRT)return;listRT=sb.channel('latest-all
   if(!listDirty){listDirty=setTimeout(()=>{listDirty=0;if(!$('vList').classList.contains('hide'))renderList();else if(!$('vGrp').classList.contains('hide'))renderGroup()},1000)}})
  .subscribe(st=>{if(st==='CHANNEL_ERROR'||st==='TIMED_OUT'||st==='CLOSED'){const c=listRT;listRT=null;try{sb.removeChannel(c)}catch(e){}setTimeout(subListRT,5000)}})}
 function showList(){show('vList');startTicker();subListRT();renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
-function groupTotals(ds){const t={n:ds.length,live:0,vs:0,vn:0,ia:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
- ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
+function groupTotals(ds){const t={n:ds.length,live:0,vs:0,vn:0,ia:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0,hasInv:false,ppv:0,pload:0,pgrid:0,epv:null,eload:null};
+ const isInv=d=>{const x=(latest[d.id]||{}).data||{};return d.kind==='inverter'||!!x.inv},boards=ds.some(d=>!isInv(d)&&latest[d.id]);
+ ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};
+  if(isInv(d)){if(statusOf(l)[0]==='on'){t.hasInv=true;t.liveInv=(t.liveInv||0)+1;if(num(x.ppv))t.ppv+=x.ppv;if(num(x.pload))t.pload+=x.pload;if(num(x.pgrid))t.pgrid+=x.pgrid;if(num(x.epv))t.epv=(t.epv||0)+ +x.epv;if(num(x.eload))t.eload=(t.eload||0)+ +x.eload}if(boards)return}
+  if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
   if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.v)){t.vs+=x.v;t.vn++}if(num(x.i))t.ia+=x.i;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.full)&&x.full>0?+x.full:(num(x.cap)&&num(x.soc)&&x.soc>3?x.cap*100/x.soc:1);if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
  t.soc=t.cw?t.sw/t.cw:null;t.v=t.vn?t.vs/t.vn:null;return t}
 function kw(w){return (w>=0?'+':'−')+(Math.abs(w)>=1000?(Math.abs(w)/1000).toFixed(2)+' kW':Math.round(Math.abs(w))+' W')}
@@ -678,14 +687,31 @@ async function homeOta(id){const d=devs.find(x=>x.id===id),l=latest[id],x=l&&l.d
  if(d.demo){toast('นี่คือบอร์ดตัวอย่าง');return}
  const {error}=await sb.rpc('send_command',{p_device:id,p_cmd:'ota',p_args:{url:FW_BASE+up.url}});if(error){toast('ส่งไม่สำเร็จ: '+error.message);return}
  sb.rpc('remote_touch',{p_device:id}).then(()=>{},()=>{});updPend[id]=Date.now();toast('ส่งคำสั่งอัปเดตแล้ว บอร์ดจะดาวน์โหลดและรีสตาร์ทเอง');renderList()}
+// ---------- LuxPower cloud link (server polls the LuxPower View account every minute)
+let lux=null;
+async function luxLoad(){const b=$('luxBox');if(!b)return;const {data,error}=await sb.from('lux_accounts').select('username,status,last_ok,last_error,server,inverters').maybeSingle();if(error){b.innerHTML='<div class="small muted">'+esc(error.message)+'</div>';return}lux=data;luxPaint()}
+function luxPaint(){const b=$('luxBox'),sum=$('luxSum');if(!b)return;const a=lux;
+ if(sum)sum.textContent=a?(a.status==='ok'?'· เชื่อมแล้ว '+a.inverters+' เครื่อง':a.status==='pending'?'· กำลังเชื่อม…':'· มีปัญหา'):'';
+ if(!a){b.innerHTML='<div class="small muted">ใส่บัญชีเดียวกับที่ล็อกอินแอป LuxPower View ระบบจะดึงข้อมูลอินเวอร์เตอร์ (โซลาร์ · ไฟบ้าน · การไฟฟ้า · แบต) ทุก 1 นาที และสร้างการ์ดอินเวอร์เตอร์ให้เอง · รหัสผ่านเก็บแบบเข้ารหัสฝั่งเซิร์ฟเวอร์ ไม่ส่งกลับมาที่หน้าเว็บ</div><div class="th3" style="margin-top:8px"><label>ชื่อผู้ใช้ / อีเมล LuxPower<input id="luxU" maxlength="100" autocomplete="off"></label><label>รหัสผ่าน<input id="luxP" type="password" maxlength="100" autocomplete="new-password"></label></div><button id="luxGo" style="margin-top:8px">เชื่อมบัญชี LuxPower</button>';
+  $('luxGo').onclick=async()=>{const u=$('luxU').value.trim(),pw=$('luxP').value;if(u.length<3||!pw){toast('ใส่ชื่อผู้ใช้และรหัสผ่าน');return}$('luxGo').disabled=true;$('luxGo').textContent='กำลังเชื่อม…';
+   const {error}=await sb.rpc('lux_link',{p_user:u,p_pass:pw});$('luxP').value='';if(error){toast('เชื่อมไม่สำเร็จ: '+error.message);luxLoad();return}await luxPollNow()};return}
+ const st={ok:'✅ เชื่อมแล้ว',pending:'⏳ กำลังเชื่อม…',error:'⚠️ เชื่อมไม่ได้',no_inverter:'⚠️ ไม่พบอินเวอร์เตอร์ในบัญชีนี้'}[a.status]||a.status;
+ b.innerHTML='<div class="row" style="padding:4px 0"><span class="muted">บัญชี</span><b class="nf">'+esc(a.username)+'</b></div><div class="row" style="padding:4px 0"><span class="muted">สถานะ</span><b class="nf">'+st+'</b></div>'+(a.status==='ok'?'<div class="row" style="padding:4px 0"><span class="muted">อินเวอร์เตอร์ / อัปเดตล่าสุด</span><b class="nf">'+a.inverters+' เครื่อง · '+(a.last_ok?ago(a.last_ok):'--')+'</b></div>':'')+(a.last_error&&a.status!=='ok'?'<div class="small" style="color:var(--warn)">'+esc(a.last_error)+'</div>':'')+
+  '<div class="row wrap" style="gap:8px;margin-top:8px"><button class="soft" id="luxNow">🔄 ดึงข้อมูลตอนนี้</button><button class="soft" id="luxRe">เปลี่ยนบัญชี / รหัสผ่าน</button><button class="danger" id="luxOff">ยกเลิกการเชื่อม</button></div><div class="tiny muted" style="margin-top:6px">การ์ดอินเวอร์เตอร์จะขึ้นในหน้านี้ · จัดเข้ากรุ๊ปเดียวกับแบตได้ที่ ตั้งค่า → กรุ๊ป</div>';
+ $('luxNow').onclick=luxPollNow;$('luxRe').onclick=()=>{lux=null;luxPaint()};
+ $('luxOff').onclick=async()=>{if(!confirm('ยกเลิกการเชื่อม LuxPower? รหัสผ่านจะถูกลบทันที (การ์ดอินเวอร์เตอร์เดิมยังอยู่ ลบได้ที่ตั้งค่าของการ์ด)'))return;const {error}=await sb.rpc('lux_unlink');toast(error?error.message:'ยกเลิกแล้ว · ลบรหัสผ่านแล้ว');luxLoad()}}
+async function luxPollNow(){const b=$('luxNow')||$('luxGo');if(b){b.disabled=true;b.textContent='กำลังดึงข้อมูล… (~10 วินาที)'}
+ try{const {data,error}=await sb.functions.invoke('lux-poll',{body:{}});if(error)throw error;toast(data&&data.ok?'✓ เชื่อม LuxPower แล้ว พบ '+(data.inverters||0)+' เครื่อง':'เชื่อมไม่ได้: '+((data&&data.err)||'ตรวจชื่อผู้ใช้/รหัสผ่าน'));}catch(e){toast('ดึงข้อมูลไม่สำเร็จ: '+(e.message||e))}
+ await luxLoad();await loadDevices();renderList()}
 function renderList(){
- const on=devs.filter(d=>statusOf(latest[d.id])[0]!=='off').length;let pw=0,socs=[];
- devs.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
+ const on=devs.filter(d=>statusOf(latest[d.id])[0]!=='off').length;let pw=0,socs=[];const invOf=d=>d.kind==='inverter'||!!((latest[d.id]||{}).data||{}).inv,anyBoard=devs.some(d=>!invOf(d));
+ devs.forEach(d=>{const l=latest[d.id];if(anyBoard&&invOf(d))return;if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
+ {const lc=$('luxCard');if(lc){lc.classList.toggle('hide',!!share||demo);if(!lc.dataset.w){lc.dataset.w=1;luxLoad();lc.addEventListener('toggle',()=>{if(lc.open)luxLoad()})}}}
  {const sa=$('shareAll');if(sa){sa.classList.toggle('hide',!!share||demo||!devs.length);if(!sa.dataset.w){sa.dataset.w=1;sa.addEventListener('toggle',()=>{if(sa.open)shareCard($('shareAllBox'),{all:true})})}}}
  $('fleet').innerHTML='<div class="row wrap"><div><div class="big">'+(share?'แบตเตอรี่ที่แชร์ให้ดู':'อุปกรณ์ของฉัน')+'</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b>'+(()=>{const T=groupTotals(devs);return T.hasE||T.kwh?'<div class="tiny muted">'+(T.kwh?'คงเหลือ '+T.kwh.toFixed(1)+' kWh':'')+(T.hasE?' · วันนี้ +'+T.ei.toFixed(1)+' / −'+T.eo.toFixed(1)+' kWh':'')+'</div>':''})()+'</div>':'')+'</div>';
  const card=d=>{const l=latest[d.id],s=dset(d),[st,txt]=statusOf(l),al=evalAlerts(d,l);trackAlerts(d,al);const x=l&&l.data||{};const live=st==='on';const rk=live?evRange(x,s):null;
   return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)&&!share?(updPend[d.id]&&Date.now()-updPend[d.id]<300000?'<span class="abadge upd busy">⏳ กำลังอัปเดต…</span>':'<button class="abadge upd" data-upd="'+esc(d.id)+'"'+(st==='off'?' disabled title="บอร์ดต้องออนไลน์ก่อน"':'')+'>⬆ อัปเดต '+esc(fwUpdate(x).version)+'</button>'):'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?liqHtml(d.id,x.soc,!num(x.i)?'idle':x.i>0.3?'chg':x.i<-0.3?'dsg':'idle')+'<span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
-  (live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span>'+(rk!=null?'<b>'+Math.round(rk)+'</b> กม.':'<b>'+fmt(x.p,0)+'</b> W')+'</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'};
+  (live&&x.inv?'<div class="invline"><span>☀️ <b>'+fmt(x.ppv,0)+'</b> W</span><span>🏠 <b>'+fmt(x.pload,0)+'</b> W</span><span>🔌 <b>'+fmt(x.pgrid,0)+'</b> W</span>'+(num(x.epv)?'<span class="muted">วันนี้ ☀️ '+(+x.epv).toFixed(1)+' kWh</span>':'')+'</div>':'')+(live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span>'+(rk!=null?'<b>'+Math.round(rk)+'</b> กม.':'<b>'+fmt(x.p,0)+'</b> W')+'</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'};
  const grpOf=d=>dset(d).group||'',anyG=devs.some(d=>grpOf(d));let closed=new Set();try{closed=new Set(JSON.parse(localStorage.getItem('bl_grp_closed')||'[]'))}catch(e){}
  let cards=[];if(!anyG)cards=devs.map(card);else{const names=[...new Set(devs.map(grpOf))].sort((a,b)=>(a===''?1:0)-(b===''?1:0)||a.localeCompare(b,'th'));
   for(const g of names){const ds=devs.filter(d=>grpOf(d)===g),T=groupTotals(ds);
@@ -712,7 +738,7 @@ $('btnPair').onclick=async()=>{const code=$('pair').value.trim().toUpperCase();i
 
 // ---------- device view
 document.querySelectorAll('#dTabs .chip').forEach(c=>c.onclick=()=>go('d/'+cur.id+'/'+c.dataset.t));
-function openDev(dev,t){startTicker();const AL=dev.ble?['ov','cells','ctl']:dev.shared?['ov','cells','hist']:null;if(AL&&!AL.includes(t))t=AL[0]==='ov'&&dev.ble?'ctl':'ov';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!AL&&!AL.includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
+function openDev(dev,t){startTicker();const isInv=dev.kind==='inverter'||((latest[dev.id]||{}).data||{}).inv;const AL=dev.ble?['ov','cells','ctl']:dev.shared?(isInv?['ov','hist']:['ov','cells','hist']):isInv?['ov','hist','set']:null;if(AL&&!AL.includes(t))t=AL[0]==='ov'&&dev.ble?'ctl':'ov';document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('hide',!!AL&&!AL.includes(c.dataset.t)));const same=cur&&cur.id===dev.id;if(!same){stopAll();cur=dev;ctlTyped={};energyAt=0;energyToday=null;hist=[];packSel=null;packH=null}tab=t;show('vDev');
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
  ctlKey='';renderDev(true);if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
@@ -761,6 +787,20 @@ const seenAl=new Set();function alertsHtml(al){return al.length?'<div class="ale
 // ---------- dashboard styles (A energy flow · B clean · C cockpit · O original), remembered per board
 function dstyle(id){return ls.get('bl_dstyle_'+id,'A')}
 function styleSeg(v){return '<div class="dseg" role="tablist">'+[['A','พลังงานไหล'],['B','เรียบสะอาด'],['C','ห้องนักบิน'],['O','แบบเดิม']].map(([k,n])=>'<button data-ds="'+k+'" class="'+(k===v?'on':'')+'">'+n+'</button>').join('')+'</div>'}
+// ---------- inverter (LuxPower) overview: animated power-flow diagram
+function invHero(d,x,soc){const P=v=>num(v)?Math.round(v):0,ppv=P(d.ppv),pl=P(d.pload),pg=P(d.pgrid),pb=P(d.p),id=cur.id;
+ const W=w=>Math.abs(w)>=1000?(Math.abs(w)/1000).toFixed(2)+' kW':Math.abs(w)+' W';
+ const ln=(x1,y1,x2,y2,on,rev,col)=>'<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="rgba(255,255,255,.10)" stroke-width="4" stroke-linecap="round"/>'+(on?'<line class="ifl'+(rev?' rev':'')+'" x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+col+'" stroke-width="4" stroke-linecap="round"/>':'');
+ const node=(cx,cy,ic,lab,val,on,col)=>'<g class="inode'+(on?' on':'')+'"><circle cx="'+cx+'" cy="'+cy+'" r="30" fill="#0e1820" stroke="'+(on?col:'rgba(255,255,255,.12)')+'" stroke-width="2.5"/><text x="'+cx+'" y="'+(cy+8)+'" text-anchor="middle" font-size="24">'+ic+'</text><text x="'+cx+'" y="'+(cy+50)+'" text-anchor="middle" class="ilab">'+lab+'</text><text x="'+cx+'" y="'+(cy+68)+'" text-anchor="middle" class="ival">'+val+'</text></g>';
+ const svg='<svg class="iflow" viewBox="0 0 360 346">'+
+  ln(180,64,180,135,ppv>10,false,'#f2c14e')+ln(64,165,148,165,Math.abs(pg)>10,pg<0,'#3d8fe8')+ln(212,165,296,165,pl>10,false,'#36c4a8')+ln(180,197,180,252,Math.abs(pb)>10,pb<0,pb>=0?'#40c878':'#e8a040')+
+  '<rect x="148" y="135" width="64" height="62" rx="16" fill="#132430" stroke="#36c4a8" stroke-width="2"/><text x="180" y="163" text-anchor="middle" font-size="20">⚡</text><text x="180" y="185" text-anchor="middle" class="ilab">'+esc(String(d.model||'Inverter').slice(0,10))+'</text>'+
+  node(180,34,'☀️','โซลาร์',W(ppv),ppv>10,'#f2c14e')+node(34,165,'🔌',pg>10?'ซื้อไฟ':pg<-10?'ขายไฟ':'การไฟฟ้า',W(pg),Math.abs(pg)>10,'#3d8fe8')+node(326,165,'🏠','ไฟบ้าน',W(pl),pl>10,'#36c4a8')+
+  node(180,268,'🔋',pb>10?'ชาร์จแบต':pb<-10?'แบตจ่ายไฟ':'แบต',(num(d.soc)?Math.round(d.soc)+'% · ':'')+W(pb),Math.abs(pb)>10,pb>=0?'#40c878':'#e8a040')+'</svg>';
+ const e=(k,lab)=>num(d[k])?'<div><span>'+lab+'</span><b>'+(+d[k]).toFixed(1)+' kWh</b></div>':'';
+ return '<div class="hA iHero"><div class="top"><div><b>'+esc(cur.name)+'</b><br>'+esc(d.model||'LuxPower')+(d.status?' · '+esc(d.status):'')+'</div><span class="live"><i></i>LuxPower Cloud</span></div>'+svg+
+  '<div class="tilesA iTiles">'+e('epv','☀️ วันนี้ผลิต')+e('eload','🏠 วันนี้ใช้')+e('egrid','🔌 วันนี้ซื้อไฟ')+e('ein','🔋 ชาร์จเข้า')+e('eout','🔋 จ่ายออก')+'</div>'+
+  '<div class="tiny muted" style="margin-top:8px">ข้อมูลจาก LuxPower Cloud อัปเดตประมาณทุก 1 นาที'+(d.devtime?' · เวลาอินเวอร์เตอร์ '+esc(d.devtime):'')+'</div></div>'}
 function heroABC(V,d,x,s,soc,rk,ev,st){const p=num(d.p)?d.p:0,chg=x.mode==='chg',dsg=x.mode==='dsg',id=cur.id;
  const eta=(chg||dsg)&&num(x.eta)?hm(x.eta):'—',capAh=num(d.cap)?d.cap:null,kwh=capAh!=null&&num(d.v)?capAh*d.v/1000:null;
  const big=ev&&rk!=null?Math.round(rk):Math.round(soc),bigU=ev&&rk!=null?'กม.':'%',oBig=twOld('hb:'+V+id,big);
@@ -803,7 +843,7 @@ function renderOv(){const l=latest[cur.id],s=dset(cur),d=l&&l.data||{},x=derive(
  if(x.live){const soc=num(d.soc)?Math.max(0,Math.min(100,d.soc)):0,L=2*Math.PI*80*0.75,ev=isEvP(s),rk=evRange(d,s);
   const st=ev?(x.mode==='chg'?'ชาร์จ / ชาร์จคืน':x.mode==='dsg'?'กำลังขับขี่':'จอด'):x.mode==='chg'?'กำลังชาร์จ':x.mode==='dsg'?'กำลังจ่ายไฟ':'พัก';
   const oSoc=twOld('soc:'+cur.id,soc),oRk=rk!=null?twOld('rk:'+cur.id,rk):null,frac=ev&&rk!=null?soc:soc;
-  const DS=dstyle(cur.id);h+=styleSeg(DS);
+  if(d.inv){h+=invHero(d,x,soc)}else{const DS=dstyle(cur.id);h+=styleSeg(DS);
   if(DS==='O'){
   h+='<div class="card hero" style="--socc:'+socColor(soc)+'"><div class="ring"><svg viewBox="0 0 190 190" width="190" height="190"><g transform="rotate(135 95 95)"><circle cx="95" cy="95" r="80" fill="none" stroke="var(--line)" stroke-width="16" stroke-dasharray="'+L+' 999" stroke-linecap="round"/><circle class="arc" cx="95" cy="95" r="80" fill="none" stroke="'+socColor(soc)+'" stroke-width="16" stroke-dasharray="'+(L*(oSoc??0)/100)+' 999" data-dash="'+(L*frac/100)+' 999" stroke-linecap="round" style="filter:drop-shadow(0 0 7px '+socColor(soc)+')"/></g></svg>'+
    (ev&&rk!=null?'<div class="v"><b data-count="'+Math.round(rk)+'" data-from="'+Math.round(oRk??0)+'">'+Math.round(oRk??0)+'</b><span class="muted small">กม. · SOC '+Math.round(soc)+'%</span></div>':'<div class="v"><b data-count="'+Math.round(soc)+'" data-from="'+Math.round(oSoc??0)+'" data-suf="%">'+Math.round(oSoc??0)+'%</b><span class="muted small">SOC'+(ev?' · ใส่ Wh/กม. เพื่อดูระยะทาง':'')+'</span></div>')+'</div>'+
@@ -811,7 +851,7 @@ function renderOv(){const l=latest[cur.id],s=dset(cur),d=l&&l.data||{},x=derive(
    '<div class="muted" style="margin-top:4px">'+(ev&&rk!=null?'วิ่งได้อีกประมาณ <b style="color:var(--text)">'+Math.round(rk)+' กม.</b> ที่ '+s.profile.whkm+' Wh/กม.':x.mode==='chg'&&num(x.eta)?'เต็มในอีกประมาณ <b style="color:var(--text)">'+hm(x.eta)+'</b>':x.mode==='dsg'&&num(x.eta)?'ใช้ได้อีกประมาณ <b style="color:var(--text)">'+hm(x.eta)+'</b>':'')+'</div>'+
    '<div style="margin-top:10px;font-size:28px;font-weight:800;font-variant-numeric:tabular-nums">'+rollHtml('v:'+cur.id,fmt(d.v,2))+' <span class="muted" style="font-size:16px">V</span> &nbsp; '+rollHtml('i:'+cur.id,fmt(d.i,1))+' <span class="muted" style="font-size:16px">A</span></div>'+
    '<div class="pills"><span class="pill '+(d.chg?'on':'off')+'">ชาร์จ '+(d.chg?'เปิด':'ปิด')+'</span><span class="pill '+(d.dsg?'on':'off')+'">จ่ายไฟ '+(d.dsg?'เปิด':'ปิด')+'</span><span class="pill">'+esc(CHEM[x.chem].n)+'</span>'+(x.cells?'<span class="pill">'+x.cells.length+'S</span>':'')+(packsOf(d)?'<span class="pill on">ทั้งแบงก์ '+packsOf(d).length+' ลูก</span>':'')+'</div>'+flowSvg(x.mode,d,s)+'</div></div>';
-  }else h+=heroABC(DS,d,x,s,soc,rk,ev,st);
+  }else h+=heroABC(DS,d,x,s,soc,rk,ev,st);}
   const tiles=s.order.filter(k=>!s.hidden.includes(k)).map(k=>tileHtml(k,d,x,s)).join('');
   h+='<div class="card"><div class="row"><h3 style="margin:0">ค่าทั้งหมด</h3><button class="ghost nf" style="padding:6px 12px;font-size:13px" onclick="go(\'d/'+esc(cur.id)+'/set\')">ปรับแต่ง</button></div><div class="tiles" style="margin-top:10px">'+tiles+'</div></div>';
   if(x.cells)h+='<div class="card" style="cursor:pointer" onclick="go(\'d/'+esc(cur.id)+'/cells\')"><div class="row"><h3 style="margin:0">เซลล์ '+x.cells.length+' ก้อน</h3><span class="nf small muted">ดูทั้งหมด ›</span></div>'+cellDevSvg(x,120)+'<div class="small muted">ต่ำสุด '+x.cmin.toFixed(3)+' V (#'+x.imin+') · สูงสุด '+x.cmax.toFixed(3)+' V (#'+x.imax+') · Δ '+x.delta+' mV · '+balanceTxt(x.delta)+'</div></div>'}
