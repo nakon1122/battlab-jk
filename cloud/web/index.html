@@ -115,6 +115,7 @@ main{max-width:1000px;margin:0 auto;padding:14px 16px 90px}
 .pk .kv2 b{color:var(--text)}.pk .mos{display:flex;gap:4px;margin-top:6px}.pk .mos span{font-size:10.5px;padding:2px 7px;border-radius:10px;background:var(--line);color:var(--muted);font-weight:700}.pk .mos span.on{background:color-mix(in srgb,var(--good) 22%,transparent);color:var(--good)}
 .shareban{background:rgba(54,196,168,.12);border:1px solid rgba(54,196,168,.3);color:var(--text);border-radius:12px;padding:8px 12px;font-size:13px;margin-bottom:10px}.shareban a{color:var(--accent);cursor:pointer;font-weight:700}
 body.shared #btnLogin,body.shared #btnBack{display:none!important}
+.abadge.upd{border:0;cursor:pointer;font:inherit;font-size:11px;font-weight:700;color:#fff;background:var(--s1);box-shadow:0 0 0 0 rgba(57,135,229,.6);animation:updPulse 2s infinite}.abadge.upd:disabled{opacity:.45;cursor:not-allowed;animation:none}.abadge.upd.busy{background:var(--warn);animation:none}@keyframes updPulse{70%{box-shadow:0 0 0 7px rgba(57,135,229,0)}100%{box-shadow:0 0 0 0 rgba(57,135,229,0)}}
 .gview{margin-left:8px;color:var(--accent);font-weight:700;cursor:pointer;white-space:nowrap}
 .gtiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .gtiles>div{background:var(--card2);border:1px solid var(--line);border-radius:14px;padding:12px}.gtiles span{font-size:12px;color:var(--muted)}.gtiles b{display:block;font-size:22px;font-variant-numeric:tabular-nums;margin-top:2px}
@@ -458,7 +459,7 @@ async function fetchHist(dev,from,to,b){if(dev.demo)return demoHist(from,to,b);i
 function chem(s,x){if(s.chem!=='auto')return s.chem;if(!num(x.cmax))return 'LFP';return x.cmax<2.9?'LTO':x.cmax<3.75?'LFP':'NMC'}
 const CHEM={LFP:{lo:2.8,hi:3.65,n:'LiFePO4'},NMC:{lo:3.0,hi:4.2,n:'Li-ion NMC'},LTO:{lo:1.8,hi:2.8,n:'LTO'}};
 function derive(l,s){const d=(l&&l.data)||{},x={live:false};if(!l)return x;
- x.age=(Date.now()-new Date(l.ts))/1000;x.online=x.age<150;x.live=x.online&&num(d.v);
+ x.age=(Date.now()-new Date(l.ts))/1000;x.online=x.age<180||Date.now()-fetchOkAt>45000||Date.now()-resumedAt<10000;x.live=x.online&&num(d.v);
  const c=(d.cells||[]).filter(v=>v>0);if(c.length){x.cells=c;x.cmin=Math.min(...c);x.cmax=Math.max(...c);x.cavg=c.reduce((a,b)=>a+b,0)/c.length;x.delta=Math.round((x.cmax-x.cmin)*1000);x.imin=c.indexOf(x.cmin)+1;x.imax=c.indexOf(x.cmax)+1}
  else if(num(d.cmin)&&num(d.cmax)&&d.cmax>0){x.cmin=d.cmin;x.cmax=d.cmax;x.delta=Math.round((d.cmax-d.cmin)*1000);x.imin=x.imax='?';
   if(Array.isArray(d.packs))for(const p of d.packs){const c=(p.cells||[]).map(Number);c.forEach((v,i)=>{if(Math.abs(v-d.cmin)<6e-4)x.imin='#'+p.a+'/'+(i+1);if(Math.abs(v-d.cmax)<6e-4)x.imax='#'+p.a+'/'+(i+1)})}}
@@ -628,22 +629,34 @@ function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(d
  $('vGrp').innerHTML=h;enterAnim('vGrp');runTweens($('vGrp'));if($('gShareBox'))shareCard($('gShareBox'),{group:g});shareBanner();$('vGrp').querySelectorAll('[data-gd]').forEach(e=>e.onclick=()=>go('d/'+e.dataset.gd+'/ov'))}
 // ---------- list
 let viewers=[];
-async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}
+async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers').select('id,name,pair_code,last_seen,fw').order('created_at').then(({data})=>{viewers=data||[];renderViewers()});const {data,error}=await sb.from('devices').select('id,name,pair_code,settings,created_at,last_seen,latest(ts,data)').order('created_at');if(error){toast('โหลดอุปกรณ์ไม่สำเร็จ: '+error.message);devs=[];return}fetchOkAt=Date.now();
  devs=data.map(d=>{const l=Array.isArray(d.latest)?d.latest[0]:d.latest;latest[d.id]=l||null;delete d.latest;return d})}
-function statusOf(l){if(!l)return ['off','ยังไม่เคยส่งข้อมูล'];const x=(Date.now()-new Date(l.ts))/1000;if(x>150)return ['off','ออฟไลน์ · '+ago(l.ts)];if(!num(l.data&&l.data.v))return ['wait','ออนไลน์ · ยังไม่ได้เชื่อม BMS'];return ['on','ออนไลน์']}
+// A phone that slept or a background tab freezes the timers; do not call boards offline on stale data.
+let fetchOkAt=Date.now(),resumedAt=0;
+function onResume(){if(document.visibilityState!=='visible')return;resumedAt=Date.now();
+ if(share){shareLoad(true).then(()=>{if(!$('vList').classList.contains('hide'))renderList();else if(!$('vGrp').classList.contains('hide'))renderGroup();else if(cur)renderDev()});return}
+ if(cur)refresh();else if(!$('vList').classList.contains('hide')&&!demo)loadDevices().then(renderList);else if(!$('vGrp').classList.contains('hide'))renderGroup()}
+document.addEventListener('visibilitychange',onResume);window.addEventListener('focus',onResume);window.addEventListener('pageshow',onResume);
+function statusOf(l){if(!l)return ['off','ยังไม่เคยส่งข้อมูล'];const x=(Date.now()-new Date(l.ts))/1000;if(x>180){if(Date.now()-fetchOkAt>45000||Date.now()-resumedAt<10000)return ['wait','กำลังอัปเดตข้อมูล…'];return ['off','ออฟไลน์ · '+ago(l.ts)]}if(!num(l.data&&l.data.v))return ['wait','ออนไลน์ · ยังไม่ได้เชื่อม BMS'];return ['on','ออนไลน์']}
 function showList(){show('vList');renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
 function groupTotals(ds){const t={n:ds.length,live:0,vs:0,vn:0,ia:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
  ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
   if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.v)){t.vs+=x.v;t.vn++}if(num(x.i))t.ia+=x.i;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.full)&&x.full>0?+x.full:(num(x.cap)&&num(x.soc)&&x.soc>3?x.cap*100/x.soc:1);if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
  t.soc=t.cw?t.sw/t.cw:null;t.v=t.vn?t.vs/t.vn:null;return t}
 function kw(w){return (w>=0?'+':'−')+(Math.abs(w)>=1000?(Math.abs(w)/1000).toFixed(2)+' kW':Math.round(Math.abs(w))+' W')}
+const updPend={};
+async function homeOta(id){const d=devs.find(x=>x.id===id),l=latest[id],x=l&&l.data,up=fwUpdate(x);if(!d||!up)return;
+ if(!confirm('อัปเดต "'+d.name+'" เป็นเฟิร์มแวร์ '+up.version+'?\nบอร์ดจะหยุดอ่าน BMS ประมาณ 1 นาทีระหว่างดาวน์โหลด แล้วรีสตาร์ทเอง'))return;
+ if(d.demo){toast('นี่คือบอร์ดตัวอย่าง');return}
+ const {error}=await sb.rpc('send_command',{p_device:id,p_cmd:'ota',p_args:{url:FW_BASE+up.url}});if(error){toast('ส่งไม่สำเร็จ: '+error.message);return}
+ sb.rpc('remote_touch',{p_device:id}).then(()=>{},()=>{});updPend[id]=Date.now();toast('ส่งคำสั่งอัปเดตแล้ว บอร์ดจะดาวน์โหลดและรีสตาร์ทเอง');renderList()}
 function renderList(){
  const on=devs.filter(d=>statusOf(latest[d.id])[0]!=='off').length;let pw=0,socs=[];
  devs.forEach(d=>{const l=latest[d.id];if(l&&statusOf(l)[0]==='on'){if(num(l.data.p))pw+=l.data.p;if(num(l.data.soc))socs.push(l.data.soc)}});
  {const sa=$('shareAll');if(sa){sa.classList.toggle('hide',!!share||demo||!devs.length);if(!sa.dataset.w){sa.dataset.w=1;sa.addEventListener('toggle',()=>{if(sa.open)shareCard($('shareAllBox'),{all:true})})}}}
  $('fleet').innerHTML='<div class="row wrap"><div><div class="big">'+(share?'แบตเตอรี่ที่แชร์ให้ดู':'อุปกรณ์ของฉัน')+'</div><div class="small muted">'+devs.length+' เครื่อง · ออนไลน์ '+on+'</div></div>'+(socs.length?'<div class="nf" style="text-align:right"><div class="small muted">กำลังรวม / SOC เฉลี่ย</div><b style="font-size:20px">'+Math.round(pw)+' W · '+Math.round(socs.reduce((a,b)=>a+b,0)/socs.length)+'%</b>'+(()=>{const T=groupTotals(devs);return T.hasE||T.kwh?'<div class="tiny muted">'+(T.kwh?'คงเหลือ '+T.kwh.toFixed(1)+' kWh':'')+(T.hasE?' · วันนี้ +'+T.ei.toFixed(1)+' / −'+T.eo.toFixed(1)+' kWh':'')+'</div>':''})()+'</div>':'')+'</div>';
  const card=d=>{const l=latest[d.id],s=dset(d),[st,txt]=statusOf(l),al=evalAlerts(d,l);trackAlerts(d,al);const x=l&&l.data||{};const live=st==='on';const rk=live?evRange(x,s):null;
-  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)?'<span class="abadge" style="background:var(--s1)">มีอัปเดต</span>':'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?liqHtml(d.id,x.soc,num(x.i)&&x.i>0.3)+'<span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
+  return '<div class="card dcard" data-id="'+esc(d.id)+'" style="--dc:'+(live?socColor(x.soc):st==='wait'?'var(--warn)':'var(--line)')+'"><div class="row"><span class="ic nf">'+esc(s.icon)+'</span><div><b>'+esc(d.name)+'</b>'+(al.length?'<span class="abadge">'+al.length+'</span>':'')+(fwUpdate(x)&&!share?(updPend[d.id]&&Date.now()-updPend[d.id]<300000?'<span class="abadge upd busy">⏳ กำลังอัปเดต…</span>':'<button class="abadge upd" data-upd="'+esc(d.id)+'"'+(st==='off'?' disabled title="บอร์ดต้องออนไลน์ก่อน"':'')+'>⬆ อัปเดต '+esc(fwUpdate(x).version)+'</button>'):'')+(live&&x.bank>1?'<span class="abadge" style="background:var(--good)">🔋×'+x.bank+'</span>':'')+'<div class="small muted"><span class="dot '+st+'"></span> '+esc(txt)+'</div></div><div class="nf row" style="gap:10px">'+(live&&num(x.soc)?liqHtml(d.id,x.soc,num(x.i)&&x.i>0.3)+'<span class="big">'+Math.round(x.soc)+'%</span>':'')+'</div></div>'+
   (live?'<div class="socbar"><i style="width:'+Math.max(0,Math.min(100,x.soc))+'%;background:'+socColor(x.soc)+'"></i></div><div class="kv"><span><b>'+fmt(x.v,1)+'</b> V</span><span><b>'+fmt(x.i,1)+'</b> A</span><span>'+(rk!=null?'<b>'+Math.round(rk)+'</b> กม.':'<b>'+fmt(x.p,0)+'</b> W')+'</span><span><b>'+fmtT(x.t1)+'</b> '+tU()+'</span></div>':'')+'</div>'};
  const grpOf=d=>dset(d).group||'',anyG=devs.some(d=>grpOf(d));let closed=new Set();try{closed=new Set(JSON.parse(localStorage.getItem('bl_grp_closed')||'[]'))}catch(e){}
  let cards=[];if(!anyG)cards=devs.map(card);else{const names=[...new Set(devs.map(grpOf))].sort((a,b)=>(a===''?1:0)-(b===''?1:0)||a.localeCompare(b,'th'));
@@ -655,6 +668,7 @@ function renderList(){
  $('devList').innerHTML=devs.length||!demo?cards.join(''):'';
  if(!devs.length&&!demo)$('devList').insertAdjacentHTML('afterbegin','<div class="card empty"><div class="e">🔌</div><b>ยังไม่มีอุปกรณ์</b><div class="small muted">เพิ่มด้วยรหัสจับคู่ด้านล่าง</div></div>');
  runTweens($('devList'));
+ $('devList').querySelectorAll('[data-upd]').forEach(b=>b.onclick=ev=>{ev.stopPropagation();homeOta(b.dataset.upd)});
  $('devList').querySelectorAll('[data-gv]').forEach(e=>e.onclick=ev=>{ev.stopPropagation();go('g/'+encodeURIComponent(e.dataset.gv))});
  $('devList').querySelectorAll('.grp').forEach(e=>e.onclick=()=>{const k=e.dataset.g;closed.has(k)?closed.delete(k):closed.add(k);try{localStorage.setItem('bl_grp_closed',JSON.stringify([...closed]))}catch(x){}renderList()});
  $('devList').querySelectorAll('.dcard').forEach(e=>e.onclick=()=>{const id=e.dataset.id;if(id===DEMO_ID&&!devs.find(d=>d.id===DEMO_ID)){devs.push(demoDev())}go('d/'+id+'/ov')})}
@@ -674,8 +688,8 @@ function openDev(dev,t){const AL=dev.ble?['ov','cells','ctl']:dev.shared?['ov','
  document.querySelectorAll('#dTabs .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===t));['ov','cells','hist','ctl','alert','set'].forEach(k=>$('tab_'+k).classList.toggle('hide',k!==t));
  ctlKey='';renderDev(true);if(t==='hist')loadHistory();else destroyCharts();if(t==='ctl'){ctlTouch(true);loadCmds()}
  if(!same){refresh();subRT();}clearInterval(pollT);pollT=setInterval(refresh,Math.max(3,P.refresh)*1000);window.scrollTo(0,0)}
-function subRT(){if(cur.demo||cur.ble||cur.shared)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
-async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(dev).catch(()=>null);if(cur!==dev)return;if(l)latest[dev.id]=l;
+function subRT(){if(cur.demo||cur.ble||cur.shared)return;rt=sb.channel('l-'+cur.id).on('postgres_changes',{event:'*',schema:'public',table:'latest',filter:'device_id=eq.'+cur.id},p=>{if(p.new&&p.new.data&&cur){latest[cur.id]={ts:p.new.ts,data:p.new.data};fetchOkAt=Date.now();renderDev()}}).subscribe(st=>{rtOn=st==='SUBSCRIBED'})}
+async function refresh(){if(!cur)return;const dev=cur;const l=await fetchLatest(dev).catch(()=>null);if(cur!==dev)return;if(l){latest[dev.id]=l;fetchOkAt=Date.now()}
  if(l&&l.data&&l.data.fw){if(fwSeen[dev.id]&&fwSeen[dev.id]!==l.data.fw)toast('✓ บอร์ดใช้เฟิร์มแวร์ '+l.data.fw+' แล้ว');fwSeen[dev.id]=l.data.fw}
  if(!dev.ble&&Date.now()-energyAt>300000){energyAt=Date.now();const m=new Date();m.setHours(0,0,0,0);fetchHist(dev,m.getTime(),Date.now(),dev.demo?600:3600).then(r=>{energyToday=energyOf(r);if(tab==='ov')renderDev()}).catch(()=>{})}
  if(tab!=='hist'&&tab!=='set'&&tab!=='alert')renderDev();else renderHeader();if(tab==='ctl')ctlTouch();
