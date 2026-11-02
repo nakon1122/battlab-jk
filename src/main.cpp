@@ -30,9 +30,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.5-cyd35"
+#define BATTLAB_FW "2.8.6-cyd35"
 #else
-#define BATTLAB_FW "2.8.5-s3"
+#define BATTLAB_FW "2.8.6-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -85,13 +85,14 @@ struct Shared {
   String f2hex;                     // last JK cell frame, for checking the layout remotely
   uint32_t links = 0, lastLinkMs = 0; // link losses and how long the last link lasted
   String subLog, peerName;            // CCCD subscribe results, GAP device name of the BMS
+  String codeBt, codeSet;             // JK passcodes from the device-info frame (owner recovery)
   String state = "UNCONFIGURED", devices = "[]";
   uint32_t devStamp = 0;
   float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
   uint64_t pvHave = 0;          // bit i = pv[i] was read from the BMS    // when the last BLE scan finished
 #ifndef BATTLAB_DISPLAY
   // RS485 bus with several packs (index = DIP / Modbus address 0..15)
-  struct Pack { jk::Sample s; uint32_t stamp = 0; bmsw::JkSettings js; uint32_t setStamp = 0; String model; char serial[12] = {0}; };
+  struct Pack { jk::Sample s; uint32_t stamp = 0; bmsw::JkSettings js; uint32_t setStamp = 0; String model; char serial[12] = {0}; String codeBt, codeSet; };
   Pack packs[16];
 #endif
   uint8_t busMode = 0;          // 0 single pack, 1 listening to a master (DIP 0), 2 board polls the packs
@@ -594,6 +595,11 @@ void bleWorker(void *) {
                     shared.software.c_str());
       // Informational code check only; telemetry is read either way.
       std::string expectedConnection, expectedParameter;
+      {
+        std::string cb, cs;
+        shared.codeBt = jk::readCode(b, 300, 62, cb) ? String(cb.c_str()) : "";
+        shared.codeSet = jk::readCode(b, 300, 118, cs) ? String(cs.c_str()) : "";
+      }
       if (!c.bluetoothCode.length())
         shared.connectionAuth = "NOT_SET";
       else if (!jk::readCode(b, 300, 62, expectedConnection))
@@ -2007,9 +2013,26 @@ static String otaUrl;
 static bool otaWanted = false;
 static uint32_t wifiRevertAt = 0;
 
+// JK passcodes for the owner (local page / cloud command). pack < 0 = the BLE BMS.
+static String jkCodesJson(int pack) {
+  StaticJsonDocument<256> d;
+  Guard g;
+  String bt = shared.codeBt, st = shared.codeSet;
+#ifndef BATTLAB_DISPLAY
+  if (pack >= 0 && pack < 16) { bt = shared.packs[pack].codeBt; st = shared.packs[pack].codeSet; }
+#endif
+  d["ok"] = bt.length() > 0 || st.length() > 0;
+  d["bt"] = bt;
+  d["set"] = st;
+  if (pack >= 0) d["a"] = pack;
+  String out;
+  serializeJson(d, out);
+  return out;
+}
 static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   ok = true;
   if (c == "ping") return "pong";
+  if (c == "jk_codes") { String r = jkCodesJson(a["a"] | -1); ok = r.indexOf("\"ok\":true") >= 0; return r; }
   if (c == "led") {
     LedCfg l = ledGet();
     if (a.containsKey("on")) l.on = a["on"].as<bool>();
@@ -3003,6 +3026,11 @@ static void rs485Task(void *) {
     } else if (b[4] == 3) {
       pk.model = asciiField(b + 6, 16);
       serialOf(b, pk.serial);
+      {
+        std::string cb, cs;
+        pk.codeBt = jk::readCode(b, 300, 62, cb) ? String(cb.c_str()) : "";
+        pk.codeSet = jk::readCode(b, 300, 118, cs) ? String(cs.c_str()) : "";
+      }
       if (a == linkCfg.addr || shared.model.length() == 0) {
         shared.model = pk.model;
         shared.hardware = asciiField(b + 22, 8);
@@ -3719,6 +3747,12 @@ void setup() {
       s = shared.devices;
     }
     web.send(200, "application/json", s);
+  });
+  web.on("/api/jk_codes", HTTP_GET, []() {
+    if (!localRequest()) return;
+    int pack = web.hasArg("a") ? web.arg("a").toInt() : -1;
+    web.sendHeader("Cache-Control", "no-store");
+    web.send(200, "application/json", jkCodesJson(pack));
   });
   web.on("/api/auth", HTTP_POST, []() {
     if (!localRequest()) return;

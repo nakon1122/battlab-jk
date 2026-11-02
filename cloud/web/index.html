@@ -832,7 +832,7 @@ function fwCardHtml(d,c){const b=MAN&&MAN.boards&&MAN.boards[boardOf(d)],up=fwUp
 const LED_MODES=['รุ้ง (Rainbow)','สีเดียว','หายใจ (Breathe)','ตามสถานะแบต'];
 const LED_PAL=[['#FF0000','แดง'],['#FF5000','ส้ม'],['#FFBE00','เหลือง'],['#00FF28','เขียว'],['#00DCFF','ฟ้า'],['#0032FF','น้ำเงิน'],['#AA00FF','ม่วง'],['#FFFFFF','ขาว']];
 const JKP=[['Cell OVP','แรงดันเซลล์สูงสุด (OVP)','V',.01,2.8,4.3,3],['OVP recovery','คืนค่าจาก OVP','V',.01,2.7,4.25,3],['Cell UVP','แรงดันเซลล์ต่ำสุด (UVP)','V',.01,2.0,3.4,3],['UVP recovery','คืนค่าจาก UVP','V',.01,2.1,3.6,3],['Power off','แรงดันตัดระบบ','V',.01,2.0,3.3,3],['Balance start','เริ่มบาลานซ์ที่','V',.01,2.8,4.2,3],['Balance trigger','บาลานซ์เมื่อต่างกัน','V',.001,.003,.1,3],['Max balance I','กระแสบาลานซ์สูงสุด','A',.1,.3,4,1],['Max charge I','กระแสชาร์จสูงสุด','A',1,1,300,0],['Max discharge I','กระแสจ่ายสูงสุด','A',1,1,400,0],['Charge OTP','อุณหภูมิสูงสุดขณะชาร์จ','°C',1,30,70,0],['Discharge OTP','อุณหภูมิสูงสุดขณะจ่าย','°C',1,30,80,0],['Charge UTP','อุณหภูมิต่ำสุดขณะชาร์จ','°C',1,-30,15,0],['MOS OTP','อุณหภูมิ MOS สูงสุด','°C',1,50,100,0],['Capacity','ความจุแบต','Ah',1,1,2000,0]];
-const CMD_TH={link:'ช่องทางเชื่อม BMS',ota:'อัปเดตเฟิร์มแวร์',forget_wifi:'ลืม Wi-Fi บ้าน',led:'ไฟ RGB',bms_scan:'ค้นหา BMS',bms_connect:'เชื่อม BMS',bms_auto:'เชื่อม BMS อัตโนมัติ',bms_disconnect:'ตัดการเชื่อม BMS',bms_param:'ตั้งพารามิเตอร์',bms_switch:'สวิตช์ MOS',bms_read:'อ่านค่าจาก BMS',wifi_ap:'ฮอตสปอต BATTLAB',radio_max:'กำลังส่งวิทยุ',home_wifi:'เปลี่ยน Wi-Fi บ้าน',wifi_scan:'ค้นหา Wi-Fi',display:'ตั้งค่าหน้าจอ',restart:'รีสตาร์ทบอร์ด',ping:'ทดสอบการเชื่อมต่อ'};
+const CMD_TH={jk_codes:'กู้รหัส JK',link:'ช่องทางเชื่อม BMS',ota:'อัปเดตเฟิร์มแวร์',forget_wifi:'ลืม Wi-Fi บ้าน',led:'ไฟ RGB',bms_scan:'ค้นหา BMS',bms_connect:'เชื่อม BMS',bms_auto:'เชื่อม BMS อัตโนมัติ',bms_disconnect:'ตัดการเชื่อม BMS',bms_param:'ตั้งพารามิเตอร์',bms_switch:'สวิตช์ MOS',bms_read:'อ่านค่าจาก BMS',wifi_ap:'ฮอตสปอต BATTLAB',radio_max:'กำลังส่งวิทยุ',home_wifi:'เปลี่ยน Wi-Fi บ้าน',wifi_scan:'ค้นหา Wi-Fi',display:'ตั้งค่าหน้าจอ',restart:'รีสตาร์ทบอร์ด',ping:'ทดสอบการเชื่อมต่อ'};
 const ST_TH={pending:'รอบอร์ด',sent:'บอร์ดรับแล้ว',done:'สำเร็จ',error:'ไม่สำเร็จ',expired:'หมดเวลา'};
 let cmds=[],cmdT=null,touchAt=0,ctlKey='',DS=null;
 function ctlTouch(force){if(!cur||cur.demo||cur.ble)return;if(force||Date.now()-touchAt>60000){touchAt=Date.now();sb.rpc('remote_touch',{p_device:cur.id}).then(()=>{},()=>{})}}
@@ -840,11 +840,29 @@ async function loadCmds(){clearTimeout(cmdT);if(!cur||tab!=='ctl')return;const d
  if(!dev.demo){const {data}=await sb.from('commands').select('id,cmd,args,status,result,created_at').eq('device_id',dev.id).order('id',{ascending:false}).limit(15);if(cur!==dev)return;const prev=new Map(cmds.map(c=>[c.id,c.status]));cmds=data||[];
   for(const c of cmds){const was=prev.get(c.id);if(was&&was!==c.status&&(c.status==='done'||c.status==='error'||c.status==='expired')){toast((c.status==='done'?'✓ ':'✗ ')+(CMD_TH[c.cmd]||c.cmd)+(c.result?': '+c.result:''));refresh()}}}
  renderCmdLog();const busy=cmds.some(c=>c.status==='pending'||c.status==='sent');cmdT=setTimeout(loadCmds,busy?1500:8000)}
+// ---------- JK passcode recovery (owner only; the board reads them from the BMS device-info frame)
+let jkc=null,jkcT=null;
+function jkcCard(PK,pkS){const a=PK&&pkS?pkS.a:-1;return '<div class="card" id="jkcCard"><h3>กู้รหัส JK BMS</h3><div class="small muted">ลืมรหัสเชื่อมต่อบลูทูธหรือรหัสตั้งค่าพารามิเตอร์? บอร์ดอ่านรหัสเดิมจากข้อมูลรุ่นของ BMS ให้ดู แล้วไปเปลี่ยนรหัสใหม่ในแอป JK ได้ (การตั้งรหัสใหม่จากบอร์ดยังไม่รองรับ)</div>'+
+ '<div id="jkcBox" style="margin-top:10px">'+jkcInner()+'</div><button class="soft" id="jkcBtn" data-a="'+a+'" style="margin-top:10px">🔑 แสดงรหัส'+(a>=0?' ลูก #'+a:'')+'</button></div>'}
+function jkcInner(){if(!jkc)return '';if(jkc.wait)return '<div class="small muted">กำลังขอรหัสจากบอร์ด…</div>';if(jkc.err)return '<div class="small" style="color:var(--bad)">'+esc(jkc.err)+'</div>';
+ const r=(n,v)=>'<div class="row" style="padding:6px 0;border-top:1px solid var(--line)"><span class="muted">'+n+'</span><span class="nf"><b style="font-family:ui-monospace,monospace;font-size:17px;letter-spacing:1px">'+(v?esc(v):'—')+'</b>'+(v?' <button class="ghost" style="padding:4px 10px;font-size:12px" data-copy="'+esc(v)+'">คัดลอก</button>':'')+'</span></div>';
+ return r('รหัสเชื่อมต่อบลูทูธ',jkc.bt)+r('รหัสตั้งค่าพารามิเตอร์',jkc.set)+'<div class="tiny muted" style="margin-top:6px">ซ่อนอัตโนมัติใน 30 วินาที</div>'}
+function jkcPaint(){const b=$('jkcBox');if(b)b.innerHTML=jkcInner();document.querySelectorAll('#jkcBox [data-copy]').forEach(x=>x.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(x.dataset.copy).then(()=>toast('คัดลอกแล้ว'),()=>{})})}
+function jkcShow(r){jkc={bt:r.bt||'',set:r.set||''};if(!r.ok)jkc={err:'บอร์ดยังไม่ได้ข้อมูลรุ่นจาก BMS ตัวนี้ (ต้องเชื่อมต่อได้ก่อน) หรือ BMS รุ่นนี้ไม่ได้ส่งรหัสมา'};jkcPaint();clearTimeout(jkcT);jkcT=setTimeout(()=>{jkc=null;jkcPaint()},30000)}
+async function jkcAsk(a){const args=a>=0?{a}:{};jkc={wait:true};jkcPaint();
+ if(cur.demo){setTimeout(()=>jkcShow({ok:true,bt:'1234',set:'123456'}),700);return}
+ if(cur.ble){jkc={err:'ตอนต่อผ่านบลูทูธ ให้ดูรหัสที่หน้าเว็บในบอร์ด (192.168.4.1) → เชื่อมต่อ BMS'};jkcPaint();return}
+ const {data:id,error}=await sb.rpc('send_command',{p_device:cur.id,p_cmd:'jk_codes',p_args:args});if(error){jkc={err:'ส่งไม่สำเร็จ: '+error.message};jkcPaint();return}
+ touchAt=Date.now();const t0=Date.now();
+ while(Date.now()-t0<70000){await new Promise(r=>setTimeout(r,1500));const {data}=await sb.from('commands').select('status,result').eq('id',id).maybeSingle();
+  if(data&&(data.status==='done'||data.status==='error')){let r={};try{r=JSON.parse(data.result||'{}')}catch(e){}jkcShow(r);loadCmds();return}
+  if(data&&data.status==='expired')break}
+ jkc={err:'บอร์ดไม่ตอบ (ตรวจว่าบอร์ดออนไลน์)'};jkcPaint()}
 async function sendCmd(cmd,args,okMsg){if(!cur)return;args=args||{};if(cur.ble)return bleSend(cmd,args);
  if(cur.demo){const c={id:Date.now(),cmd,args,status:'sent',result:null,created_at:new Date().toISOString()};cmds.unshift(c);renderCmdLog();setTimeout(()=>{demoApply(cmd,args);c.status='done';c.result=okMsg||'ok';toast('✓ '+(CMD_TH[cmd]||cmd));if(cur&&cur.demo)latest[cur.id]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};ctlKey='';renderDev();renderCmdLog()},1200);return}
  const {data,error}=await sb.rpc('send_command',{p_device:cur.id,p_cmd:cmd,p_args:args});if(error){toast('ส่งไม่สำเร็จ: '+error.message);return}
  touchAt=Date.now();cmds.unshift({id:data,cmd,args,status:'pending',created_at:new Date().toISOString()});renderCmdLog();toast('ส่งคำสั่งแล้ว รอบอร์ดรับ…');clearTimeout(cmdT);cmdT=setTimeout(loadCmds,1200)}
-function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length?cmds.map(c=>'<div class="cl"><b>'+esc(CMD_TH[c.cmd]||c.cmd)+(c.args&&Object.keys(c.args).length&&c.cmd!=='home_wifi'&&c.cmd!=='ota'?' <span class="muted tiny">'+esc(JSON.stringify(c.args))+'</span>':'')+'</b><span class="muted tiny">'+new Date(c.created_at).toLocaleTimeString('th-TH')+'</span><span class="st '+c.status+'" title="'+esc(c.result||'')+'">'+(c.status==='done'?OKMARK:'')+(ST_TH[c.status]||c.status)+'</span></div>'+(c.result&&c.status!=='done'?'<div class="tiny muted" style="padding:0 0 6px">'+esc(c.result)+'</div>':'')).join(''):'<div class="small muted">ยังไม่มีคำสั่ง</div>'}
+function renderCmdLog(){const e=$('cmdLog');if(!e)return;e.innerHTML=cmds.length?cmds.map(c=>'<div class="cl"><b>'+esc(CMD_TH[c.cmd]||c.cmd)+(c.args&&Object.keys(c.args).length&&c.cmd!=='home_wifi'&&c.cmd!=='ota'?' <span class="muted tiny">'+esc(JSON.stringify(c.args))+'</span>':'')+'</b><span class="muted tiny">'+new Date(c.created_at).toLocaleTimeString('th-TH')+'</span><span class="st '+c.status+'" title="'+esc(c.cmd==='jk_codes'?'':(c.result||''))+'">'+(c.status==='done'?OKMARK:'')+(ST_TH[c.status]||c.status)+'</span></div>'+(c.result&&c.status!=='done'&&c.cmd!=='jk_codes'?'<div class="tiny muted" style="padding:0 0 6px">'+esc(c.result)+'</div>':'')).join(''):'<div class="small muted">ยังไม่มีคำสั่ง</div>'}
 function tgl(id,label,sub,on,dis){return '<div class="tg"><div class="l">'+label+(sub?'<small>'+sub+'</small>':'')+'</div><button class="sw2'+(on?' on':'')+'" id="'+id+'" '+(dis?'disabled':'')+' aria-pressed="'+(!!on)+'"></button></div>'}
 function bleInfoHtml(c){if(!cur.ble||!c)return '';return '<div class="card"><div class="row wrap"><div><b>'+(ble&&ble.dev&&ble.dev.usb?'🔌 ':'🔵 ')+esc(c.name||'')+'</b>'+(c.hwid?'<span class="tiny muted"> · '+esc(c.hwid)+'</span>':'')+'<div class="small muted">รหัสจับคู่ <b style="color:var(--text);letter-spacing:1px">'+esc(c.pair||'')+'</b> · Cloud: '+esc(c.cloud||'')+'</div><div class="small muted">Wi-Fi บ้าน: '+(c.ssid?esc(c.ssid)+(c.conn?' ✓ '+esc(c.ip):' (กำลังเชื่อมต่อ)'):'ยังไม่ได้ตั้ง')+'</div></div>'+(c.paired?'<span class="nf pill on">อยู่ในบัญชีแล้ว</span>':'<button class="nf" id="bClaim">เพิ่มเข้าบัญชีของฉัน</button>')+'</div>'+(c.ssid?'<button class="danger" id="bForget" style="margin-top:10px;padding:8px 12px">ลืม Wi-Fi บ้าน</button>':'')+'</div>'}
 // ---------- full-screen pickers for BMS (Bluetooth) and Wi-Fi scan results
@@ -884,7 +902,7 @@ function renderPicker(){if(!pick||!cur)return;const ae=document.activeElement;if
   if(!cur.ble&&!confirm('เปลี่ยนบอร์ดไปใช้ Wi-Fi "'+ss+'"?\nถ้าต่อไม่ได้ภายใน 90 วินาทีจะกลับไปใช้ "'+(c.ssid||'')+'"'))return;
   sendCmd('home_wifi',{ssid:ss,pass:pw});toast('กำลังเปลี่ยนไปใช้ '+ss+' …');closePicker()};
  if(scanning)clearTimeout(pick.tm),pick.tm=setTimeout(renderPicker,1500)}
-function renderCtl(){const k0=ctlKey;renderCtl0();if(ctlKey!==k0)restoreTyped()}
+function renderCtl(){const k0=ctlKey;renderCtl0();if(ctlKey!==k0){restoreTyped();const b=$('jkcBtn');if(b)b.onclick=()=>jkcAsk(+b.dataset.a);jkcPaint()}}
 function renderCtl0(){if(pick)setTimeout(renderPicker,0);const l=latest[cur.id],d=l&&l.data||{},c=d.cfg,x=derive(l,dset(cur));
  const PK=packsOf(d);let pkS=null;if(PK){if(packSel==null||!PK.some(p=>p.a===packSel))packSel=PK[0].a;pkS=PK.find(p=>p.a===packSel)}
  const BT=c&&c.bt||{},BTM=pkS?BT[pkS.a]:null,RO=!!PK&&d.busm===1&&!BTM,J=pkS?pkS.jk:d.jk,PA=pkS?{a:pkS.a}:{};
@@ -935,6 +953,7 @@ function renderCtl0(){if(pick)setTimeout(renderPicker,0);const l=latest[cur.id],
  // system
  h+=fwCardHtml(d,c);
  h+='<div class="card"><h3>ระบบ</h3><button class="danger" id="cRestart">รีสตาร์ทบอร์ด</button></div>';
+ if(fam===1||(d.bms||'').startsWith('JK')||PK)h+=jkcCard(PK,pkS);
  h+='<div class="card"><h3>คำสั่งล่าสุด</h3><div id="cmdLog"></div></div>';
  $('tab_ctl').innerHTML=h;enterAnim('tab_ctl');renderCmdLog();
  const on=id=>$(id)&&$(id).classList.contains('on'),bind=(id,f)=>{const e=$(id);if(e)e.onclick=f};
