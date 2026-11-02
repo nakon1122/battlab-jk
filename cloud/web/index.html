@@ -187,7 +187,7 @@ body.shared #btnLogin,body.shared #btnBack{display:none!important}
 @keyframes gGrow{from{transform:scaleY(0)}}.gBv{font-variant-numeric:tabular-nums;line-height:1.25;text-align:center;font-size:11px}.gB>.tiny.muted{white-space:nowrap;font-size:10.5px}
 .gMem{display:flex;flex-direction:column;gap:8px}.gM{display:grid;grid-template-columns:48px 1fr auto;gap:10px;align-items:center;padding:8px 10px;border-radius:14px;background:var(--card2);cursor:pointer;animation:gUp .5s both;transition:transform .15s}
 .gM:hover{transform:translateX(3px)}.gM svg{width:48px;height:48px;color:var(--text)}.gMt{min-width:0;display:flex;flex-direction:column}.gMt b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gMp{text-align:right;display:flex;align-items:center;gap:6px}.gMp b{font-variant-numeric:tabular-nums}.gDot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.gMp{text-align:right;display:flex;align-items:center;gap:6px}.gMp b{font-variant-numeric:tabular-nums;display:block}.gVA{display:block;font-variant-numeric:tabular-nums;white-space:nowrap}.gDot{width:8px;height:8px;border-radius:50%;background:var(--line)}
 .gM.chg .gDot{background:var(--good);animation:hApulse 1.4s infinite}.gM.dsg .gDot{background:var(--warn);animation:gWarn 1.4s infinite}
 @keyframes gWarn{0%{box-shadow:0 0 0 0 rgba(232,160,64,.6)}70%,100%{box-shadow:0 0 0 7px rgba(232,160,64,0)}}
 @media (prefers-reduced-motion:reduce){.gHero::before,.gPulse,.gFlow i,.gLineP,.gAreaP,.gBb i,.gM,.gTiles div{animation:none!important;stroke-dashoffset:0;opacity:1}}
@@ -607,7 +607,7 @@ function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(d
   '<div class="gRing"><svg viewBox="0 0 200 200"><defs><linearGradient id="gGr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#36c4a8"/><stop offset="1" stop-color="'+col+'"/></linearGradient></defs><circle cx="100" cy="100" r="86" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="14"/><circle class="gArc" cx="100" cy="100" r="86" fill="none" stroke="url(#gGr)" stroke-width="14" stroke-linecap="round" transform="rotate(-90 100 100)" stroke-dasharray="'+(C*(oS??0)/100).toFixed(1)+' 999" data-dash="'+(C*soc/100).toFixed(1)+' 999"/><circle class="gPulse" cx="100" cy="100" r="70" fill="none" stroke="'+col+'" stroke-width="1.5"/></svg>'+
   '<div class="gC"><b data-count="'+soc+'" data-from="'+(oSoc??0)+'">'+(oSoc??soc)+'</b><span>% SOC เฉลี่ย</span></div></div>'+
   '<div class="gSide out"><span>'+(ev?'🛵 ขับขี่':'🏠 จ่ายโหลด')+'</span><b>'+(pw<0?kw(pw).replace('−',''):'0 W')+'</b><div class="gFlow"><i></i><i></i><i></i></div></div></div>'+
-  '<div class="gTiles"><div><span>คงเหลือ</span>'+cnt('kwh',+T.kwh.toFixed(1),1,' kWh')+'</div><div><span>วันนี้ชาร์จเข้า</span>'+(T.hasE?cnt('ei',+T.ei.toFixed(2),2,' kWh','+'):'<b>--</b>')+'</div><div><span>วันนี้จ่ายออก</span>'+(T.hasE?cnt('eo',+T.eo.toFixed(2),2,' kWh','−'):'<b>--</b>')+'</div>'+(T.hasKm?'<div><span>ระยะทางรวม</span>'+cnt('km',Math.round(T.km),0,' กม.')+'</div>':'')+'</div></div>';
+  '<div class="gTiles"><div><span>แรงดัน'+(T.vn>1?'เฉลี่ย':'')+'</span>'+(T.v!=null?cnt('v',+T.v.toFixed(2),2,' V'):'<b>--</b>')+'</div><div><span>กระแส'+(T.live>1?'รวม':'')+'</span>'+(T.live?cnt('a',+T.ia.toFixed(1),1,' A'):'<b>--</b>')+'</div><div><span>คงเหลือ</span>'+cnt('kwh',+T.kwh.toFixed(1),1,' kWh')+'</div><div><span>วันนี้ชาร์จเข้า</span>'+(T.hasE?cnt('ei',+T.ei.toFixed(2),2,' kWh','+'):'<b>--</b>')+'</div><div><span>วันนี้จ่ายออก</span>'+(T.hasE?cnt('eo',+T.eo.toFixed(2),2,' kWh','−'):'<b>--</b>')+'</div>'+(T.hasKm?'<div><span>ระยะทางรวม</span>'+cnt('km',Math.round(T.km),0,' กม.')+'</div>':'')+'</div></div>';
  const H=grpView.hist;
  if(!H)h+='<div class="card"><i class="sk"></i><i class="sk" style="width:70%"></i></div>';
  else if(!H.length)h+='<div class="card small muted">ยังไม่มีประวัติของกรุ๊ปนี้</div>';
@@ -624,7 +624,7 @@ function renderGroup(){if(!grpView)return;const g=grpView.g,ds=devs.filter(d=>(d
  h+='<div class="card"><h3>แบตในกรุ๊ป</h3><div class="gMem">'+ds.map((d,n)=>{const l=latest[d.id],x=l&&l.data||{},[st,txt]=statusOf(l),live=st==='on',sc=live&&num(x.soc)?Math.round(x.soc):0,c2=2*Math.PI*20,o=twOld(K+'m'+d.id,sc),p=live&&num(x.p)?x.p:0,md=p>30?'chg':p<-30?'dsg':'idle';
   return '<div class="gM '+md+'" data-gd="'+esc(d.id)+'" style="animation-delay:'+(n*60)+'ms"><svg viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke="var(--line)" stroke-width="5"/><circle cx="25" cy="25" r="20" fill="none" stroke="'+socColor(sc)+'" stroke-width="5" stroke-linecap="round" transform="rotate(-90 25 25)" stroke-dasharray="'+(c2*(o??0)/100).toFixed(1)+' 999" data-dash="'+(c2*sc/100).toFixed(1)+' 999" style="transition:stroke-dasharray 1.1s cubic-bezier(.2,.8,.2,1)"/><text x="25" y="29" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">'+(live?sc:'--')+'</text></svg>'+
    '<div class="gMt"><b>'+esc(dset(d).icon)+' '+esc(d.name)+'</b><span class="tiny muted"><span class="dot '+st+'"></span> '+esc(txt)+(num(x.ein)?' · วันนี้ +'+(+x.ein).toFixed(2)+' / −'+(+x.eout).toFixed(2)+' kWh':'')+'</span></div>'+
-   '<div class="gMp"><b>'+(live?kw(p):'--')+'</b><span class="gDot"></span></div></div>'}).join('')+'</div></div>';
+   '<div class="gMp"><div><b>'+(live?kw(p):'--')+'</b>'+(live?'<span class="tiny muted gVA">'+fmt(x.v,1)+' V · '+fmt(x.i,1)+' A</span>':'')+'</div><span class="gDot"></span></div></div>'}).join('')+'</div></div>';
  $('vGrp').innerHTML=h;enterAnim('vGrp');runTweens($('vGrp'));if($('gShareBox'))shareCard($('gShareBox'),{group:g});shareBanner();$('vGrp').querySelectorAll('[data-gd]').forEach(e=>e.onclick=()=>go('d/'+e.dataset.gd+'/ov'))}
 // ---------- list
 let viewers=[];
@@ -632,10 +632,10 @@ async function loadDevices(){if(demo){devs=[demoDev()];return}sb.from('viewers')
  devs=data.map(d=>{const l=Array.isArray(d.latest)?d.latest[0]:d.latest;latest[d.id]=l||null;delete d.latest;return d})}
 function statusOf(l){if(!l)return ['off','ยังไม่เคยส่งข้อมูล'];const x=(Date.now()-new Date(l.ts))/1000;if(x>150)return ['off','ออฟไลน์ · '+ago(l.ts)];if(!num(l.data&&l.data.v))return ['wait','ออนไลน์ · ยังไม่ได้เชื่อม BMS'];return ['on','ออนไลน์']}
 function showList(){show('vList');renderViewers();$('addCard').classList.toggle('hide',demo);if(demo)latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)};renderList();clearInterval(listT);listT=setInterval(async()=>{if(demo){latest[DEMO_ID]={ts:new Date().toISOString(),data:demoAt(Date.now()/1000)}}else await loadDevices();renderList()},15000)}
-function groupTotals(ds){const t={n:ds.length,live:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
+function groupTotals(ds){const t={n:ds.length,live:0,vs:0,vn:0,ia:0,pw:0,kwh:0,ei:0,eo:0,hasE:false,km:0,hasKm:false,sw:0,cw:0};
  ds.forEach(d=>{const l=latest[d.id];if(!l)return;const x=l.data||{};if(num(x.ein)&&(Date.now()-new Date(l.ts))<86400e3){t.ei+=+x.ein;t.eo+=+(x.eout||0);t.hasE=true}
-  if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.full)&&x.full>0?+x.full:(num(x.cap)&&num(x.soc)&&x.soc>3?x.cap*100/x.soc:1);if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
- t.soc=t.cw?t.sw/t.cw:null;return t}
+  if(statusOf(l)[0]!=='on')return;t.live++;if(num(x.p))t.pw+=x.p;if(num(x.v)){t.vs+=x.v;t.vn++}if(num(x.i))t.ia+=x.i;if(num(x.cap)&&num(x.v))t.kwh+=x.cap*x.v/1000;const w=num(x.full)&&x.full>0?+x.full:(num(x.cap)&&num(x.soc)&&x.soc>3?x.cap*100/x.soc:1);if(num(x.soc)){t.sw+=x.soc*w;t.cw+=w}const r=evRange(x,dset(d));if(r!=null){t.km+=r;t.hasKm=true}});
+ t.soc=t.cw?t.sw/t.cw:null;t.v=t.vn?t.vs/t.vn:null;return t}
 function kw(w){return (w>=0?'+':'−')+(Math.abs(w)>=1000?(Math.abs(w)/1000).toFixed(2)+' kW':Math.round(Math.abs(w))+' W')}
 function renderList(){
  const on=devs.filter(d=>statusOf(latest[d.id])[0]!=='off').length;let pw=0,socs=[];
