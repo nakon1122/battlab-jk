@@ -111,4 +111,79 @@ inline bool decodeOld(const uint8_t *d, int n, jk::Sample &s) {
   if (capAh > 0) s.capacity = capAh * s.soc / 100.f;
   return haveV && s.count > 0;
 }
+
+// ---- Several JK-PB packs on one RS485 bus --------------------------------
+// When one pack is the parallel master (DIP 0) it polls the others itself:
+//   master -> "aa 10 16 20 00 01 02 00 00 crc" (aa = slave address)
+//   slave  -> 300-byte 55 AA EB 90 frame (cells / settings / info)
+// and it puts its own frames on the bus after a request to address 0.
+// BusWatcher spots those Modbus requests in the byte stream so every frame
+// can be filed under the pack that was asked. The board then only listens
+// (never talks over the master), so the master keeps its CAN link to the
+// inverter. Without a master the board polls the addresses itself.
+struct BusReq { uint8_t addr = 0xFF, type = 0; bool write = false; };
+class BusWatcher {
+  uint8_t w[13]{};
+  int n = 0;
+public:
+  // feed one byte; returns true when the last bytes form a valid JK request
+  bool feed(uint8_t c, BusReq &out) {
+    if (n < 13) w[n++] = c;
+    else { memmove(w, w + 1, 12); w[12] = c; }
+    // 11-byte trigger: aa 10 16 rr 00 01 02 00 00 crcL crcH
+    if (n >= 11) {
+      const uint8_t *q = w + n - 11;
+      if (q[0] <= 15 && q[1] == 0x10 && q[2] == 0x16 && (q[3] == 0x20 || q[3] == 0x1E || q[3] == 0x1C) &&
+          q[4] == 0 && q[5] == 1 && q[6] == 2 && q[7] == 0 && q[8] == 0) {
+        uint16_t crc = modbusCrc(q, 9);
+        if (q[9] == (crc & 0xFF) && q[10] == crc >> 8) {
+          out.addr = q[0];
+          out.type = q[3] == 0x20 ? 2 : q[3] == 0x1E ? 1 : 3;
+          out.write = false;
+          n = 0;
+          return true;
+        }
+      }
+    }
+    // 13-byte settings write: aa 10 10 rr 00 02 04 v v v v crcL crcH
+    if (n == 13 && w[0] <= 15 && w[1] == 0x10 && w[2] == 0x10 && w[4] == 0 && w[5] == 2 && w[6] == 4) {
+      uint16_t crc = modbusCrc(w, 11);
+      if (w[11] == (crc & 0xFF) && w[12] == crc >> 8) {
+        out.addr = w[0]; out.type = 0; out.write = true; n = 0;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+// Which pack a 55 AA EB 90 frame belongs to: the last request seen on the bus
+// if it was recent, otherwise the master itself (address 0).
+inline uint8_t frameOwner(uint8_t lastReqAddr, uint32_t lastReqAt, uint32_t now, uint32_t window = 600) {
+  return (lastReqAddr <= 15 && now - lastReqAt < window) ? lastReqAddr : 0;
+}
+// Bank totals from the packs that are fresh.
+struct BankTotals { float v = 0, i = 0, p = 0, soc = 0, cap = 0, tmax = -99, mos = -99, cmin = 9, cmax = 0; uint32_t cycles = 0; int n = 0; bool chg = false, dsg = false; };
+inline BankTotals bankTotals(const jk::Sample *s, const bool *fresh, int count) {
+  BankTotals t;
+  float socw = 0, capSum = 0, vSum = 0;
+  for (int k = 0; k < count; k++) {
+    if (!fresh[k]) continue;
+    const jk::Sample &x = s[k];
+    t.n++;
+    vSum += x.voltage;
+    t.i += x.current;
+    t.p += x.voltage * x.current;
+    float w = x.capacity > 0 ? x.capacity : 1;
+    socw += x.soc * w; capSum += w;
+    if (x.capacity > 0) t.cap += x.capacity;
+    if (x.temp1 > t.tmax) t.tmax = x.temp1;
+    if (x.temp2 > t.tmax) t.tmax = x.temp2;
+    if (x.mos > t.mos) t.mos = x.mos;
+    if (x.cycles > t.cycles) t.cycles = x.cycles;
+    t.chg |= x.charge; t.dsg |= x.discharge;
+    for (int c = 0; c < 32; c++) if (x.cells[c] > 0) { if (x.cells[c] < t.cmin) t.cmin = x.cells[c]; if (x.cells[c] > t.cmax) t.cmax = x.cells[c]; }
+  }
+  if (t.n) { t.v = vSum / t.n; t.soc = socw / capSum; }
+  return t;
+}
 }  // namespace jk485

@@ -25,9 +25,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.6.0-cyd35"
+#define BATTLAB_FW "2.7.0-cyd35"
 #else
-#define BATTLAB_FW "2.6.0-s3"
+#define BATTLAB_FW "2.7.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -80,6 +80,11 @@ struct Shared {
   uint32_t devStamp = 0;
   float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
   uint64_t pvHave = 0;          // bit i = pv[i] was read from the BMS    // when the last BLE scan finished
+  // RS485 bus with several JK packs (index = DIP address 0..15)
+  struct Pack { jk::Sample s; uint32_t stamp = 0; bmsw::JkSettings js; uint32_t setStamp = 0; String model; };
+  Pack packs[16];
+  uint8_t busMode = 0;          // 0 single pack, 1 listening to a master (DIP 0), 2 board polls the packs
+  uint8_t bankN = 0;            // packs seen recently (>1 = bank view)
 } shared;
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
@@ -90,6 +95,8 @@ struct LinkCfg {
   int8_t rx = 18, tx = 17;
   uint32_t baud = 115200;
   uint8_t addr = 1;
+  uint8_t bus = 0;   // several packs on the bus: 0 auto, 1 listen only, 2 board polls
+  uint8_t count = 1; // poll mode: packs at addr .. addr+count-1
 } linkCfg;
 static volatile bool linkRs485 = false;
 static volatile bool otaBusy = false; // firmware update running: Bluetooth stays idle
@@ -276,17 +283,27 @@ struct BmsCmd {
   bool on;       // switch state
 };
 static BmsCmd cmdQ[4];
+static uint8_t cmdAddrQ[4]; // RS485 bus: pack address for the command (0xFF = the configured one)
 static uint8_t cmdN = 0;
-static const char *queueCmd(const BmsCmd &c) {
+static const char *queueCmd(const BmsCmd &c, uint8_t addr = 0xFF) {
   Guard g;
   if (!shared.linked) return "BMS not connected";
   if (cmdN >= 4) return "busy, try again";
+  cmdAddrQ[cmdN] = addr;
   cmdQ[cmdN++] = c;
   return nullptr;
 }
 // Returns nullptr when queued, otherwise the reason it was refused.
-const char *bmsWriteParam(int idx, float value) {
-  {
+const char *bmsWriteParam(int idx, float value, int addr = -1) {
+  if (addr >= 0) { // one pack of an RS485 bank
+    Guard g;
+    if (!linkRs485 || addr > 15) return "pack address 0-15 on RS485 only";
+    if (shared.busMode == 1) return "read only: a master pack (DIP 0) is running the bus";
+    if (idx < 0 || idx >= bmsw::JK_PARAM_COUNT) return "unknown setting";
+    const auto &pk = shared.packs[addr];
+    if (!pk.js.valid || uint32_t(millis() - pk.setStamp) > 600000) return "settings of this pack not read yet";
+    if (const char *e = bmsw::checkJkValue(pk.js, idx, value)) return e;
+  } else {
     Guard g;
     if (shared.family == 2 || shared.family == 3) {
       int n;
@@ -301,16 +318,21 @@ const char *bmsWriteParam(int idx, float value) {
       if (const char *e = bmsw::checkJkValue(shared.jk, idx, value)) return e;
     }
   }
-  return queueCmd({false, uint8_t(idx), value, false});
+  return queueCmd({false, uint8_t(idx), value, false}, addr >= 0 ? uint8_t(addr) : 0xFF);
 }
-const char *bmsSetSwitch(int which, bool on) {
+const char *bmsSetSwitch(int which, bool on, int addr = -1) {
   if (which < 0 || which >= bmsw::SW_COUNT) return "unknown switch";
-  {
+  if (addr >= 0) {
+    Guard g;
+    if (!linkRs485 || addr > 15) return "pack address 0-15 on RS485 only";
+    if (shared.busMode == 1) return "read only: a master pack (DIP 0) is running the bus";
+    if (!shared.packs[addr].stamp) return "pack not seen on the bus";
+  } else {
     Guard g;
     if (!shared.family) return "BMS type not identified yet";
     if (shared.family == 3 && which == bmsw::SW_BALANCER) return "not available on JBD";
   }
-  return queueCmd({true, uint8_t(which), 0, on});
+  return queueCmd({true, uint8_t(which), 0, on}, addr >= 0 ? uint8_t(addr) : 0xFF);
 }
 
 void bleWorker(void *) {
@@ -1580,12 +1602,12 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   }
   if (c == "bms_param") {
     if (!a["index"].is<int>() || !(a["value"].is<float>() || a["value"].is<int>())) { ok = false; return "index and value required"; }
-    if (const char *e = bmsWriteParam(a["index"].as<int>(), a["value"].as<float>())) { ok = false; return e; }
+    if (const char *e = bmsWriteParam(a["index"].as<int>(), a["value"].as<float>(), a["a"] | -1)) { ok = false; return e; }
     return "sent to BMS";
   }
   if (c == "bms_switch") {
     if (!a["which"].is<int>() || !a["on"].is<bool>()) { ok = false; return "which and on required"; }
-    if (const char *e = bmsSetSwitch(a["which"].as<int>(), a["on"].as<bool>())) { ok = false; return e; }
+    if (const char *e = bmsSetSwitch(a["which"].as<int>(), a["on"].as<bool>(), a["a"] | -1)) { ok = false; return e; }
     return "sent to BMS";
   }
   if (c == "bms_read") { Guard g; readWanted = true; return "reading"; }
@@ -1616,8 +1638,14 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     if (badPin(rx) || badPin(tx) || rx == tx) { ok = false; return "pick two free GPIO pins (not 19/20, not 26-37)"; }
     if (baud != 9600 && baud != 19200 && baud != 38400 && baud != 57600 && baud != 115200) { ok = false; return "baud 9600-115200"; }
     if (addr < 0 || addr > 15) { ok = false; return "address 0-15"; }
+    String bus = a["bus"] | (linkCfg.bus == 1 ? "listen" : linkCfg.bus == 2 ? "poll" : "auto");
+    int count = a["count"] | int(linkCfg.count);
+    if (bus != "auto" && bus != "listen" && bus != "poll") { ok = false; return "bus auto, listen or poll"; }
+    if (count < 1 || count > 15 || addr + count > 16) { ok = false; return "1-15 packs, last address 15"; }
     linkCfg.rs485 = mode == "rs485";
     linkCfg.rx = rx; linkCfg.tx = tx; linkCfg.baud = baud; linkCfg.addr = addr;
+    linkCfg.bus = bus == "listen" ? 1 : bus == "poll" ? 2 : 0;
+    linkCfg.count = count;
     Preferences p;
     p.begin("battlab-jk", false);
     p.putBool("l485", linkCfg.rs485);
@@ -1625,6 +1653,8 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     p.putChar("ltx", linkCfg.tx);
     p.putUInt("lbaud", linkCfg.baud);
     p.putUChar("laddr", linkCfg.addr);
+    p.putUChar("lbus", linkCfg.bus);
+    p.putUChar("lcnt", linkCfg.count);
     p.end();
     {
       Guard g;
@@ -1635,7 +1665,7 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
       configChanged = true;
     }
     linkRs485 = linkCfg.rs485;
-    return linkCfg.rs485 ? String("RS485: RX ") + rx + " TX " + tx + " " + baud + " addr " + addr : String("Bluetooth");
+    return linkCfg.rs485 ? String("RS485: RX ") + rx + " TX " + tx + " " + baud + " addr " + addr + " x" + count + " " + bus : String("Bluetooth");
 #endif
   }
   if (c == "ota") {
@@ -1699,7 +1729,7 @@ static void cloudTask(void *) {
 #else
   http.setReuse(true); // S3 has RAM to keep the connection open
   const uint32_t FAST_MS = 2500;
-  const size_t DOC = 8192;
+  const size_t DOC = 32768; // room for a 15-pack RS485 bank
 #endif
   uint32_t nextAt = 0;
   bool fast = false;
@@ -1763,18 +1793,13 @@ static void cloudTask(void *) {
       c["remote"] = 1;
       c["ota"] = 1;
 #ifndef BATTLAB_DISPLAY
-    c["link"] = linkCfg.rs485 ? "rs485" : "ble";
-    c["lrx"] = linkCfg.rx;
-    c["ltx"] = linkCfg.tx;
-    c["lbaud"] = linkCfg.baud;
-    c["laddr"] = linkCfg.addr;
-#endif
-#ifndef BATTLAB_DISPLAY
       c["link"] = linkCfg.rs485 ? "rs485" : "ble";
       c["lrx"] = linkCfg.rx;
       c["ltx"] = linkCfg.tx;
       c["lbaud"] = linkCfg.baud;
       c["laddr"] = linkCfg.addr;
+      c["lbus"] = linkCfg.bus == 1 ? "listen" : linkCfg.bus == 2 ? "poll" : "auto";
+      c["lcnt"] = linkCfg.count;
 #endif
       auto lo = c.createNestedObject("led");
       lo["on"] = led.on;
@@ -1838,13 +1863,66 @@ static void cloudTask(void *) {
         d["chg"] = s.charge;
         d["dsg"] = s.discharge;
         float mn = 9, mx = 0;
-        auto cl = d.createNestedArray("cells");
-        for (int k = 0; k < 32; k++)
-          if (s.cells[k] > 0) {
-            cl.add(roundf(s.cells[k] * 1000) / 1000);
-            mn = min(mn, s.cells[k]);
-            mx = max(mx, s.cells[k]);
+#ifndef BATTLAB_DISPLAY
+        bool bank = linkRs485 && (shared.bankN > 1 || shared.busMode == 1);
+#else
+        bool bank = false;
+#endif
+        if (!bank) {
+          auto cl = d.createNestedArray("cells");
+          for (int k = 0; k < 32; k++)
+            if (s.cells[k] > 0) {
+              cl.add(roundf(s.cells[k] * 1000) / 1000);
+              mn = min(mn, s.cells[k]);
+              mx = max(mx, s.cells[k]);
+            }
+        }
+#ifndef BATTLAB_DISPLAY
+        else {
+          // RS485 bank: totals on top, every pack in "packs"
+          d["bank"] = shared.bankN;
+          d["busm"] = shared.busMode;
+          auto pa = d.createNestedArray("packs");
+          uint32_t now = millis();
+          for (int a = 0; a < 16; a++) {
+            const auto &pk = shared.packs[a];
+            if (!pk.stamp || now - pk.stamp > 600000) continue;
+            const auto &x = pk.s;
+            auto o = pa.createNestedObject();
+            o["a"] = a;
+            o["age"] = (now - pk.stamp) / 1000;
+            o["v"] = serialized(String(x.voltage, 2));
+            o["i"] = serialized(String(x.current, 2));
+            o["soc"] = x.soc;
+            o["cap"] = serialized(String(x.capacity, 1));
+            o["cyc"] = x.cycles;
+            o["t1"] = serialized(String(x.temp1, 1));
+            o["t2"] = serialized(String(x.temp2, 1));
+            o["mos"] = serialized(String(x.mos, 1));
+            o["chg"] = x.charge;
+            o["dsg"] = x.discharge;
+            if (pk.model.length()) o["model"] = pk.model;
+            float pmn = 9, pmx = 0;
+            auto cl = o.createNestedArray("cells");
+            for (int k = 0; k < 32; k++)
+              if (x.cells[k] > 0) {
+                cl.add(serialized(String(x.cells[k], 3)));
+                pmn = min(pmn, x.cells[k]); pmx = max(pmx, x.cells[k]);
+              }
+            if (pmx > 0) {
+              o["cmin"] = serialized(String(pmn, 3)); o["cmax"] = serialized(String(pmx, 3));
+              mn = min(mn, pmn); mx = max(mx, pmx);
+            }
+            if (pk.js.valid && now - pk.setStamp < 600000) {
+              auto jo = o.createNestedObject("jk");
+              auto v = jo.createNestedArray("v");
+              for (int i = 0; i < bmsw::JK_PARAM_COUNT; i++) v.add(serialized(String(pk.js.v[i], 3)));
+              auto sw = jo.createNestedArray("sw");
+              for (int i = 0; i < bmsw::SW_COUNT; i++) sw.add(pk.js.sw[i]);
+            }
           }
+        }
+#endif
         if (mx > 0) { d["cmin"] = mn; d["cmax"] = mx; }
       }
       serializeJson(body, json);
@@ -2190,33 +2268,86 @@ static void rs485Publish(const jk::Sample &s, const char *what) {
   shared.detected = what;
   shared.good++;
 }
+// Rebuild the main sample from the packs (call with the Guard held).
+static void rs485Recompute() {
+  uint32_t now = millis(), win = shared.busMode == 1 ? 90000 : 15000;
+  jk::Sample ss[16];
+  bool fresh[16];
+  int n = 0, first = -1;
+  for (int k = 0; k < 16; k++) {
+    fresh[k] = shared.packs[k].stamp && now - shared.packs[k].stamp < win;
+    if (fresh[k]) { ss[k] = shared.packs[k].s; n++; if (first < 0) first = k; }
+  }
+  shared.bankN = n;
+  if (!n) return;
+  bool bank = n > 1 || shared.busMode == 1;
+  if (!bank) shared.sample = ss[first];
+  else {
+    auto t = jk485::bankTotals(ss, fresh, 16);
+    jk::Sample m = ss[first]; // cells of the first pack for the local page
+    m.voltage = t.v; m.current = t.i; m.soc = t.soc; m.capacity = t.cap;
+    m.temp1 = t.tmax; m.temp2 = t.tmax; m.mos = t.mos; m.cycles = t.cycles;
+    m.charge = t.chg; m.discharge = t.dsg;
+    shared.sample = m;
+  }
+  int sel = linkCfg.addr;
+  if (!shared.packs[sel].js.valid)
+    for (int k = 0; k < 16; k++) if (shared.packs[k].js.valid) { sel = k; break; }
+  if (shared.packs[sel].js.valid) { shared.jk = shared.packs[sel].js; shared.jkStamp = shared.packs[sel].setStamp; shared.haveParams = true; }
+  shared.have = shared.linked = true;
+  shared.stamp = now;
+  shared.state = "LIVE";
+  shared.family = 1;
+  shared.detected = shared.busMode == 1 ? String("JK RS485 bank (master DIP 0)") : bank ? String("JK RS485 bank") : String("JK RS485");
+  shared.good++;
+}
 static void rs485Task(void *) {
   HardwareSerial &U = Serial1;
   bool started = false, swapped = false;
   int8_t rx = -1, tx = -1;
-  uint32_t baud = 0, nextTx = 0, lastCells = 0, lastSet = 0, lastInfo = 0, lastOk = 0;
+  uint32_t baud = 0, nextTx = 0, lastOk = 0, startAt = 0, bytes = 0, ourTxEnd = 0, lastReqAt = 0, lastByteAt = 0;
+  uint32_t lastSet[16] = {0}, lastInfo[16] = {0}, lastCells = 0;
   uint8_t proto = 0, tries = 0; // proto 1 = JK-PB Modbus, 2 = older 4E 57
+  uint8_t mode = 0;             // 0 deciding (listening), 1 listen (master present), 2 poll
+  uint8_t lastReqAddr = 0xFF, pollIdx = 0, cfgBus = 0xFF, cfgCount = 0, cfgAddr = 0xFF;
   jk::Parser parser;
   jk485::OldFramer old;
+  jk485::BusWatcher watch;
   uint8_t f[32];
+  auto setMode = [&](uint8_t m) {
+    mode = m;
+    Guard g;
+    shared.busMode = m == 1 ? 1 : (m == 2 && linkCfg.count > 1) ? 2 : 0;
+  };
   auto handlePb = [&](const uint8_t *b) {
     proto = 1;
     lastOk = millis();
+    uint8_t a = jk485::frameOwner(lastReqAddr, lastReqAt, millis(), 600);
+    if (mode == 2 && linkCfg.count == 1) a = linkCfg.addr;
+    Guard g;
+    auto &pk = shared.packs[a];
     if (b[4] == 2) {
       jk::Sample s;
-      if (jk::decode(b, true, s) || jk::decode(b, false, s)) rs485Publish(s, "JK RS485");
+      if (jk::decode(b, true, s) || jk::decode(b, false, s)) { pk.s = s; pk.stamp = millis(); rs485Recompute(); }
     } else if (b[4] == 1) {
       bmsw::JkSettings js;
-      if (bmsw::parseJkSettings(b, js)) { Guard g; shared.jk = js; shared.jkStamp = millis(); shared.haveParams = true; }
+      if (bmsw::parseJkSettings(b, js)) { pk.js = js; pk.setStamp = millis(); rs485Recompute(); }
     } else if (b[4] == 3) {
-      Guard g;
-      shared.model = asciiField(b + 6, 16);
-      shared.hardware = asciiField(b + 22, 8);
-      shared.software = asciiField(b + 30, 8);
+      pk.model = asciiField(b + 6, 16);
+      if (a == linkCfg.addr || shared.model.length() == 0) {
+        shared.model = pk.model;
+        shared.hardware = asciiField(b + 22, 8);
+        shared.software = asciiField(b + 30, 8);
+      }
     }
   };
+  auto send = [&](const uint8_t *p, int k) {
+    U.write(p, k);
+    U.flush();
+    ourTxEnd = millis() + (uint32_t(k) * 10000UL) / baud + 40;
+  };
   for (;;) {
-    vTaskDelay(pdMS_TO_TICKS(15));
+    vTaskDelay(pdMS_TO_TICKS(10));
     if (!linkRs485 || otaBusy) {
       if (started) { U.end(); started = false; }
       proto = 0;
@@ -2224,34 +2355,87 @@ static void rs485Task(void *) {
       continue;
     }
     int8_t wr = swapped ? linkCfg.tx : linkCfg.rx, wt = swapped ? linkCfg.rx : linkCfg.tx;
-    if (!started || rx != wr || tx != wt || baud != linkCfg.baud) {
+    bool cfgChanged = cfgBus != linkCfg.bus || cfgCount != linkCfg.count || cfgAddr != linkCfg.addr;
+    if (!started || rx != wr || tx != wt || baud != linkCfg.baud || cfgChanged) {
       if (started) U.end();
-      U.setRxBufferSize(1024);
+      U.setRxBufferSize(2048);
       U.begin(linkCfg.baud, SERIAL_8N1, wr, wt);
       started = true;
       rx = wr; tx = wt; baud = linkCfg.baud;
-      proto = 0; tries = 0;
+      proto = 0; tries = 0; bytes = 0;
+      startAt = lastByteAt = millis();
+      if (cfgChanged) {
+        cfgBus = linkCfg.bus; cfgCount = linkCfg.count; cfgAddr = linkCfg.addr;
+        Guard g;
+        for (auto &pk : shared.packs) { pk.stamp = 0; pk.setStamp = 0; pk.js.valid = false; pk.model = ""; }
+        shared.bankN = 0;
+      }
+      setMode(linkCfg.bus == 1 ? 1 : linkCfg.bus == 2 ? 2 : 0);
+      if (mode == 0) { Guard g; shared.state = "RS485_LISTENING"; }
     }
+    uint32_t t = millis();
     while (U.available()) {
       uint8_t c = U.read();
+      bytes++;
+      lastByteAt = t;
+      jk485::BusReq r;
+      if (watch.feed(c, r) && !r.write) {
+        lastReqAddr = r.addr;
+        lastReqAt = millis();
+        // a request we did not send = another master (a JK pack with DIP 0) runs the bus
+        if (int32_t(millis() - ourTxEnd) > 0 && mode != 1 && linkCfg.bus != 2) setMode(1);
+      }
       parser.feed(&c, 1, handlePb);
-      if (old.feed(c)) {
+      if (mode == 2 && linkCfg.count == 1 && old.feed(c)) {
         jk::Sample s;
         if (jk485::decodeOld(old.data, old.dataLen, s)) { proto = 2; lastOk = millis(); rs485Publish(s, "JK RS485 (older)"); }
       }
     }
-    uint32_t t = millis();
+    // keep the bank fresh-count current even when a pack goes quiet
+    static uint32_t lastRecalc = 0;
+    if (t - lastRecalc > 2000) { lastRecalc = t; Guard g; if (shared.bankN || mode == 1) rs485Recompute(); }
+
+    if (mode == 0) { // auto: listen first, poll only if nobody else talks
+      if (t - startAt > 16000) setMode(2);
+      continue;
+    }
+    if (mode == 1) { // listen only: never transmit while a master owns the bus
+      BmsCmd cmd;
+      bool haveCmd = false;
+      {
+        Guard g;
+        if (cmdN) { cmd = cmdQ[0]; memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); memmove(cmdAddrQ, cmdAddrQ + 1, cmdN - 1); cmdN--; haveCmd = true; }
+        if (haveCmd) shared.lastWrite = "Read only: a master pack (DIP 0) is running the RS485 bus";
+        readWanted = false;
+      }
+      (void)cmd;
+      if (t - lastByteAt > 20000) { // silence: maybe RX is on the other pin
+        lastByteAt = t;
+        swapped = !swapped;
+        Guard g;
+        shared.state = "RS485_NO_ANSWER";
+        if (!shared.bankN) shared.linked = shared.have = false;
+      } else if (bytes > 200 && t - lastOk > 60000) {
+        lastOk = t;
+        Guard g;
+        shared.state = "RS485_NO_FRAMES"; // traffic but nothing readable: baud rate?
+        if (!shared.bankN) shared.linked = shared.have = false;
+      }
+      continue;
+    }
+    // ---- mode 2: the board asks the packs ----
     if (int32_t(t - nextTx) < 0) continue;
-    // queued writes (JK-PB only)
     BmsCmd cmd;
+    uint8_t cmdAddr = 0xFF;
     bool haveCmd = false;
     {
       Guard g;
-      if (cmdN) { cmd = cmdQ[0]; memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); cmdN--; haveCmd = true; }
-      if (readWanted) { readWanted = false; lastSet = 0; lastInfo = 0; }
+      if (cmdN) { cmd = cmdQ[0]; cmdAddr = cmdAddrQ[0]; memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); memmove(cmdAddrQ, cmdAddrQ + 1, cmdN - 1); cmdN--; haveCmd = true; }
+      if (readWanted) { readWanted = false; memset(lastSet, 0, sizeof lastSet); memset(lastInfo, 0, sizeof lastInfo); }
     }
     if (haveCmd) {
       String result;
+      uint8_t to = cmdAddr <= 15 ? cmdAddr : linkCfg.addr;
       if (proto == 1) {
         uint16_t reg;
         uint32_t raw;
@@ -2265,11 +2449,10 @@ static void rs485Task(void *) {
           raw = bmsw::jkRaw(cmd.idx, cmd.value);
           result = String(p.name) + " = " + String(cmd.value, int(p.decimals)) + " " + p.unit;
         }
-        int k = jk485::pbWrite(f, linkCfg.addr, reg, raw);
-        U.write(f, k);
-        U.flush();
-        result = "Sent (RS485): " + result;
-        lastSet = 0; // read the settings back
+        int k = jk485::pbWrite(f, to, reg, raw);
+        send(f, k);
+        result = String("Sent (RS485 pack ") + to + "): " + result;
+        lastSet[to] = 0; // read the settings back
       } else result = "Writing needs a JK-PB / inverter BMS on RS485";
       Guard g;
       shared.lastWrite = result;
@@ -2277,10 +2460,12 @@ static void rs485Task(void *) {
       continue;
     }
     int k = 0;
+    uint8_t first = linkCfg.addr, cnt = linkCfg.count;
     if (proto == 0) {
-      if (tries % 2 == 0) k = jk485::pbRequest(f, linkCfg.addr, 2);
+      uint8_t a = first + (tries / 2) % cnt;
+      if (tries % 2 == 0 || cnt > 1) { k = jk485::pbRequest(f, a, 2); lastReqAddr = a; lastReqAt = t; }
       else k = jk485::oldReadAll(f);
-      if (++tries >= 8) { // nothing answered: try the other wiring
+      if (++tries >= 8 + 2 * cnt) { // nothing answered: try the other wiring
         tries = 0;
         swapped = !swapped;
         Guard g;
@@ -2289,20 +2474,27 @@ static void rs485Task(void *) {
       }
       nextTx = t + 600;
     } else if (proto == 1) {
-      if (t - lastCells > 1000 || !lastCells) { k = jk485::pbRequest(f, linkCfg.addr, 2); lastCells = t; }
-      else if (t - lastSet > 30000 || !lastSet) { k = jk485::pbRequest(f, linkCfg.addr, 1); lastSet = t; }
-      else if (t - lastInfo > 120000 || !lastInfo) { k = jk485::pbRequest(f, linkCfg.addr, 3); lastInfo = t; }
-      nextTx = t + 250;
+      // one pack per slot: cells round-robin (~1 s per pack), settings 30 s, info 120 s
+      uint8_t a = first + pollIdx % cnt;
+      pollIdx++;
+      uint8_t type = 2;
+      if (t - lastSet[a] > 30000 || !lastSet[a]) { type = 1; lastSet[a] = t; }
+      else if (t - lastInfo[a] > 120000 || !lastInfo[a]) { type = 3; lastInfo[a] = t; }
+      else if (cnt == 1 && t - lastCells < 900) { nextTx = t + 100; continue; }
+      if (type == 2) lastCells = t;
+      k = jk485::pbRequest(f, a, type);
+      lastReqAddr = a; lastReqAt = t;
+      nextTx = t + (cnt > 1 ? max(150, 1000 / cnt) : 250);
     } else {
       k = jk485::oldReadAll(f);
       nextTx = t + 1500;
     }
-    if (k) { U.write(f, k); U.flush(); }
-    if (proto && t - lastOk > 10000) { // lost
+    if (k) send(f, k);
+    if (proto && t - lastOk > 10000 + 1000 * cnt) { // lost
       proto = 0;
       Guard g;
-      shared.linked = shared.have = false;
       shared.state = "RS485_NO_ANSWER";
+      if (!shared.bankN) shared.linked = shared.have = false;
     }
   }
 }
@@ -2476,6 +2668,10 @@ void setup() {
   linkCfg.tx = prefs.getChar("ltx", 17);
   linkCfg.baud = prefs.getUInt("lbaud", 115200);
   linkCfg.addr = prefs.getUChar("laddr", 1);
+  linkCfg.bus = prefs.getUChar("lbus", 0);
+  linkCfg.count = prefs.getUChar("lcnt", 1);
+  if (linkCfg.bus > 2) linkCfg.bus = 0;
+  if (linkCfg.count < 1 || linkCfg.addr + linkCfg.count > 16) linkCfg.count = 1;
   linkRs485 = linkCfg.rs485;
 #endif
   netLoad();
