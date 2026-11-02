@@ -144,7 +144,7 @@ static void dcfgSave() {
 struct DevSum {
   String id, name, state, bms, fw;
   float soc = NAN, v = NAN, i = NAN, p = NAN, t1 = NAN, t2 = NAN, mos = NAN, cmin = NAN, cmax = NAN, cap = NAN;
-  int cyc = -1;
+  int cyc = -1, bank = 0; // bank = packs on the RS485 bus of this board
   long age = -1;
   bool chg = false, dsg = false;
   bool online() const { return age >= 0 && age < 150; }
@@ -160,8 +160,17 @@ struct CmdInfo {
   long id = 0;
   String c, s, r;
 };
+struct PackSum { // one JK pack of an RS485 bank (focused board only)
+  int a = 0, n = 0;
+  long age = 0;
+  float soc = NAN, v = NAN, i = NAN, t = NAN, mos = NAN;
+  bool chg = false, dsg = false;
+  float cells[32];
+};
 struct Focus {
   String id;
+  std::vector<PackSum> packs;
+  uint8_t busm = 0;
   float cells[32];
   int n = 0;
   bool jkValid = false;
@@ -354,6 +363,7 @@ static void parseSync(JsonDocument &d) {
     s.cyc = x["cyc"] | -1;
     s.chg = x["chg"] | false;
     s.dsg = x["dsg"] | false;
+    s.bank = x["bank"] | 0;
     devs.push_back(s);
   }
   Focus f;
@@ -361,6 +371,23 @@ static void parseSync(JsonDocument &d) {
   JsonObjectConst x = d["f"].as<JsonObjectConst>();
   for (float v : x["cells"].as<JsonArrayConst>())
     if (f.n < 32) f.cells[f.n++] = v;
+  f.busm = x["busm"] | 0;
+  for (JsonObjectConst o : x["packs"].as<JsonArrayConst>()) {
+    if (f.packs.size() >= 16) break;
+    PackSum k;
+    k.a = o["a"] | 0;
+    k.age = o["age"] | 0L;
+    k.soc = jf(o["soc"]);
+    k.v = jf(o["v"]);
+    k.i = jf(o["i"]);
+    k.t = jf(o["t1"]);
+    k.mos = jf(o["mos"]);
+    k.chg = o["chg"] | false;
+    k.dsg = o["dsg"] | false;
+    for (float v : o["cells"].as<JsonArrayConst>())
+      if (k.n < 32) k.cells[k.n++] = v;
+    f.packs.push_back(k);
+  }
   JsonObjectConst jk = x["jk"].as<JsonObjectConst>();
   if (!jk.isNull()) {
     int k = 0;
@@ -811,6 +838,7 @@ static void card(const Btn &b, const DevSum &d, bool sel) {
   s.setTextDatum(textdatum_t::middle_left);
   s.setTextColor(C_TEXT, C_CARD);
   String nm = d.name;
+  if (d.bank > 1) nm = String("x") + d.bank + " " + nm; // RS485 bank of packs
   while (nm.length() && s.textWidth(nm) > 140) nm.remove(nm.length() - 1);
   s.drawString(nm, 26, 15);
   s.setFont(&fonts::FreeSansBold12pt7b);
@@ -1066,32 +1094,51 @@ static void homePage(const Model &m, bool force) {
 
 // -------------------------------------------------------- CELLS page ----
 static String cellsKey;
+static int packSel = -1; // RS485 bank: address of the pack shown on CELLS
+static Btn packBtn(int k, int np) { int w = 462 / np; return {9 + k * w, 46, w - 4, 34}; }
 static void cellsPage(const Model &m, bool force) {
   const DevSum *dp = focusDev(m);
-  int n = dp && dp->live() ? m.f.n : 0;
-  String key = String(dp ? dp->id : "") + n;
-  for (int i = 0; i < n; i++) key += fmt(m.f.cells[i], 3);
+  const auto &PK = m.f.packs;
+  int np = std::min<int>(PK.size(), 8), ps = -1;
+  if (np) {
+    for (int k = 0; k < np; k++) if (PK[k].a == packSel) ps = k;
+    if (ps < 0) { ps = 0; packSel = PK[0].a; }
+  }
+  const float *cells = np ? PK[ps].cells : m.f.cells;
+  int n = dp && dp->live() ? (np ? PK[ps].n : m.f.n) : 0;
+  String key = String(dp ? dp->id : "") + n + "p" + packSel;
+  for (int k = 0; k < np; k++) key += int(PK[k].soc);
+  for (int i = 0; i < n; i++) key += fmt(cells[i], 3);
   if (!force && key == cellsKey) return;
   cellsKey = key;
   clearContent();
   if (!dp) { noFocus(m); return; }
-  if (!n) { label(16, 90, "No cell data - the battery is offline or has no BMS.", C_TEXT); return; }
+  if (np) { // pack selector: "#a 52%"
+    for (int k = 0; k < np; k++) {
+      Btn b = packBtn(k, np);
+      bool sel = k == ps, stale = PK[k].age > 90;
+      String t = String("#") + PK[k].a + (np <= 6 ? " " : "") + (std::isnan(PK[k].soc) ? String("--") : String(int(PK[k].soc + .5f)) + "%");
+      button(b, t, sel, 0, np > 6 ? &fonts::FreeSans9pt7b : nullptr, !stale);
+      if (!sel) tft.fillRoundRect(b.x + 6, b.y + b.h - 5, std::max(2, int((b.w - 12) * std::max(0.f, std::min(100.f, std::isnan(PK[k].soc) ? 0.f : PK[k].soc)) / 100)), 3, 1, socColor(PK[k].soc));
+    }
+  }
+  if (!n) { label(16, np ? 120 : 90, "No cell data - the battery is offline or has no BMS.", C_TEXT); return; }
   float mn = 9, mx = 0;
   int imn = 0, imx = 0;
   for (int i = 0; i < n; i++) {
-    if (m.f.cells[i] < mn) mn = m.f.cells[i], imn = i;
-    if (m.f.cells[i] > mx) mx = m.f.cells[i], imx = i;
+    if (cells[i] < mn) mn = cells[i], imn = i;
+    if (cells[i] > mx) mx = cells[i], imx = i;
   }
-  bool dense = n > 24;
-  int cols = n <= 16 ? 2 : 4, rows = (n + cols - 1) / cols;
-  int gap = dense ? 3 : 4, gridH = dense ? 204 : 178;
+  bool dense = n > 24 || (np && n > 16);
+  int cols = n <= 16 && !np ? 2 : 4, rows = (n + cols - 1) / cols;
+  int gap = dense ? 3 : 4, gridH = np ? (dense ? 166 : 140) : dense ? 204 : 178, gy = np ? 86 : 46;
   int cw = 462 / cols - 6, ch = std::min(36, gridH / rows - gap), barH = ch < 28 ? 3 : 5;
   float lo = mx < 3.7f ? 2.5f : 2.8f, hi = mx < 3.7f ? 3.65f : 4.25f;
   LGFX_Sprite c(&tft);
   c.setColorDepth(16);
   if (!c.createSprite(cw, ch)) return;
   for (int i = 0; i < n; i++) {
-    float v = m.f.cells[i];
+    float v = cells[i];
     c.fillSprite(C_BG);
     c.fillRoundRect(0, 0, cw, ch, 6, C_CARD);
     float f = std::max(0.f, std::min(1.f, (v - lo) / (hi - lo)));
@@ -1103,7 +1150,7 @@ static void cellsPage(const Model &m, bool force) {
     c.setTextDatum(textdatum_t::middle_right);
     c.setTextColor(i == imx ? C_BAD : i == imn ? C_BLUE : C_TEXT, C_CARD);
     c.drawString(fmt(v, 3), cw - 8, ch / 2 - (barH > 3 ? 1 : 0));
-    c.pushSprite(12 + (i % cols) * (cw + 6), 46 + (i / cols) * (ch + gap));
+    c.pushSprite(12 + (i % cols) * (cw + 6), gy + (i / cols) * (ch + gap));
   }
   c.deleteSprite();
   int sh = dense ? 24 : 42, sy = dense ? 252 : 230;
@@ -1111,6 +1158,14 @@ static void cellsPage(const Model &m, bool force) {
   tft.setFont(&fonts::FreeSans9pt7b);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.setTextColor(C_TEXT, C_CARD);
+  if (np) {
+    const auto &k = PK[ps];
+    tft.drawString(String("#") + k.a + (k.a == 0 && m.f.busm == 1 ? " MASTER " : "  ") + fmt(k.v, 2) + "V " + fmt(k.i, 1) +
+                       "A  " + fmt(k.t, 0) + "C  " + (k.chg ? "C" : "-") + (k.dsg ? "D" : "-") + "  d" +
+                       int((mx - mn) * 1000 + .5f) + "mV",
+                   21, sy + sh / 2);
+    return;
+  }
   tft.drawString(String("min ") + fmt(mn, 3) + " (#" + (imn + 1) + ")  max " + fmt(mx, 3) + " (#" + (imx + 1) +
                      ")  delta " + int((mx - mn) * 1000 + .5f) + " mV",
                  21, sy + sh / 2);
@@ -1991,6 +2046,10 @@ static void uiTask(void *) {
         } else if (page == P_HOME && (bigMode || (tp.x < 210 && tp.y < 228))) {
           bigMode = !bigMode;
           drawnPage = -1;
+        } else if (page == P_CELLS && !m.f.packs.empty()) {
+          int np = std::min<int>(m.f.packs.size(), 8);
+          for (int k = 0; k < np; k++)
+            if (hit(packBtn(k, np), tp.x, tp.y)) { packSel = m.f.packs[k].a; cellsKey = ""; }
         } else if (page == P_GRAPH) {
           for (int i = 0; i < 5; i++)
             if (hit(gBtn(i), tp.x, tp.y)) gMetric = i;

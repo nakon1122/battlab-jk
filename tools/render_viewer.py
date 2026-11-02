@@ -138,6 +138,30 @@ def cells():
     s.text(f"min {mn:.3f} (#{imn+1})  max {mx:.3f} (#{imx+1})  delta {round((mx-mn)*1000)} mV", 21, 251, F9, TEXT)
     tabs(s, 2); return s
 
+def cells_bank():
+    # RS485 bank: 5 JK packs read through one ESP32-S3 (pack #3 selected)
+    s = Scr(); header(s, 'Home bank  DISCHARGING', nav=True)
+    socs = [62, 60, 58, 51, 56]; np_ = 5; w = 462 // np_; sel = 3
+    for k in range(np_):
+        b = (9 + k * w, 46, w - 4, 34); txt = f'#{k} {socs[k]}%'
+        s.button(b, txt, k == sel)
+        if k != sel:
+            col = BAD if socs[k] <= 15 else WARN if socs[k] <= 35 else GOOD
+            s.rr(b[0] + 6, b[1] + b[3] - 5, max(2, int((b[2] - 12) * socs[k] / 100)), 3, 1, fill=col)
+    cl = [round(3.312 + 0.006 * math.sin(i + 3) + (-0.04 if i == 7 else 0), 3) for i in range(16)]
+    cols = 4; rows = 4; gap = 4; cw = 462 // cols - 6; ch = min(36, 140 // rows - gap); barH = 3 if ch < 28 else 5
+    mn, mx = min(cl), max(cl); imn, imx = cl.index(mn), cl.index(mx)
+    for i, v in enumerate(cl):
+        x = 12 + (i % cols) * (cw + 6); y = 86 + (i // cols) * (ch + gap)
+        s.rr(x, y, cw, ch, 6, fill=CARD)
+        f = max(0, min(1, (v - 2.5) / (3.65 - 2.5)))
+        s.rect(x, y + ch - barH, int(cw * f), barH, BAD if i == imx else BLUE if i == imn else GOOD)
+        s.text(str(i + 1), x + 8, y + ch/2, F9, MUTED)
+        s.text(f'{v:.3f}', x + cw - 8, y + ch/2, F9, BAD if i == imx else BLUE if i == imn else TEXT, 'rm')
+    s.rr(9, 230, 462, 42, 10, fill=CARD)
+    s.text(f"#3  {sum(cl):.2f}V -5.2A  31C  CD  d{round((mx-mn)*1000)}mV", 21, 251, F9, TEXT)
+    tabs(s, 2); return s
+
 def graph(metric=0):
     s = Scr(); header(s, 'Solar 48V 280Ah  CHARGING', nav=True)
     for i, t in enumerate(['SOC', 'VOLT', 'AMP', 'WATT', 'TEMP']): s.button((8 + i * 77, 46, 73, 34), t, i == metric)
@@ -287,6 +311,7 @@ shots = [
     ('cloudscreen_16_update.png', 'Firmware update from BattLab Cloud (no USB)', ota_screen()),
     ('cloudscreen_05b_big.png', 'HOME: tap the gauge = BIG view; SETUP > SHOW rotates batteries', big_home()),
     ('cloudscreen_06_cells.png', 'CELLS: every cell, min blue / max red', cells()),
+    ('cloudscreen_06b_cells_bank.png', 'CELLS (RS485 bank): tap #0-#4 to see each pack', cells_bank()),
     ('cloudscreen_07_graph.png', 'GRAPH: SOC / V / A / W / temp, 6H 24H 7D', graph()),
     ('cloudscreen_08_mosfet.png', 'CONTROL > MOSFET: charge / discharge / balance', ctl_mos()),
     ('cloudscreen_09_confirm.png', 'Every change asks before sending', confirm()),
