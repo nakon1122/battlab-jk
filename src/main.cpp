@@ -3125,6 +3125,9 @@ void takeDisplaySnapshot(DisplaySnap &o) {
     o.live = shared.linked && shared.have &&
              uint32_t(millis() - shared.stamp) < 15000;
     o.sample = shared.sample;
+    o.prof = profCfg.type;
+    o.whkm = profCfg.whkm;
+    o.rangeAlarm = profCfg.rangeAlarm;
     o.rssi = shared.rssi;
     o.rxBytes = shared.rxBytes;
     o.good = shared.good;

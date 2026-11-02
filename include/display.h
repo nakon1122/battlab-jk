@@ -23,10 +23,13 @@ struct DisplaySnap {
   bool jkFresh = false;
   float pv[bset::MAX_N] = {}; // ANT / JBD settings
   uint64_t pvHave = 0;
-  uint8_t family = 0; // 0 unknown, 1 JK, 2 ANT, 3 JBD
+  uint8_t family = 0; // 0 unknown, 1 JK, 2 ANT, 3 JBD, 4 DALY
   String lastWrite;
   bool radioMax = true;
   const char *bleTx = "";
+  uint8_t prof = 0;       // usage profile: 0 solar, 1 EV motorbike, 2 EV car, 3 UPS, 4 camp
+  uint16_t whkm = 0;      // EV: average Wh per km (0 = not set)
+  uint8_t rangeAlarm = 10; // EV: warn below this many km
 };
 // Home Wi-Fi + cloud (main.cpp)
 struct NetInfo {

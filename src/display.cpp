@@ -225,10 +225,19 @@ static void showToast(const String &t, uint32_t ms = 2500) {
 
 // ------------------------------------------------------------ alarms ----
 static String alarmText;
+static bool isEv(const DisplaySnap &d) { return d.prof == 1 || d.prof == 2; }
+static float evRangeKm(const DisplaySnap &d) { // remaining energy / consumption; <0 = unknown
+  if (!d.live || !d.whkm || d.sample.capacity <= 0) return -1;
+  return d.sample.capacity * d.sample.voltage / d.whkm;
+}
+static uint32_t regenUntil = 0;
+static float regenKw = 0;
 static void evalAlarm(const DisplaySnap &d) {
   alarmText = "";
   if (!d.live) return;
   const auto &s = d.sample;
+  float rk = isEv(d) ? evRangeKm(d) : -1;
+  if (rk >= 0 && d.rangeAlarm && rk < d.rangeAlarm) { alarmText = String("RANGE LOW ") + int(rk + .5f) + "km"; return; }
   float t = s.temp1;
   if (s.temp2 > t) t = s.temp2;
   if (s.mos > t) t = s.mos;
@@ -280,7 +289,15 @@ static void header(const DisplaySnap &d) {
     s.setTextColor(C_TEXT, C_BG);
     s.drawString(st, 138, 21);
   }
-  if (alarmText.length()) {
+  if (millis() < regenUntil && !alarmText.length()) { // EV braking puts energy back
+    String r = String("REGEN +") + fmt(regenKw, 1) + " kW";
+    s.setFont(&fonts::FreeSansBold9pt7b);
+    int w = s.textWidth(r) + 24;
+    s.fillRoundRect(476 - w, 7, w, 26, 13, C_GOOD);
+    s.setTextColor(C_BG, C_GOOD);
+    s.setTextDatum(textdatum_t::middle_center);
+    s.drawString(r, 476 - w / 2, 21);
+  } else if (alarmText.length()) {
     int w = s.textWidth(alarmText) + 24;
     s.fillRoundRect(476 - w, 7, w, 26, 13, C_BAD);
     s.setTextColor(C_TEXT, C_BAD);
@@ -329,8 +346,25 @@ static void tabs(int page) {
 }
 
 // --------------------------------------------------------------- HOME ----
+static void tileDraw(int x, int y, int w, int h, const char *lbl, const String &value, const char *unit,
+                     uint16_t accent, const String &old, int roll);
 static void tile(int x, int y, int w, int h, const char *lbl,
                  const String &value, const char *unit, uint16_t accent) {
+  // remember the last value per tile position; roll the number when it changes
+  static int keys[12];
+  static String vals[12];
+  static int nk = 0;
+  int key = x * 1000 + y, slot = -1;
+  for (int i = 0; i < nk; i++) if (keys[i] == key) slot = i;
+  if (slot < 0 && nk < 12) { slot = nk++; keys[slot] = key; vals[slot] = ""; }
+  String old = slot >= 0 ? vals[slot] : String("");
+  if (slot >= 0) vals[slot] = value;
+  if (old.length() && old != value && value != "--" && old != "--") {
+    for (int r = 1; r <= 4; r++) tileDraw(x, y, w, h, lbl, value, unit, accent, old, r);
+  } else tileDraw(x, y, w, h, lbl, value, unit, accent, "", 0);
+}
+static void tileDraw(int x, int y, int w, int h, const char *lbl, const String &value, const char *unit,
+                     uint16_t accent, const String &old, int roll) {
   LGFX_Sprite s(&tft);
   s.setColorDepth(16);
   if (!s.createSprite(w, h)) return;
@@ -344,7 +378,13 @@ static void tile(int x, int y, int w, int h, const char *lbl,
   s.setTextColor(C_TEXT, C_CARD);
   s.setFont(&fonts::FreeSansBold18pt7b);
   s.setTextDatum(textdatum_t::bottom_left);
-  s.drawString(value, 12, h - 4);
+  if (roll > 0) { // old value slides up and out, new one comes in from below
+    int step = (h - 22) / 4;
+    s.setClipRect(6, 22, w - 6, h - 22);
+    s.drawString(old, 12, h - 4 - roll * step);
+    s.drawString(value, 12, h - 4 + (4 - roll) * step);
+    s.clearClipRect();
+  } else s.drawString(value, 12, h - 4);
   int vw = s.textWidth(value);
   s.setFont(&fonts::FreeSans9pt7b);
   s.setTextColor(C_MUTED, C_CARD);
@@ -353,10 +393,26 @@ static void tile(int x, int y, int w, int h, const char *lbl,
   s.deleteSprite();
 }
 static int lastSocDrawn = -2;
+static uint32_t gaugeAnimAt = 0; // sweep 0 -> SOC when the HOME page opens
+static int gaugeTarget = -1;
+static void socGaugeDraw(int soc);
 static void socGauge(const DisplaySnap &d, bool force) {
   int soc = d.live ? int(d.sample.soc + .5f) : -1;
+  if (force && soc > 0) { gaugeAnimAt = millis(); gaugeTarget = soc; lastSocDrawn = soc; socGaugeDraw(0); return; }
+  if (gaugeAnimAt) { gaugeTarget = soc; return; } // the sweep is running
   if (!force && soc == lastSocDrawn) return;
   lastSocDrawn = soc;
+  socGaugeDraw(soc);
+}
+static void gaugeTick() {
+  if (!gaugeAnimAt) return;
+  uint32_t t = millis() - gaugeAnimAt;
+  float k = std::min(1.f, t / 650.f);
+  k = 1 - (1 - k) * (1 - k) * (1 - k);
+  socGaugeDraw(int(gaugeTarget * k + .5f));
+  if (t >= 650) { gaugeAnimAt = 0; lastSocDrawn = gaugeTarget; socGaugeDraw(gaugeTarget); }
+}
+static void socGaugeDraw(int soc) {
   const int cx = 106, cy = 150, r1 = 86, r0 = 71;
   uint16_t col = soc < 0 ? C_LINE : soc <= 15 ? C_BAD : soc <= 35 ? C_WARN : C_GOOD;
   tft.fillArc(cx, cy, r0, r1, 135, 405, C_LINE);
@@ -515,32 +571,175 @@ static void home(const DisplaySnap &d, bool force) {
   b.pushSprite(9, 228);
   b.deleteSprite();
 }
-// moving chevrons under the SOC number: up = charging, down = discharging
+// under the SOC number: pulsing bolt + chevrons with a moving light
+// (up = charging, down = discharging)
+static uint16_t blend565(uint16_t a, uint16_t b, float k) {
+  int ar = a >> 11, ag = (a >> 5) & 63, ab = a & 31, br = b >> 11, bg = (b >> 5) & 63, bb = b & 31;
+  return uint16_t(int(ar + (br - ar) * k) << 11 | int(ag + (bg - ag) * k) << 5 | int(ab + (bb - ab) * k));
+}
 static void flowAnim(const DisplaySnap &d) {
   if (bigMode) return;
   static uint32_t last = 0;
-  if (millis() - last < 140) return;
+  if (millis() - last < 60) return;
   last = millis();
   int dir = !d.live ? 0 : d.sample.current > 0.3f ? 1 : d.sample.current < -0.3f ? -1 : 0;
   LGFX_Sprite s(&tft);
-  s.setColorDepth(8);
-  if (!s.createSprite(64, 18)) return;
+  s.setColorDepth(16);
+  if (!s.createSprite(96, 20)) return;
   s.fillSprite(C_BG);
-  int phase = (millis() / 140) % 3;
-  for (int k = 0; k < 3; k++) {
-    int idx = dir > 0 ? 2 - k : k;
-    uint16_t c = dir == 0 ? C_LINE : idx == phase ? (dir > 0 ? C_GOOD : C_WARN) : C_LINE;
-    int x = 6 + k * 20;
-    if (dir >= 0) s.fillTriangle(x, 14, x + 16, 14, x + 8, 3, c);
-    else s.fillTriangle(x, 3, x + 16, 3, x + 8, 14, c);
-    if (dir == 0) { s.fillSprite(C_BG); s.fillRoundRect(8, 7, 48, 4, 2, C_LINE); break; }
+  if (dir == 0) s.fillRoundRect(24, 8, 48, 4, 2, C_LINE);
+  else {
+    uint16_t on = dir > 0 ? C_GOOD : C_WARN;
+    float t = millis() / 1000.f;
+    // bolt (charging) / drop (discharging), gently pulsing
+    float pul = .55f + .45f * (0.5f + 0.5f * sinf(t * 6.f));
+    uint16_t ic = blend565(C_BG, dir > 0 ? C_WARN : C_WARN, pul);
+    if (dir > 0) { s.fillTriangle(10, 1, 3, 11, 9, 11, ic); s.fillTriangle(9, 9, 15, 9, 7, 19, ic); }
+    else { s.fillCircle(9, 12, 6, ic); s.fillTriangle(3, 11, 15, 11, 9, 1, ic); }
+    for (int k = 0; k < 4; k++) {
+      int idx = dir > 0 ? 3 - k : k;
+      float ph = fmodf(t * 1.6f - idx * .22f, 1.f);
+      if (ph < 0) ph += 1;
+      float a = .2f + .8f * std::max(0.f, sinf(ph * 3.14159f));
+      uint16_t c = blend565(C_LINE, on, a);
+      int x = 24 + k * 18;
+      if (dir > 0) s.fillTriangle(x, 16, x + 14, 16, x + 7, 4, c);
+      else s.fillTriangle(x, 4, x + 14, 4, x + 7, 16, c);
+    }
   }
-  s.pushSprite(106 - 32, 150 + 37);
+  s.pushSprite(106 - 48, 150 + 36);
   s.deleteSprite();
 }
 
+// ----------------------------------------------------------- EV HOME ----
+// Motorbike / car profile: drive-power meter (green = regen), range in km.
+static float evShown = 0, evPeak = 3000;
+static float evTarget = 0;
+static void evMeter(float p) { // p in W: + = driving, - = regen
+  const int cx = 150, cy = 214, r1 = 126, r0 = 108;
+  float span = 180.f, z = 180 + span * .2f;
+  tft.fillArc(cx, cy, r0, r1, 180, 360, C_LINE);
+  if (p > 1) tft.fillArc(cx, cy, r0, r1, z, z + (360 - z) * std::min(1.f, p / evPeak), C_WARN);
+  else if (p < -1) tft.fillArc(cx, cy, r0, r1, z - (z - 180) * std::min(1.f, -p / (evPeak * .3f)), z, C_GOOD);
+  tft.fillRect(cx - 2 + int((r0 - 6) * cosf(z * 0.0174533f)), cy - 4 + int((r0 - 6) * sinf(z * 0.0174533f)), 4, 4, C_MUTED);
+  LGFX_Sprite t(&tft);
+  t.setColorDepth(8);
+  if (!t.createSprite(160, 74)) return;
+  t.fillSprite(C_BG);
+  t.setTextDatum(textdatum_t::middle_center);
+  t.setFont(&fonts::FreeSansBold24pt7b);
+  t.setTextColor(p < -1 ? C_GOOD : C_TEXT, C_BG);
+  t.drawString(fmt(p / 1000.f, 1), 80, 30);
+  t.setFont(&fonts::FreeSans9pt7b);
+  t.setTextColor(C_MUTED, C_BG);
+  t.drawString(p < -1 ? "kW regen" : "kW", 80, 62);
+  t.pushSprite(cx - 80, cy - 100);
+  t.deleteSprite();
+}
+static void evHome(const DisplaySnap &d, bool force) {
+  const auto &s = d.sample;
+  bool ok = d.live;
+  evTarget = ok ? -(s.voltage * s.current) : 0;
+  evPeak = std::max(evPeak, std::fabs(evTarget));
+  if (force) {
+    evShown = 0;
+    evMeter(0);
+    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setTextDatum(textdatum_t::middle_center);
+    tft.setTextColor(C_MUTED, C_BG);
+    tft.drawString("REGEN", 30, 226);
+    tft.drawString(String(int(evPeak / 1000 + .5f)) + " kW", 268, 226);
+  }
+  float rk = evRangeKm(d);
+  LGFX_Sprite b(&tft);
+  b.setColorDepth(8);
+  if (!b.createSprite(170, 186)) return;
+  b.fillSprite(C_BG);
+  b.fillRoundRect(0, 0, 170, 186, 12, C_CARD);
+  b.setFont(&fonts::FreeSans9pt7b);
+  b.setTextDatum(textdatum_t::top_left);
+  b.setTextColor(C_MUTED, C_CARD);
+  b.drawString("Range left", 12, 10);
+  b.setFont(&fonts::FreeSansBold24pt7b);
+  bool low = rk >= 0 && d.rangeAlarm && rk < d.rangeAlarm;
+  b.setTextColor(low ? C_WARN : C_TEXT, C_CARD);
+  b.drawString(rk < 0 ? String("--") : String(int(rk + .5f)), 12, 32);
+  b.setFont(&fonts::FreeSans9pt7b);
+  b.setTextColor(C_MUTED, C_CARD);
+  b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : "km", 12, 76);
+  int soc = ok ? int(s.soc + .5f) : 0;
+  b.drawString(String("SOC ") + (ok ? String(soc) + "%" : String("--")) + (d.whkm ? String("  ") + d.whkm + " Wh/km" : String("")), 12, 100);
+  b.fillRoundRect(12, 122, 146, 8, 4, C_LINE);
+  if (soc > 0) b.fillRoundRect(12, 122, 146 * std::min(soc, 100) / 100, 8, 4, soc <= 15 ? C_BAD : soc <= 35 ? C_WARN : C_GOOD);
+  b.drawString("Voltage", 12, 140);
+  b.setFont(&fonts::FreeSansBold12pt7b);
+  b.setTextColor(C_TEXT, C_CARD);
+  b.drawString(ok ? fmt(s.voltage, 1) + " V" : String("--"), 12, 158);
+  b.pushSprite(300, 46);
+  b.deleteSprite();
+  LGFX_Sprite st(&tft);
+  st.setColorDepth(8);
+  if (!st.createSprite(462, 40)) return;
+  st.fillSprite(C_BG);
+  st.fillRoundRect(0, 0, 462, 40, 10, C_CARD);
+  float mn, mx;
+  int imn, imx;
+  cellStats(s, mn, mx, imn, imx);
+  st.setFont(&fonts::FreeSans9pt7b);
+  st.setTextDatum(textdatum_t::middle_left);
+  st.setTextColor(C_TEXT, C_CARD);
+  st.drawString(ok && imn >= 0 ? String(s.count) + "S  d" + String(int((mx - mn) * 1000 + .5f)) + "mV  " + fmt(s.temp1, 0) + "C  " + fmt(s.current, 1) + "A"
+                               : String(d.linked ? "Waiting for BMS data" : "Not connected - open BMS tab"), 12, 20);
+  pill(st, 304, 7, "CHG", ok && s.charge);
+  pill(st, 382, 7, "DSG", ok && s.discharge);
+  st.pushSprite(9, 234);
+  st.deleteSprite();
+  // regen: current flows back in shortly after driving
+  static uint32_t lastDrive = 0;
+  if (ok && s.current < -1) lastDrive = millis();
+  if (ok && s.current > .5f && millis() - lastDrive < 8000) { regenUntil = millis() + 1500; regenKw = s.voltage * s.current / 1000; }
+}
+static void evTick() { // ease the needle toward the latest power
+  static uint32_t last = 0;
+  if (millis() - last < 60) return;
+  last = millis();
+  float n = evShown + (evTarget - evShown) * .35f;
+  if (std::fabs(n - evShown) < 5) return;
+  evShown = n;
+  evMeter(evShown);
+}
+// tab change: a quick wipe in the direction of travel
+static void pageWipe(int dir) {
+  for (int k = 1; k <= 4; k++) {
+    int x = dir > 0 ? 480 - k * 120 : (k - 1) * 120;
+    tft.fillRect(x, 41, 120, TAB_Y - 41, C_BG);
+    tft.fillRect(dir > 0 ? x : x + 117, 41, 3, TAB_Y - 41, C_ACCENT);
+    vTaskDelay(pdMS_TO_TICKS(16));
+  }
+  clearContent();
+}
+// a new alarm: banner slides into the header, the screen edge blinks red 3 times
+static void alarmFlash() {
+  tft.setFont(&fonts::FreeSansBold9pt7b);
+  int w = tft.textWidth(alarmText) + 24;
+  for (int k = 0; k <= 4; k++) {
+    int y = -28 + k * 9;
+    tft.fillRect(476 - w, 0, w, 40, C_BG);
+    tft.fillRoundRect(476 - w, y, w, 26, 13, C_BAD);
+    tft.setTextColor(C_TEXT, C_BAD);
+    tft.setTextDatum(textdatum_t::middle_center);
+    tft.drawString(alarmText, 476 - w / 2, y + 14);
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  for (int i = 0; i < 6; i++) {
+    uint16_t c = i % 2 ? C_BG : C_BAD;
+    for (int k = 0; k < 4; k++) tft.drawRect(k, k, 480 - 2 * k, 320 - 2 * k, c);
+    vTaskDelay(pdMS_TO_TICKS(110));
+  }
+}
+
 // -------------------------------------------------------------- CELLS ----
-static void cells(const DisplaySnap &d, bool) {
+static void cells(const DisplaySnap &d, bool force) {
   const auto &s = d.sample;
   int n = d.live ? int(s.count) : 0;
   if (n > 32) n = 32;
@@ -575,17 +774,21 @@ static void cells(const DisplaySnap &d, bool) {
   }
   float lo = 2.8f, hi = 4.25f;
   if (mx > 0 && mx < 3.7f) lo = 2.5f, hi = 3.65f; // LiFePO4-like pack
+  // on page open the bars grow one after another (6 frames)
+  for (int fr = force && n ? 1 : 6; fr <= 6; fr++) {
   int idx = 0;
   for (int i = 0; i < 32 && idx < n; i++) {
     float v = s.cells[i];
     if (v <= 0) continue;
     int col = idx % cols, row = idx / cols;
+    float grow = std::min(1.f, std::max(0.f, fr / 6.f * 1.5f - idx * .5f / n));
     idx++;
     c.fillSprite(C_BG);
     c.fillRoundRect(0, 0, cw, ch, 6, C_CARD);
     float f = (v - lo) / (hi - lo);
     if (f < 0) f = 0;
     if (f > 1) f = 1;
+    f *= grow;
     uint16_t bar = i == imx ? C_BAD : i == imn ? C_BLUE : C_GOOD;
     c.fillRoundRect(0, ch - barH, int(cw * f), barH, 1, bar);
     c.setFont(&fonts::FreeSans9pt7b);
@@ -596,6 +799,7 @@ static void cells(const DisplaySnap &d, bool) {
     c.setTextColor(i == imx ? C_BAD : i == imn ? C_BLUE : C_TEXT, C_CARD);
     c.drawString(fmt(v, 3), cw - 8, ch / 2 - (barH > 3 ? 1 : 0));
     c.pushSprite(12 + col * (cw + 6), 46 + row * (ch + gap));
+  }
   }
   c.deleteSprite();
   LGFX_Sprite b(&tft);
@@ -626,12 +830,12 @@ struct Dev {
 static std::vector<Dev> devs;
 static String devsJson;
 static int devPage = 0, protoSel = 0;
-static const char *const PROTO_LABEL[5] = {"AUTO", "JK32", "JK24", "ANT", "JBD"};
-static const char *const PROTO_VALUE[5] = {"AUTO", "JK02_32S", "JK02_24S", "ANT", "JBD"};
+static const char *const PROTO_LABEL[6] = {"AUTO", "JK32", "JK24", "ANT", "JBD", "DALY"};
+static const char *const PROTO_VALUE[6] = {"AUTO", "JK02_32S", "JK02_24S", "ANT", "JBD", "DALY"};
 static const Btn B_AUTOFIND = {214, 46, 84, 40}, B_SCAN = {302, 46, 84, 40},
                  B_STOP = {390, 46, 84, 40}, B_UP = {430, 136, 44, 66},
                  B_DOWN = {430, 208, 44, 66};
-static Btn protoBtn(int i) { return {96 + i * 76, 92, 70, 36}; }
+static Btn protoBtn(int i) { return {96 + i * 64, 92, 60, 36}; }
 static Btn devRow(int i) { return {12, 136 + i * 35, 412, 32}; }
 
 static void parseDevices(const String &json) {
@@ -682,7 +886,7 @@ static void bmsPage(const DisplaySnap &d, bool force) {
   button(B_STOP, "STOP", false);
   tft.fillRect(12, 92, 84, 36, C_BG);
   label(12, 110, "Protocol");
-  for (int i = 0; i < 5; i++) button(protoBtn(i), PROTO_LABEL[i], protoSel == i);
+  for (int i = 0; i < 6; i++) button(protoBtn(i), PROTO_LABEL[i], protoSel == i);
   tft.fillRect(12, 134, 462, TAB_Y - 136, C_BG);
   if (d.scanning) {
     label(20, 170, "Scanning for Bluetooth devices (about 4 s)...");
@@ -738,7 +942,7 @@ static void bmsTouch(const DisplaySnap &d, int x, int y) {
   } else if (hit(B_DOWN, x, y) && devs.size() > 4) {
     if ((devPage + 1) * 4 < (int)devs.size()) devPage++;
   } else {
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 6; i++)
       if (hit(protoBtn(i), x, y)) {
         protoSel = i;
         return;
@@ -1428,7 +1632,21 @@ static void splash() {
     tft.drawString(String("Last restart: ") + d.resetReason, 240, 242);
   }
   uint32_t t0 = millis();
-  int drawn = 0;
+  int drawn = 0, shineWas = -1000, stepShown = -1;
+  auto logoCols = [&](int x0, int x1, int shine) { // repaint logo columns x0..x1 with a light band at "shine"
+    x0 = std::max(0, x0); x1 = std::min(LOGO_W - 1, x1);
+    if (x1 < x0) return;
+    for (int y = 0; y < LOGO_H; y++) {
+      const uint8_t *row = LOGO_GRAY + size_t(y) * LOGO_W;
+      for (int x = x0; x <= x1; x++) {
+        int d = std::abs(x - shine + (y - LOGO_H / 2) / 3);
+        int boost = d < 18 ? (18 - d) * 7 : 0;
+        int v = std::min(255, row[x] + (row[x] > 40 ? boost : boost / 3));
+        line[x - x0] = lgfx::rgb565_t(v, v, v);
+      }
+      tft.pushImage(lx + x0, ly + y, x1 - x0 + 1, 1, line);
+    }
+  };
   for (;;) {
     uint32_t t = millis() - t0;
     if (t > SPLASH_MS) t = SPLASH_MS;
@@ -1440,8 +1658,25 @@ static void splash() {
       tft.fillRoundRect(bx, by, w, 4, 2, C_ACCENT);
       drawn = w;
     }
+    // light sweep across the logo (twice), only the columns that change
+    int ph = int(t % 2400);
+    int shine = ph < 1400 ? -30 + (LOGO_W + 60) * ph / 1400 : -1000;
+    if (shine != shineWas) {
+      if (shineWas > -1000) logoCols(shineWas - 30, shineWas + 30, shine);
+      if (shine > -1000) logoCols(shine - 30, shine + 30, shine);
+      shineWas = shine;
+    }
+    // what is starting right now
+    NetInfo n = netInfo();
+    int step = t < 1500 ? 0 : !n.connected && n.configured ? 1 : 2;
+    if (step != stepShown) {
+      stepShown = step;
+      tft.fillRect(100, 276, 280, 22, TFT_BLACK);
+      tft.setTextColor(tft.color565(120, 120, 120), TFT_BLACK);
+      tft.drawString(step == 0 ? "Starting Bluetooth" : step == 1 ? "Joining Wi-Fi " + n.ssid : n.connected ? String("Wi-Fi ok - cloud") : String("Ready"), 240, 286);
+    }
     if (t >= SPLASH_MS) break;
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(25));
   }
   tft.fillScreen(C_BG);
 }
@@ -1577,15 +1812,20 @@ static void displayTask(void *) {
       takeDisplaySnapshot(d);
       histPush(d);
       evalAlarm(d);
+      static uint8_t profShown = 255;
+      if (d.prof != profShown) { profShown = d.prof; force = true; }
       bool alarmNow = alarmText.length() > 0;
       if (alarmNow && !alarmWas) {
         lastActivity = now;
         if (asleep) { asleep = false; applyBacklight(); }
+        alarmFlash();
         if (dcfg.beep) beep(3);
+        force = true;
       }
       alarmWas = alarmNow;
       if (force) {
-        clearContent();
+        if (drawnPage >= 0 && drawnPage != page) pageWipe(page > drawnPage ? 1 : -1);
+        else clearContent();
         tabs(page);
         lastSocDrawn = -2;
         ledDrawnValid = false;
@@ -1595,14 +1835,14 @@ static void displayTask(void *) {
         infoKey = "";
         ovKey = "";
         if (page == P_BMS) {
-          for (int i = 0; i < 5; i++)
+          for (int i = 0; i < 6; i++)
             if (d.protocol == PROTO_VALUE[i]) protoSel = i;
         }
       }
       if (!asleep) {
         header(d);
         switch (page) {
-          case P_HOME: home(d, force); break;
+          case P_HOME: if (isEv(d) && !bigMode) evHome(d, force); else home(d, force); break;
           case P_CELLS: cells(d, force); break;
           case P_BMS: bmsPage(d, force); break;
           case P_PARAM: paramPageDraw(d, force); break;
@@ -1618,7 +1858,10 @@ static void displayTask(void *) {
       drawnPage = page;
       lastDraw = millis();
     }
-    if (page == P_HOME && drawnPage == P_HOME && !asleep && overlay == OV_NONE && !confirmDlg.active) flowAnim(d);
+    if (page == P_HOME && drawnPage == P_HOME && !asleep && overlay == OV_NONE && !confirmDlg.active) {
+      if (isEv(d) && !bigMode) evTick();
+      else { gaugeTick(); flowAnim(d); }
+    }
     xSemaphoreGive(gfxMutex);
     vTaskDelay(pdMS_TO_TICKS(30));
   }
