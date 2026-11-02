@@ -2,6 +2,7 @@
 #include "bms_other.h"
 #include "bms_params.h"
 #include "bms_settings.h"
+#include "jk_rs485.h"
 #include "jk_auth.h"
 #include "ble_channels.h"
 #include "ui.h"
@@ -24,9 +25,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.5.1-cyd35"
+#define BATTLAB_FW "2.6.0-cyd35"
 #else
-#define BATTLAB_FW "2.5.1-s3"
+#define BATTLAB_FW "2.6.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -83,6 +84,14 @@ struct Shared {
 bool scanWanted = false, configChanged = false, readWanted = false;
 uint32_t generation = 0;
 bool persistWanted = false;
+// BMS link: Bluetooth (default) or the RS485 cable (JK, ESP32-S3 only)
+struct LinkCfg {
+  bool rs485 = false;
+  int8_t rx = 18, tx = 17;
+  uint32_t baud = 115200;
+  uint8_t addr = 1;
+} linkCfg;
+static volatile bool linkRs485 = false;
 static volatile bool otaBusy = false; // firmware update running: Bluetooth stays idle
 static volatile int otaPct = -1;
 int otaProgress() { return otaPct; }
@@ -487,7 +496,7 @@ void bleWorker(void *) {
       dropped++;
   };
   for (;;) {
-    if (otaBusy) { // free the radio and RAM for the firmware download
+    if (otaBusy || linkRs485) { // firmware download, or the BMS is on the RS485 cable
       if (client->isConnected()) client->disconnect();
       vTaskDelay(pdMS_TO_TICKS(300));
       continue;
@@ -1594,6 +1603,41 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     return "ok";
   }
   if (c == "restart") { restartAfterSend = true; return "restarting"; }
+  if (c == "link") {
+#ifdef BATTLAB_DISPLAY
+    ok = false;
+    return "RS485 is available on the ESP32-S3 board";
+#else
+    String mode = a["mode"] | "ble";
+    int rx = a["rx"] | int(linkCfg.rx), tx = a["tx"] | int(linkCfg.tx), addr = a["addr"] | int(linkCfg.addr);
+    uint32_t baud = a["baud"] | linkCfg.baud;
+    auto badPin = [](int p) { return p < 0 || p > 48 || p == 19 || p == 20 || (p >= 26 && p <= 37); };
+    if (mode != "ble" && mode != "rs485") { ok = false; return "mode ble or rs485"; }
+    if (badPin(rx) || badPin(tx) || rx == tx) { ok = false; return "pick two free GPIO pins (not 19/20, not 26-37)"; }
+    if (baud != 9600 && baud != 19200 && baud != 38400 && baud != 57600 && baud != 115200) { ok = false; return "baud 9600-115200"; }
+    if (addr < 0 || addr > 15) { ok = false; return "address 0-15"; }
+    linkCfg.rs485 = mode == "rs485";
+    linkCfg.rx = rx; linkCfg.tx = tx; linkCfg.baud = baud; linkCfg.addr = addr;
+    Preferences p;
+    p.begin("battlab-jk", false);
+    p.putBool("l485", linkCfg.rs485);
+    p.putChar("lrx", linkCfg.rx);
+    p.putChar("ltx", linkCfg.tx);
+    p.putUInt("lbaud", linkCfg.baud);
+    p.putUChar("laddr", linkCfg.addr);
+    p.end();
+    {
+      Guard g;
+      shared.linked = shared.have = false;
+      shared.family = 0;
+      shared.state = linkCfg.rs485 ? "RS485_STARTING" : "RECONFIGURING";
+      generation++;
+      configChanged = true;
+    }
+    linkRs485 = linkCfg.rs485;
+    return linkCfg.rs485 ? String("RS485: RX ") + rx + " TX " + tx + " " + baud + " addr " + addr : String("Bluetooth");
+#endif
+  }
   if (c == "ota") {
     String url = a["url"] | "";
     if (!url.startsWith(String("https://") + CLOUD_SITE + "/fw/") || !url.endsWith(".bin") || url.length() > 200) {
@@ -1718,6 +1762,20 @@ static void cloudTask(void *) {
 #endif
       c["remote"] = 1;
       c["ota"] = 1;
+#ifndef BATTLAB_DISPLAY
+    c["link"] = linkCfg.rs485 ? "rs485" : "ble";
+    c["lrx"] = linkCfg.rx;
+    c["ltx"] = linkCfg.tx;
+    c["lbaud"] = linkCfg.baud;
+    c["laddr"] = linkCfg.addr;
+#endif
+#ifndef BATTLAB_DISPLAY
+      c["link"] = linkCfg.rs485 ? "rs485" : "ble";
+      c["lrx"] = linkCfg.rx;
+      c["ltx"] = linkCfg.tx;
+      c["lbaud"] = linkCfg.baud;
+      c["laddr"] = linkCfg.addr;
+#endif
       auto lo = c.createNestedObject("led");
       lo["on"] = led.on;
       lo["mode"] = led.mode;
@@ -2118,6 +2176,138 @@ static void bleSetupTick() {
   bleRefresh(slow);
 }
 
+#ifndef BATTLAB_DISPLAY
+// ---- JK BMS over the RS485 cable (RS485-to-TTL board on two GPIOs) -------
+// Tries the JK-PB Modbus request and the older 4E 57 request in turn; if
+// nothing answers it also tries with RX/TX swapped (common wiring mistake).
+static void rs485Publish(const jk::Sample &s, const char *what) {
+  Guard g;
+  shared.sample = s;
+  shared.have = shared.linked = true;
+  shared.stamp = millis();
+  shared.state = "LIVE";
+  shared.family = 1;
+  shared.detected = what;
+  shared.good++;
+}
+static void rs485Task(void *) {
+  HardwareSerial &U = Serial1;
+  bool started = false, swapped = false;
+  int8_t rx = -1, tx = -1;
+  uint32_t baud = 0, nextTx = 0, lastCells = 0, lastSet = 0, lastInfo = 0, lastOk = 0;
+  uint8_t proto = 0, tries = 0; // proto 1 = JK-PB Modbus, 2 = older 4E 57
+  jk::Parser parser;
+  jk485::OldFramer old;
+  uint8_t f[32];
+  auto handlePb = [&](const uint8_t *b) {
+    proto = 1;
+    lastOk = millis();
+    if (b[4] == 2) {
+      jk::Sample s;
+      if (jk::decode(b, true, s) || jk::decode(b, false, s)) rs485Publish(s, "JK RS485");
+    } else if (b[4] == 1) {
+      bmsw::JkSettings js;
+      if (bmsw::parseJkSettings(b, js)) { Guard g; shared.jk = js; shared.jkStamp = millis(); shared.haveParams = true; }
+    } else if (b[4] == 3) {
+      Guard g;
+      shared.model = asciiField(b + 6, 16);
+      shared.hardware = asciiField(b + 22, 8);
+      shared.software = asciiField(b + 30, 8);
+    }
+  };
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(15));
+    if (!linkRs485 || otaBusy) {
+      if (started) { U.end(); started = false; }
+      proto = 0;
+      vTaskDelay(pdMS_TO_TICKS(400));
+      continue;
+    }
+    int8_t wr = swapped ? linkCfg.tx : linkCfg.rx, wt = swapped ? linkCfg.rx : linkCfg.tx;
+    if (!started || rx != wr || tx != wt || baud != linkCfg.baud) {
+      if (started) U.end();
+      U.setRxBufferSize(1024);
+      U.begin(linkCfg.baud, SERIAL_8N1, wr, wt);
+      started = true;
+      rx = wr; tx = wt; baud = linkCfg.baud;
+      proto = 0; tries = 0;
+    }
+    while (U.available()) {
+      uint8_t c = U.read();
+      parser.feed(&c, 1, handlePb);
+      if (old.feed(c)) {
+        jk::Sample s;
+        if (jk485::decodeOld(old.data, old.dataLen, s)) { proto = 2; lastOk = millis(); rs485Publish(s, "JK RS485 (older)"); }
+      }
+    }
+    uint32_t t = millis();
+    if (int32_t(t - nextTx) < 0) continue;
+    // queued writes (JK-PB only)
+    BmsCmd cmd;
+    bool haveCmd = false;
+    {
+      Guard g;
+      if (cmdN) { cmd = cmdQ[0]; memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); cmdN--; haveCmd = true; }
+      if (readWanted) { readWanted = false; lastSet = 0; lastInfo = 0; }
+    }
+    if (haveCmd) {
+      String result;
+      if (proto == 1) {
+        uint16_t reg;
+        uint32_t raw;
+        if (cmd.isSwitch) {
+          reg = 0x1000 + (bmsw::JK_SW_OFFSET[cmd.idx] - 6);
+          raw = cmd.on ? 1 : 0;
+          result = String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") + (cmd.on ? " ON" : " OFF");
+        } else {
+          const auto &p = bmsw::JK_PARAMS[cmd.idx];
+          reg = 0x1000 + (p.offset - 6);
+          raw = bmsw::jkRaw(cmd.idx, cmd.value);
+          result = String(p.name) + " = " + String(cmd.value, int(p.decimals)) + " " + p.unit;
+        }
+        int k = jk485::pbWrite(f, linkCfg.addr, reg, raw);
+        U.write(f, k);
+        U.flush();
+        result = "Sent (RS485): " + result;
+        lastSet = 0; // read the settings back
+      } else result = "Writing needs a JK-PB / inverter BMS on RS485";
+      Guard g;
+      shared.lastWrite = result;
+      nextTx = t + 400;
+      continue;
+    }
+    int k = 0;
+    if (proto == 0) {
+      if (tries % 2 == 0) k = jk485::pbRequest(f, linkCfg.addr, 2);
+      else k = jk485::oldReadAll(f);
+      if (++tries >= 8) { // nothing answered: try the other wiring
+        tries = 0;
+        swapped = !swapped;
+        Guard g;
+        shared.state = "RS485_NO_ANSWER";
+        shared.linked = false;
+      }
+      nextTx = t + 600;
+    } else if (proto == 1) {
+      if (t - lastCells > 1000 || !lastCells) { k = jk485::pbRequest(f, linkCfg.addr, 2); lastCells = t; }
+      else if (t - lastSet > 30000 || !lastSet) { k = jk485::pbRequest(f, linkCfg.addr, 1); lastSet = t; }
+      else if (t - lastInfo > 120000 || !lastInfo) { k = jk485::pbRequest(f, linkCfg.addr, 3); lastInfo = t; }
+      nextTx = t + 250;
+    } else {
+      k = jk485::oldReadAll(f);
+      nextTx = t + 1500;
+    }
+    if (k) { U.write(f, k); U.flush(); }
+    if (proto && t - lastOk > 10000) { // lost
+      proto = 0;
+      Guard g;
+      shared.linked = shared.have = false;
+      shared.state = "RS485_NO_ANSWER";
+    }
+  }
+}
+#endif
+
 void bmsScan() {
   Guard g;
   scanWanted = true;
@@ -2280,6 +2470,14 @@ void setup() {
   wifiOn = prefs.getBool("wifi", true); // can be switched off on the screen
 #endif
   radioMax = prefs.getBool("txmax", true);
+#ifndef BATTLAB_DISPLAY
+  linkCfg.rs485 = prefs.getBool("l485", false);
+  linkCfg.rx = prefs.getChar("lrx", 18);
+  linkCfg.tx = prefs.getChar("ltx", 17);
+  linkCfg.baud = prefs.getUInt("lbaud", 115200);
+  linkCfg.addr = prefs.getUChar("laddr", 1);
+  linkRs485 = linkCfg.rs485;
+#endif
   netLoad();
   wifiApply();
   configTime(7 * 3600, 0, "pool.ntp.org", "time.google.com"); // Thailand time for the screen clock
@@ -2512,6 +2710,9 @@ void setup() {
   ledLoad();
   xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
   xTaskCreatePinnedToCore(cloudTask, "cloud", 10240, nullptr, 1, nullptr, 1);
+#ifndef BATTLAB_DISPLAY
+  xTaskCreatePinnedToCore(rs485Task, "rs485", 6144, nullptr, 1, nullptr, 1);
+#endif
   displayStart();
 }
 void loop() {
