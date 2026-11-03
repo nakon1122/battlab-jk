@@ -25,7 +25,7 @@ int main() {
   sp.push(r.data() + 50, r.size() - 50);
   size_t n = sp.frame();
   assert(n == r.size());
-  assert(decode(sp.buf, n, x, dl) == INPUT);
+  assert(decode(sp.buf, n, x, dl) == K_INPUT);
   sp.drop(n); assert(sp.n == 0);
   assert(!strcmp(x.sn, "5555555555") && !strcmp(x.dl, "2222222222") && (x.have & 1));
   Values v = values(x);
@@ -37,12 +37,12 @@ int main() {
   assert(fabsf(v.vac - 241.8f) < 0.01f);
   // corrupt crc -> BAD
   r[r.size() - 1] ^= 1;
-  Inv y; assert(decode(r.data(), r.size(), y) == BAD);
+  Inv y; assert(decode(r.data(), r.size(), y) == K_BAD);
   // heartbeat
   uint8_t hb[19] = {161, 26, 2, 0, 13, 0, 1, 193, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 0};
-  assert(decode(hb, 19, y, dl) == HEARTBEAT && !strcmp(dl, "2222222222"));
+  assert(decode(hb, 19, y, dl) == K_HEARTBEAT && !strcmp(dl, "2222222222"));
   // our own request echoed -> not data
-  assert(decode(o, 38, y) == OTHER);
+  assert(decode(o, 38, y) == K_OTHER);
   assert(validSerial("61730V3039") && !validSerial("617\x01") && !validSerial("123"));
   puts("lux tests ok");
 }

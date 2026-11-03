@@ -51,40 +51,40 @@ struct Inv {
 };
 
 // Which frame was decoded.
-enum Kind { NONE = 0, HEARTBEAT, INPUT, OTHER, BAD };
+enum Kind { K_NONE = 0, K_HEARTBEAT, K_INPUT, K_OTHER, K_BAD };
 
 // Decode one complete frame `f` of length n (n = len field + 6).
 // For input-register data, the registers are copied into `out` (sn/dl too).
 static inline Kind decode(const uint8_t *f, size_t n, Inv &out, char *dlOut = nullptr) {
-  if (n < 18 || f[0] != 0xA1 || f[1] != 0x1A) return BAD;
-  if (size_t(u16(f + 4)) + 6 != n) return BAD;
+  if (n < 18 || f[0] != 0xA1 || f[1] != 0x1A) return K_BAD;
+  if (size_t(u16(f + 4)) + 6 != n) return K_BAD;
   if (dlOut) { memcpy(dlOut, f + 8, 10); dlOut[10] = 0; }
-  if (f[7] == 0xC1) return HEARTBEAT;
-  if (f[7] != 0xC2 || n < 38) return OTHER;
+  if (f[7] == 0xC1) return K_HEARTBEAT;
+  if (f[7] != 0xC2 || n < 38) return K_OTHER;
   uint16_t proto = u16(f + 2);
   const uint8_t *d = f + 20;          // after the 2 data-length bytes
   size_t dn = n - 22;                 // without crc
   uint16_t c = crc16(d, dn);
-  if (f[n - 2] != (c & 0xFF) || f[n - 1] != (c >> 8)) return BAD;
+  if (f[n - 2] != (c & 0xFF) || f[n - 1] != (c >> 8)) return K_BAD;
   uint8_t fn = d[1];
-  if (fn != 4) return OTHER;
+  if (fn != 4) return K_OTHER;
   uint16_t reg = u16(d + 12);
   size_t off = 14, len;
   if (proto != 1) { len = d[14]; off = 15; } else len = dn - 14;
-  if (off + len > dn || len < 2 || (len & 1)) return BAD;
-  if (d[0] == 0 && len == 2) return OTHER; // our own request echoed back
+  if (off + len > dn || len < 2 || (len & 1)) return K_BAD;
+  if (d[0] == 0 && len == 2) return K_OTHER; // our own request echoed back
   size_t cnt = len / 2;
   bool any = false;
   for (size_t k = 0; k < cnt; k++) {
     size_t a = reg + k;
     if (a < 80) { out.r[a] = u16(d + off + 2 * k); any = true; }
   }
-  if (!any) return OTHER;
+  if (!any) return K_OTHER;
   if (reg == 0 && cnt >= 40) out.have |= 1;
   if (reg <= 40 && reg + cnt >= 80) out.have |= 2;
   memcpy(out.sn, d + 2, 10); out.sn[10] = 0;
   memcpy(out.dl, f + 8, 10); out.dl[10] = 0;
-  return INPUT;
+  return K_INPUT;
 }
 
 // Stream splitter: feed bytes, get complete frames.

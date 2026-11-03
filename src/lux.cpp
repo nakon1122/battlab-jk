@@ -138,9 +138,9 @@ static void serviceDongle(int di) {
       char dl[11] = {0};
       luxl::Kind kd = luxl::decode(d.sp.buf, n, tmp, dl);
       G g;
-      if (kd != luxl::BAD) { d.lastRx = millis(); d.frames++; }
-      if (kd != luxl::BAD && luxl::validSerial(dl)) memcpy(d.dl, dl, 11);
-      if (kd == luxl::INPUT && luxl::validSerial(tmp.sn)) {
+      if (kd != luxl::K_BAD) { d.lastRx = millis(); d.frames++; }
+      if (kd != luxl::K_BAD && luxl::validSerial(dl)) memcpy(d.dl, dl, 11);
+      if (kd == luxl::K_INPUT && luxl::validSerial(tmp.sn)) {
         Slot *s = slotFor(tmp.sn, di);
         s->dongle = di;
         memcpy(s->x.dl, tmp.dl, 11);
