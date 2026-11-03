@@ -31,9 +31,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.8-cyd35"
+#define BATTLAB_FW "2.8.9-cyd35"
 #else
-#define BATTLAB_FW "2.8.8-s3"
+#define BATTLAB_FW "2.8.9-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -131,6 +131,23 @@ static uint32_t pwSeq = 0;
 static void pwSet(uint32_t id, uint8_t a, const String &what, uint8_t st);
 #endif
 static volatile bool linkRs485 = false;
+// RS485 health: safe mode after crashes / hangs with RS485 on, counters for the website
+static volatile bool rsPaused = false;       // RS485 off for this boot after repeated restarts
+static bool rsPauseWanted = false;
+static uint32_t bootCount = 0;
+static String softWhy;                        // why the firmware restarted itself last time
+static volatile uint32_t rsBytesTot = 0, rsGoodTot = 0, rsBadTot = 0, rsLastByteMs = 0, rsBeat = 0;
+static volatile uint8_t rsModeNow = 0;
+static volatile bool rsSwapNow = false, rsRunning = false;
+static void softRestart(const char *why, bool rsFault) {
+  Preferences b;
+  b.begin("battlab-boot", false);
+  b.putString("why", why);
+  if (rsFault) b.putUChar("rsfail", b.getUChar("rsfail", 0) + 1);
+  b.end();
+  delay(200);
+  ESP.restart();
+}
 static volatile bool otaBusy = false; // firmware update running: Bluetooth stays idle
 static volatile bool bleOtaBusy = false; // firmware arriving over the Bluetooth setup link
 static volatile int otaPct = -1;
@@ -2125,6 +2142,13 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
       configChanged = true;
     }
     linkRs485 = linkCfg.rs485;
+    if (rsPaused) { // the user asked again: try RS485 once more
+      rsPaused = false;
+      Preferences b;
+      b.begin("battlab-boot", false);
+      b.putUChar("rsfail", 0);
+      b.end();
+    }
     return linkCfg.rs485 ? String("RS485: RX ") + rx + " TX " + tx + " " + baud + " addr " + addr + " x" + count + " " + bus : String("Bluetooth");
 #endif
   }
@@ -2350,6 +2374,20 @@ static void cloudTask(void *) {
       d["model"] = shared.model;
       d["rssi"] = shared.rssi;
       d["up"] = millis() / 1000;
+      d["rst"] = resetReasonText;
+      d["boots"] = bootCount;
+#ifndef BATTLAB_DISPLAY
+      if (linkRs485) {
+        auto rd = d.createNestedObject("rd");
+        rd["b"] = rsBytesTot;
+        rd["ok"] = rsGoodTot;
+        rd["bad"] = rsBadTot;
+        rd["m"] = rsModeNow;
+        rd["sw"] = rsSwapNow;
+        rd["ago"] = rsLastByteMs ? int32_t((millis() - rsLastByteMs) / 1000) : -1;
+        if (rsPaused) rd["paused"] = 1;
+      }
+#endif
       d["heap"] = ESP.getFreeHeap();
       d["blk"] = ESP.getMaxAllocHeap();
       if (shared.state != "LIVE") {
@@ -3073,8 +3111,14 @@ static void rs485Task(void *) {
   bool tryJk = true, tryDaly = true;
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(10));
-    if (!linkRs485 || otaBusy || bleOtaBusy) {
+    rsBeat = millis();
+    if (!linkRs485 || rsPaused || otaBusy || bleOtaBusy) {
       if (started) { U.end(); started = false; }
+      if (rsPaused && linkRs485) {
+        static bool told = false;
+        if (!told) { told = true; Guard g; shared.state = "RS485_PAUSED"; shared.linked = shared.have = false; }
+      }
+      rsRunning = false;
       proto = 0;
       vTaskDelay(pdMS_TO_TICKS(400));
       continue;
@@ -3086,6 +3130,13 @@ static void rs485Task(void *) {
       U.setRxBufferSize(2048);
       U.begin(linkCfg.baud, SERIAL_8N1, wr, wt);
       started = true;
+      if (!rsRunning) { // remember for the next boot: a crash now is blamed on RS485
+        rsRunning = true;
+        Preferences b;
+        b.begin("battlab-boot", false);
+        b.putBool("rson", true);
+        b.end();
+      }
       rx = wr; tx = wt; baud = linkCfg.baud;
       proto = 0; tries = 0; bytes = 0;
       startAt = lastByteAt = millis();
@@ -3105,8 +3156,11 @@ static void rs485Task(void *) {
     }
     uint32_t t = millis();
     bool heard = false;
-    while (U.available()) {
+    int budget = 512; // a noisy line must not starve Wi-Fi / cloud: take a break every 512 bytes
+    while (budget-- > 0 && U.available()) {
       uint8_t c = U.read();
+      rsBytesTot++;
+      rsLastByteMs = t;
       bytes++;
       lastByteAt = t;
       if (int32_t(millis() - ourTxEnd) > 0) heard = true;
@@ -3140,6 +3194,10 @@ static void rs485Task(void *) {
         });
       }
     }
+    rsGoodTot = parser.good;
+    rsBadTot = parser.bad;
+    rsModeNow = mode;
+    rsSwapNow = swapped;
     // keep the bank fresh-count current even when a pack goes quiet
     static uint32_t lastRecalc = 0;
     if (t - lastRecalc > 2000) { lastRecalc = t; Guard g; if (shared.bankN || mode == 1) rs485Recompute(); }
@@ -3547,6 +3605,17 @@ void setup() {
     b.begin("battlab-boot", false);
     uint8_t fails = resetAbnormal ? b.getUChar("fails", 0) + 1 : 0;
     b.putUChar("fails", fails);
+    bootCount = b.getUInt("boots", 0) + 1;
+    b.putUInt("boots", bootCount);
+    softWhy = b.getString("why", "");
+    b.remove("why");
+    if (softWhy.length()) { resetReasonText = strdup(softWhy.c_str()); resetAbnormal = true; }
+    // a crash while RS485 was running counts against RS485; two in a row -> RS485 paused this boot
+    uint8_t rsf = b.getUChar("rsfail", 0);
+    if (resetAbnormal && !softWhy.length() && b.getBool("rson", false)) rsf++;
+    b.putUChar("rsfail", rsf);
+    b.putBool("rson", false);
+    rsPauseWanted = rsf >= 2;
     b.end();
     if (fails >= 3) {
       const esp_partition_t *other = esp_ota_get_next_update_partition(nullptr);
@@ -3597,6 +3666,7 @@ void setup() {
   if (linkCfg.bus > 2) linkCfg.bus = 0;
   if (linkCfg.count < 1 || linkCfg.addr + linkCfg.count > 16) linkCfg.count = 1;
   linkRs485 = linkCfg.rs485;
+  if (rsPauseWanted && linkRs485) rsPaused = true;
   btLoad();
 #endif
   profCfg.type = prefs.getUChar("ptype", 0);
@@ -3864,7 +3934,7 @@ void setup() {
   luxd::start();
   xTaskCreatePinnedToCore(cloudTask, "cloud", 10240, nullptr, 1, nullptr, 1);
 #ifndef BATTLAB_DISPLAY
-  xTaskCreatePinnedToCore(rs485Task, "rs485", 6144, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(rs485Task, "rs485", 10240, nullptr, 1, nullptr, 1);
 #endif
   displayStart();
 }
@@ -3889,7 +3959,18 @@ void loop() {
     Preferences b;
     b.begin("battlab-boot", false);
     b.putUChar("fails", 0);
+    if (!rsPaused) b.putUChar("rsfail", 0); // RS485 ran a minute without trouble
     b.end();
+  }
+  // software watchdogs: a stuck RS485 task or no cloud upload for 10 min -> restart
+  if (rsRunning && linkRs485 && !rsPaused && millis() - rsBeat > 30000) softRestart("RS485 task stuck (watchdog)", true);
+  {
+    static uint32_t wifiSince = 0;
+    if (WiFi.status() != WL_CONNECTED || !staSsid.length() || !cloudPaired || !strlen(CLOUD_URL)) wifiSince = 0;
+    else if (!wifiSince) wifiSince = millis();
+    uint32_t okRef = cloudOkAt > wifiSince ? cloudOkAt : wifiSince;
+    if (wifiSince && !otaBusy && !bleOtaBusy && millis() - okRef > 600000)
+      softRestart("no cloud upload for 10 min (watchdog)", linkRs485 && !rsPaused);
   }
   if (persist) {
     prefs.putString("mac", saved.mac);

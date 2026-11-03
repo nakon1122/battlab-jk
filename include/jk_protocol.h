@@ -1,4 +1,5 @@
 #pragma once
+#include <cstring>
 #include <array>
 #include <cmath>
 #include <stddef.h>
@@ -156,10 +157,16 @@ public:
           frame(b.data());
           n = 0;
         } else {
+          // bad frame: resync on the next header inside it (no recursion: a noisy
+          // RS485 line used to recurse deep enough to overflow the task stack)
           bad++;
-          auto copy = b;
-          n = 0;
-          feed(copy.data() + 1, 299, frame);
+          size_t k = 1;
+          for (; k < 300; k++) {
+            size_t m = 300 - k < 4 ? 300 - k : 4;
+            if (memcmp(b.data() + k, h, m) == 0) break;
+          }
+          if (k < 300) { memmove(b.data(), b.data() + k, 300 - k); n = 300 - k; }
+          else n = 0;
         }
       }
     }
