@@ -24,7 +24,7 @@
 #include "improv_serial.h"
 #include <string>
 
-#define BATTLAB_FW "2.8.7-cloudscreen"
+#define BATTLAB_FW "2.8.8-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -109,6 +109,7 @@ static const char *const TAB_NAMES[TABS] = {"ALL", "HOME", "CELLS", "GRAPH", "CO
 struct DispCfg {
   uint8_t bl = 4, sleep = 0, rot = 1, lowSoc = 15, hiTemp = 55;
   bool beep = true, offAlarm = true, show = false;
+  uint8_t eco = 1; // data saver: 0 normal, 1 eco, 2 max (less internet / Supabase egress)
 } dcfg;
 static const uint8_t SLEEP_MIN[4] = {0, 1, 5, 10};
 static const uint8_t BL_LEVEL[6] = {0, 40, 90, 140, 200, 255};
@@ -123,7 +124,9 @@ static void dcfgLoad() {
   dcfg.beep = p.getBool("beep", true);
   dcfg.offAlarm = p.getBool("offalarm", true);
   dcfg.show = p.getBool("show", false);
+  dcfg.eco = p.getUChar("eco", 1);
   p.end();
+  if (dcfg.eco > 2) dcfg.eco = 1;
   if (dcfg.bl < 1 || dcfg.bl > 5) dcfg.bl = 4;
   if (dcfg.sleep > 3) dcfg.sleep = 0;
 }
@@ -138,6 +141,7 @@ static void dcfgSave() {
   p.putBool("beep", dcfg.beep);
   p.putBool("offalarm", dcfg.offAlarm);
   p.putBool("show", dcfg.show);
+  p.putUChar("eco", dcfg.eco);
   p.end();
 }
 
@@ -225,6 +229,24 @@ static std::vector<OutCmd> outQ;
 static String focusId, histWantId, netToast;
 static int histWantHours = 24;
 static bool fastWanted = false, histWanted = false, syncNow = false;
+// data saver: how often to sync, by what the screen shows (set by the display task)
+static volatile int uiPage = 0;
+static volatile bool uiAsleep = false;
+static volatile bool ecoPending = false; // changed on the screen: tell the cloud
+static volatile int ecoFromCloud = -1;   // changed on the website: apply on the screen
+static volatile uint32_t dataBytes = 0;  // downloaded + sent today (approx., incl. HTTP/TLS overhead)
+static int dataDay = -1;
+static const char *const ECO_NAME[3] = {"NORMAL", "ECO", "ECO MAX"};
+static String fmt(float v, int d);
+static void dataAdd(uint32_t n) {
+  time_t t = time(nullptr);
+  if (t > 1700000000) {
+    struct tm tm;
+    localtime_r(&t, &tm);
+    if (tm.tm_yday != dataDay) { dataDay = tm.tm_yday; dataBytes = 0; }
+  }
+  dataBytes += n;
+}
 static volatile int otaPct = -1;
 static bool checkUpdate = false;
 static int verNum(const char *v) { // "2.4.0-..." -> 20400
@@ -612,6 +634,7 @@ static void netTask(void *) {
       code = http.POST(body);
       if (code > 0) resp = http.getString();
       http.end();
+      dataAdd(body.length() + resp.length() + 900); // + headers / TLS records
     }
     if (code < 0) {
       char why[96] = {0};
@@ -707,17 +730,29 @@ static void netTask(void *) {
     if (!now && next && int32_t(millis() - next) < 0) continue;
     String body = String("{\"p_token\":\"") + token + "\",\"p_pair\":\"" + pairCode + "\",\"p_focus\":" +
                   (fid.length() == 36 ? "\"" + fid + "\"" : String("null")) + ",\"p_fast\":" +
-                  (fast ? "true" : "false") + ",\"p_fw\":\"" BATTLAB_FW "\"}";
+                  (fast ? "true" : "false") + ",\"p_fw\":\"" BATTLAB_FW "|m" + fmt(dataBytes / 1048576.f, 1) +
+                  (ecoPending ? String("|e") + int(dcfg.eco) : String("")) + "\"}"; // fw|m<MB today>|e<eco set here>
+    bool ecoSent = ecoPending;
     int code;
     String r = post("viewer_sync", body, code);
     if (code == 200) {
       DynamicJsonDocument d(32768);
       if (!deserializeJson(d, r)) {
         parseSync(d);
+        // data saver mode: the website can change it; the screen tells the cloud when changed here
+        int se = d["eco"].isNull() ? -1 : d["eco"].as<int>();
+        if (ecoSent) ecoPending = false;
+        else if (se < 0) ecoPending = true; // cloud does not know it yet
+        else if (se <= 2 && se != dcfg.eco && !ecoPending) ecoFromCloud = se;
         String ota = d["ota"] | "";
         if (ota.length()) { runOta(tls, ota); continue; } // started from the website
       } else setStatus("bad reply");
-      next = millis() + (fast ? 2500 : 5000);
+      // how long until the next sync (see SETUP > ECO)
+      uint32_t every = 5000;
+      bool focusPage = uiPage == P_HOME || uiPage == P_CELLS || uiPage == P_GRAPH || uiPage == P_CTRL;
+      if (dcfg.eco == 1) every = uiAsleep ? 60000 : focusPage ? 5000 : 15000;
+      else if (dcfg.eco == 2) every = uiAsleep ? 300000 : focusPage ? 15000 : 30000;
+      next = millis() + (fast ? 2500 : every);
     } else {
       if (code > 0) setStatus(errText(r, code));
       else {
@@ -846,6 +881,10 @@ static void header(const Model &m, int page) {
   }
   bool ok = m.status == "online";
   s.fillCircle(124, 20, 6, ok ? C_GOOD : m.status.startsWith("waiting") || m.status.startsWith("Wi-Fi") ? C_WARN : C_BAD);
+  if (dcfg.eco) { // data saver on: the dot becomes a leaf (vein + stem)
+    s.fillTriangle(118, 14, 124, 14, 118, 20, C_BG);
+    s.drawLine(119, 25, 128, 16, C_BG);
+  }
   s.setFont(&fonts::FreeSans9pt7b);
   s.setTextDatum(textdatum_t::middle_left);
   bool nav = page != P_ALL && page != P_SETUP && m.devs.size() > 1;
@@ -2054,7 +2093,7 @@ static const Btn S_BL_MINUS = {150, 46, 52, 40}, S_BL_PLUS = {300, 46, 52, 40}, 
                  S_SOC_MINUS = {150, 138, 52, 40}, S_SOC_PLUS = {270, 138, 52, 40}, S_BEEP = {340, 138, 134, 40},
                  S_T_MINUS = {150, 184, 52, 40}, S_T_PLUS = {270, 184, 52, 40}, S_OFF = {340, 184, 134, 40},
                  S_WIFI = {8, 230, 88, 42}, S_PAIR = {101, 230, 88, 42}, S_SHOW = {194, 230, 92, 42},
-                 S_CAL = {291, 230, 92, 42}, S_RESTART = {388, 230, 86, 42};
+                 S_CAL = {291, 230, 92, 42}, S_ECO = {388, 230, 86, 42};
 static Btn sleepBtn(int i) { return {150 + i * 82, 92, 76, 40}; }
 static String setupKey;
 static void valueBox(int x, int y, const String &v) {
@@ -2067,7 +2106,7 @@ static void valueBox(int x, int y, const String &v) {
 static void applyBacklight() { tft.setBrightness(BL_LEVEL[dcfg.bl]); }
 static bool wantCalibrate = false, wantRotate = false;
 static void setupPage(bool force) {
-  String key = String(int(dcfg.bl)) + int(dcfg.sleep) + int(dcfg.rot) + int(dcfg.lowSoc) + "/" + int(dcfg.hiTemp) + B(dcfg.beep) + B(dcfg.offAlarm) + B(dcfg.show) +
+  String key = String(int(dcfg.eco)) + int(dcfg.bl) + int(dcfg.sleep) + int(dcfg.rot) + int(dcfg.lowSoc) + "/" + int(dcfg.hiTemp) + B(dcfg.beep) + B(dcfg.offAlarm) + B(dcfg.show) +
                B(WiFi.status() == WL_CONNECTED);
   if (!force && key == setupKey) return;
   setupKey = key;
@@ -2097,7 +2136,7 @@ static void setupPage(bool force) {
   button(S_PAIR, "PAIRING", false);
   button(S_SHOW, dcfg.show ? "SHOW ON" : "SHOW OFF", dcfg.show, C_GOOD);
   button(S_CAL, "CALIB", false);
-  button(S_RESTART, "RESTART", false);
+  button(S_ECO, ECO_NAME[dcfg.eco], dcfg.eco > 0, C_GOOD);
 }
 
 // --------------------------------------------- overlays: Wi-Fi + pairing ----
@@ -2117,7 +2156,7 @@ static const char *const KB_ROWS[4][4] = {{"1234567890", "qwertyuiop", "asdfghjk
                                           {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"},
                                           {"1234567890", "!@#$%^&*()", "-_=+[]{};", ":'\".,?/"},
                                           {"1234567890", "~`|\\<>!@#$", "%^&*()-_=", "+;:'\",."}};
-static const Btn U_CHECK = {302, 46, 84, 40};
+static const Btn U_CHECK = {302, 46, 84, 40}, U_RESTART = {390, 92, 84, 40};
 static const Btn W_SCAN = {302, 46, 84, 40}, W_BACK = {390, 46, 84, 40}, W_UP = {430, 94, 44, 68}, W_DOWN = {430, 168, 44, 68};
 static Btn netRow(int i) { return {12, 94 + i * 36, 412, 32}; }
 static Btn kbKey(int row, int i) {
@@ -2202,12 +2241,13 @@ static void wifiOverlayDraw(bool force) {
   }
 }
 static void pairOverlayDraw(const Model &m, bool force) {
-  String key = m.status + B(m.paired) + m.name + B(WiFi.status() == WL_CONNECTED);
+  String key = m.status + B(m.paired) + m.name + B(WiFi.status() == WL_CONNECTED) + int(dataBytes / 104858) + int(dcfg.eco);
   if (!force && key == ovKey) return;
   ovKey = key;
   clearContent();
   button(W_BACK, "BACK", false);
   button(U_CHECK, "UPDATE", false);
+  button(U_RESTART, "RESTART", false);
   tft.setFont(&fonts::FreeSans9pt7b);
   tft.setTextDatum(textdatum_t::top_left);
   tft.setTextColor(C_MUTED, C_BG);
@@ -2222,7 +2262,7 @@ static void pairOverlayDraw(const Model &m, bool force) {
   tft.drawString(m.paired ? String("Remove it on the website to pair with another account.")
                           : String("Sign in there, tap Add device, enter the code."), 12, 174);
   tft.setTextColor(C_MUTED, C_BG);
-  tft.drawString(String("Cloud: ") + m.status, 12, 206);
+  tft.drawString(String("Cloud: ") + m.status + "   Data today " + fmt(dataBytes / 1048576.f, 1) + " MB (" + ECO_NAME[dcfg.eco] + ")", 12, 206);
   tft.drawString(String("Firmware ") + BATTLAB_FW + "   IP " + WiFi.localIP().toString() + "   RAM " +
                      (ESP.getFreeHeap() / 1024) + "k",
                  12, 232);
@@ -2232,6 +2272,7 @@ static bool overlayTouch(int x, int y) {
   if (overlay == OV_PAIR) {
     if (hit(W_BACK, x, y)) { overlay = OV_NONE; return true; }
     if (hit(U_CHECK, x, y)) { Lock l; checkUpdate = true; netToast = "Checking for a new firmware..."; }
+    if (hit(U_RESTART, x, y)) { showToast("Restarting..."); delay(300); ESP.restart(); }
     return false;
   }
   if (overlay == OV_WIFI) {
@@ -2300,7 +2341,14 @@ static void setupTouch(int x, int y) {
   else if (hit(S_WIFI, x, y)) { overlay = OV_WIFI; ovKey = ""; if (!netScanJson().length() || nets.empty()) netScanStart(); changed = false; }
   else if (hit(S_PAIR, x, y)) { overlay = OV_PAIR; ovKey = ""; changed = false; }
   else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
-  else if (hit(S_RESTART, x, y)) { showToast("Restarting..."); delay(300); ESP.restart(); }
+  else if (hit(S_ECO, x, y)) {
+    dcfg.eco = (dcfg.eco + 1) % 3;
+    ecoPending = true;
+    { Lock l; syncNow = true; }
+    static const char *const T[3] = {"NORMAL: sync every 5 s", "ECO: 5 s / 15 s ALL / 1 min asleep",
+                                     "ECO MAX: 15 s / 30 s / 5 min asleep"};
+    showToast(T[dcfg.eco], 4000);
+  }
   else {
     changed = false;
     for (int i = 0; i < 4; i++)
@@ -2461,6 +2509,13 @@ static void uiTask(void *) {
       m = M;
       if (netToast.length()) { showToast(netToast, 3500); netToast = ""; }
       fastWanted = page == P_CTRL;
+      if (ecoFromCloud >= 0) { // set on the website
+        dcfg.eco = ecoFromCloud;
+        ecoFromCloud = -1;
+        dcfgSave();
+        setupKey = "";
+        showToast(String("Data saver: ") + ECO_NAME[dcfg.eco] + " (from the website)");
+      }
       // first battery becomes the focus
       if (M.paired && !M.devs.empty()) {
         bool found = false;
@@ -2476,6 +2531,7 @@ static void uiTask(void *) {
       if (asleep) {
         asleep = false;
         applyBacklight();
+        { Lock l; syncNow = true; } // fresh data right after waking up
       } else if (overlay == OV_KB) {
         if (overlayTouch(tp.x, tp.y)) drawnPage = -1;
       } else if (dlg.active) {
@@ -2589,6 +2645,17 @@ static void uiTask(void *) {
       calibrate();
       wantCalibrate = wantRotate = false;
       drawnPage = -1;
+    }
+    {
+      static int lastUiPage = -1;
+      if (page != lastUiPage) { // opening one battery: fetch it now instead of waiting a slow ECO round
+        bool focus = page == P_HOME || page == P_CELLS || page == P_GRAPH || page == P_CTRL;
+        bool was = lastUiPage == P_HOME || lastUiPage == P_CELLS || lastUiPage == P_GRAPH || lastUiPage == P_CTRL;
+        if (focus && !was && lastUiPage >= 0 && dcfg.eco) { Lock l; syncNow = true; }
+        lastUiPage = page;
+      }
+      uiPage = page;
+      uiAsleep = asleep;
     }
     uint32_t sleepMs = uint32_t(SLEEP_MIN[dcfg.sleep]) * 60000u;
     if (!asleep && sleepMs && now - lastActivity > sleepMs && !alarmText.length()) {

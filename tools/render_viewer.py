@@ -42,8 +42,12 @@ class Scr:
         s.text(label, x + w/2, y + h/2 + 1, f or F9B, LINE if not enabled else BG if sel else TEXT, 'mm')
     def save(s, name): s.im.save(OUT / name); return OUT / name
 
+ECO = 1
 def header(s, txt, dot=GOOD, nav=False, alarm=None):
     s.paste_gray(LOGO_S, 8, 5, BG); s.circle(124, 20, 6, dot)
+    if ECO:  # data saver on: the status dot becomes a leaf
+        s.d.polygon([(118*S, 14*S), (124*S, 14*S), (118*S, 20*S)], fill=BG)
+        s.d.line([(119*S, 25*S), (128*S, 16*S)], fill=BG, width=S)
     if alarm:
         w = s.width(alarm, F9) + 24; s.rr(136, 7, w, 26, 13, fill=BAD); s.text(alarm, 148, 21, F9, TEXT)
     else:
@@ -337,8 +341,10 @@ def confirm():
     s.button((70, 196, 160, 46), 'CANCEL'); s.button((250, 196, 160, 46), 'SEND', True, BAD)
     return s
 
-def setup():
-    s = Scr(); header(s, '5 batteries  3 live')
+def setup(eco=1, toast=None):
+    global ECO
+    ECO = eco
+    s = Scr(); header(s, toast or '5 batteries  3 live')
     s.text('Screen', 12, 66, F9, MUTED); s.button((150, 46, 52, 40), '-', f=F12B); s.button((300, 46, 52, 40), '+', f=F12B)
     for i in range(5):
         h = 10 + i * 6; s.rr(210 + i * 17, 84 - h, 12, h, 3, fill=ACCENT if i < 4 else LINE)
@@ -349,13 +355,13 @@ def setup():
     s.button((270, 138, 52, 40), '+', f=F12B); s.button((340, 138, 134, 40), 'BEEP ON', True, GOOD)
     s.text('High temp alarm', 12, 204, F9, MUTED); s.button((150, 184, 52, 40), '-', f=F12B); s.text('55C', 236, 205, F12B, TEXT, 'mm')
     s.button((270, 184, 52, 40), '+', f=F12B); s.button((340, 184, 134, 40), 'OFFLINE ON', True, GOOD)
-    for i, (b, t) in enumerate(zip([(8, 230, 88, 42), (101, 230, 88, 42), (194, 230, 92, 42), (291, 230, 92, 42), (388, 230, 86, 42)], ['WI-FI', 'PAIRING', 'SHOW ON', 'CALIB', 'RESTART'])): s.button(b, t, i in (0, 2), GOOD)
-    tabs(s, 5); return s
+    for i, (b, t) in enumerate(zip([(8, 230, 88, 42), (101, 230, 88, 42), (194, 230, 92, 42), (291, 230, 92, 42), (388, 230, 86, 42)], ['WI-FI', 'PAIRING', 'SHOW ON', 'CALIB', ['NORMAL', 'ECO', 'ECO MAX'][eco]])): s.button(b, t, i in (0, 2) or (i == 4 and eco > 0), GOOD)
+    tabs(s, 5); ECO = 1; return s
 
 def pairing(paired=False):
     s = Scr(); header(s, 'Cloud: waiting for pairing' if not paired else '5 batteries  3 live', WARN if not paired else GOOD)
     if paired:
-        s.button((390, 46, 84, 40), 'BACK'); s.button((302, 46, 84, 40), 'UPDATE')
+        s.button((390, 46, 84, 40), 'BACK'); s.button((302, 46, 84, 40), 'UPDATE'); s.button((390, 92, 84, 40), 'RESTART')
         s.text('PAIRED AS  Living room screen', 12, 58, F9, MUTED)
     else:
         s.text('PAIR CODE FOR THIS SCREEN', 12, 58, F9, MUTED)
@@ -363,7 +369,7 @@ def pairing(paired=False):
     if paired:
         s.text('Website: nakon1122.github.io/battlab-cloud', 12, 150, F9, TEXT)
         s.text('Remove it on the website to pair with another account.', 12, 174, F9, TEXT)
-        s.text('Cloud: online', 12, 206, F9, MUTED)
+        s.text('Cloud: online   Data today 4.2 MB (ECO)', 12, 206, F9, MUTED)
         s.text(f'Firmware {FW}   IP 192.168.1.64   RAM 151k', 12, 232, F9, MUTED)
     else:
         s.text('1. On your phone open  nakon1122.github.io/battlab-cloud', 12, 148, F9, TEXT)
@@ -420,7 +426,9 @@ shots = [
     ('cloudscreen_10_params.png', 'CONTROL > PARAMETERS: all 15 JK settings', ctl_params()),
     ('cloudscreen_11_led.png', 'CONTROL > LED of the board', ctl_led()),
     ('cloudscreen_12_board.png', 'CONTROL > BOARD: scan / connect BMS, TX, hotspot', ctl_board()),
-    ('cloudscreen_13_setup.png', 'SETUP: screen, alarms, Wi-Fi, pairing', setup()),
+    ('cloudscreen_13_setup.png', 'SETUP: data saver button (bottom right) ECO = default; leaf on the status dot', setup()),
+    ('cloudscreen_13b_setup_ecomax.png', 'SETUP: tap again = ECO MAX (15 s / 30 s / 5 min asleep)', setup(2, 'ECO MAX: 15 s / 30 s / 5 min asleep')),
+    ('cloudscreen_13c_setup_normal.png', 'SETUP: NORMAL = every 5 s like before (no leaf)', setup(0, 'NORMAL: sync every 5 s')),
     ('cloudscreen_14_wifi.png', 'SETUP > WI-FI', wifi()),
     ('cloudscreen_15_paired.png', 'SETUP > PAIRING (paired)', pairing(True)),
     ('cloudscreen_17_ev_home.png', 'EV profile: HOME = drive-power meter + range left (km)', ev_home()),
