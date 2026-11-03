@@ -45,12 +45,12 @@ begin
            count(*) filter (where ml.data->>'src' = 'dongle' and ml.ts > now() - interval '90 seconds') nd,
            sum((ml.data->>'ppv')::real) ppv, sum((ml.data->>'pload')::real) pload, sum((ml.data->>'pgrid')::real) pgrid,
            sum((ml.data->>'pinv')::real) pinv, sum((ml.data->>'p')::real) p,
-           avg((ml.data->>'v')::real) v, avg((ml.data->>'soc')::real) soc, max((ml.data->>'t1')::real) t1, max((ml.data->>'mos')::real) mos,
+           avg((ml.data->>'v')::real) v, avg((ml.data->>'vac')::real) vac, avg((ml.data->>'soc')::real) soc, max((ml.data->>'t1')::real) t1, max((ml.data->>'mos')::real) mos,
            sum((ml.data->>'epv')::real) epv, sum((ml.data->>'ein')::real) ein, sum((ml.data->>'eout')::real) eout,
            sum((ml.data->>'eload')::real) eload, sum((ml.data->>'egrid')::real) egrid,
            bool_or(ml.data->>'state' = 'LIVE' and ml.ts > now() - interval '5 minutes') live,
            jsonb_agg(jsonb_build_object('sn', md.ext_id, 'ppv', ml.data->'ppv', 'pload', ml.data->'pload', 'p', ml.data->'p',
-                                        'soc', ml.data->'soc', 'status', ml.data->'status') order by md.ext_id) mem
+                                        'soc', ml.data->'soc', 'v', ml.data->'v', 'i', ml.data->'i', 'status', ml.data->'status') order by md.ext_id) mem
       into t
       from jsonb_array_elements(r.data->'members') x
       join public.devices md on md.owner = p_owner and md.ext_id = x->>'sn'
@@ -59,7 +59,7 @@ begin
     nd := jsonb_strip_nulls(jsonb_build_object(
       'src', 'dongle', 'state', case when t.live then 'LIVE' else 'OFFLINE' end,
       'ppv', round(t.ppv::numeric), 'pload', round(t.pload::numeric), 'pgrid', round(t.pgrid::numeric), 'pinv', round(t.pinv::numeric),
-      'p', round(t.p::numeric), 'v', round(t.v::numeric, 2), 'soc', round(t.soc::numeric, 1),
+      'p', round(t.p::numeric), 'v', round(t.v::numeric, 2), 'vac', round(t.vac::numeric), 'soc', round(t.soc::numeric, 1),
       'i', case when t.v > 1 then round((t.p / t.v)::numeric, 2) end, 't1', t.t1, 'mos', t.mos,
       'epv', round(t.epv::numeric, 1), 'ein', round(t.ein::numeric, 1), 'eout', round(t.eout::numeric, 1),
       'eload', round(t.eload::numeric, 1), 'egrid', round(t.egrid::numeric, 1), 'members', t.mem));
