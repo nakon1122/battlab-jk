@@ -32,6 +32,7 @@ struct Sample {
                      temp2 = 0, mos = 0;
   float full = 0; // full / nominal capacity (Ah), 0 = unknown
   uint32_t cycles = 0;
+  uint32_t runtime = 0; // BMS power-on time, seconds
   unsigned count = 0;
   bool charge = false, discharge = false;
 };
@@ -63,6 +64,7 @@ inline bool decode(const uint8_t *b, bool s32, Sample &out) {
   s.capacity = u32(b + 142 + off) * .001f; // remaining Ah
   s.full = u32(b + 146 + off) * .001f;     // full / nominal Ah
   s.cycles = u32(b + 150 + off);
+  s.runtime = u32(b + 162 + off);
   s.temp1 = int16_t(u16(b + 130 + off)) * .1f;
   s.temp2 = int16_t(u16(b + 132 + off)) * .1f;
   s.mos = int16_t(u16(b + (s32 ? 112 + off : 134))) * .1f;

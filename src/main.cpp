@@ -31,9 +31,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.9-cyd35"
+#define BATTLAB_FW "2.9.0-cyd35"
 #else
-#define BATTLAB_FW "2.8.9-s3"
+#define BATTLAB_FW "2.9.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -373,6 +373,8 @@ struct BmsCmd {
 static BmsCmd cmdQ[4];
 static uint8_t cmdAddrQ[4]; // RS485 bus: pack address for the command (0xFF = the configured one)
 static uint8_t cmdN = 0;
+static volatile bool rtResetWanted = false; // super-admin: force-clear the BMS power-on time over RS485
+static volatile uint8_t rtResetAddr = 0xFF;
 static const char *queueCmd(const BmsCmd &c, uint8_t addr = 0xFF) {
   Guard g;
   if (!shared.linked) return "BMS not connected";
@@ -2082,6 +2084,15 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     return "sent to BMS";
   }
   if (c == "bms_read") { Guard g; readWanted = true; return "reading"; }
+  if (c == "bms_runtime_reset") {
+#ifdef BATTLAB_DISPLAY
+    ok = false; return "RS485 is on the ESP32-S3 board";
+#else
+    if (!linkRs485) { ok = false; return "RS485 only: connect the BMS over the RS485 cable first"; }
+    { Guard g; if (!shared.linked) { ok = false; return "BMS not connected"; } rtResetAddr = a["a"] | -1; rtResetWanted = true; }
+    return "clearing the BMS run time over RS485";
+#endif
+  }
   if (c == "radio_max") { radioSetMaxPower(a["on"] | true); return radioMax ? "TX max" : "TX low"; }
   if (c == "lux_set") { luxd::configure(a["ips"] | "", a["on"] | false); return (a["on"] | false) ? "LuxPower dongle on" : "LuxPower dongle off"; }
   if (c == "lux_scan") { luxd::scan(); return "looking for LuxPower dongles"; }
@@ -2460,6 +2471,7 @@ static void cloudTask(void *) {
         d["cap"] = s.capacity;
         if (s.full > 0) d["full"] = s.full;
         d["cyc"] = s.cycles;
+        if (s.runtime) d["rt"] = s.runtime;
         d["t1"] = s.temp1;
         d["t2"] = s.temp2;
         d["mos"] = s.mos;
@@ -3239,6 +3251,26 @@ static void rs485Task(void *) {
       Guard g;
       if (cmdN) { cmd = cmdQ[0]; cmdAddr = cmdAddrQ[0]; memmove(cmdQ, cmdQ + 1, sizeof(BmsCmd) * (cmdN - 1)); memmove(cmdAddrQ, cmdAddrQ + 1, cmdN - 1); cmdN--; haveCmd = true; }
       if (readWanted) { readWanted = false; memset(lastSet, 0, sizeof lastSet); memset(lastInfo, 0, sizeof lastInfo); }
+    }
+    // super-admin: force-clear the BMS power-on time (JK-PB Modbus, RunTime 0x12BC + ODDRunTime 0x1420)
+    bool doReset;
+    uint8_t rAddr;
+    { Guard g; doReset = rtResetWanted; rtResetWanted = false; rAddr = rtResetAddr; }
+    if (doReset) {
+      uint8_t to = rAddr <= 15 ? rAddr : linkCfg.addr;
+      uint32_t before;
+      { Guard g; before = shared.packs[to].s.runtime; }
+      if (proto == 1 || proto == 0) {
+        jk485::pbWrite(f, to, 0x12BC, 0); send(f, 13); vTaskDelay(pdMS_TO_TICKS(80));
+        jk485::pbWrite(f, to, 0x1420, 0); send(f, 13); vTaskDelay(pdMS_TO_TICKS(80));
+        lastInfo[to] = 0; lastSet[to] = 0; lastCells = 0; // read everything back
+        Guard g;
+        shared.lastWrite = String("ล้างเวลา BMS (ลูก ") + to + "): ส่งแล้ว ก่อนหน้า " + (before / 3600) + " ชม. · อ่านค่าใหม่ใน ~5 วิ ถ้าไม่เป็น 0 แปลว่า BMS ไม่ยอมเขียน ให้กด RST บนบอร์ดอะแดปเตอร์";
+      } else {
+        Guard g; shared.lastWrite = "ล้างเวลา BMS รองรับเฉพาะ JK-PB บน RS485";
+      }
+      nextTx = t + 500;
+      continue;
     }
     if (haveCmd) {
       String result = cmd.isSwitch ? String(cmd.idx == 0 ? "Charge" : cmd.idx == 1 ? "Discharge" : "Balancer") + (cmd.on ? " ON" : " OFF") : String("");
