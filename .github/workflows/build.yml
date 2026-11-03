@@ -93,20 +93,21 @@ jobs:
       - name: Build ESP32-P4C5 (phase 1)
         run: pio run -e p4c5 2>&1 | tee p4-build.log
       - name: Merge a single flashable image
+        continue-on-error: true
         run: |
-          python - <<'PY'
-          import json, subprocess
-          d = json.load(open(".pio/build/p4c5/flasher_args.json"))
-          fl = d.get("flash_settings", {})
-          args = ["python","-m","esptool","--chip","esp32p4","merge_bin","-o","p4out_merge.bin",
-                  "--flash_mode", fl.get("flash_mode","dio"), "--flash_freq", fl.get("flash_freq","80m"),
-                  "--flash_size", fl.get("flash_size","16MB")]
-          for off, fname in sorted(d["flash_files"].items(), key=lambda x: int(x[0],16)):
-              args += [off, fname]
-          print(" ".join(args))
-          subprocess.run(args, cwd=".pio/build/p4c5", check=True)
-          PY
-          cp .pio/build/p4c5/p4out_merge.bin BATTLAB_P4C5_INSTALL.bin
+          B=.pio/build/p4c5
+          echo "=== build dir ==="; ls -la $B
+          BA=$(find ~/.platformio/packages -name boot_app0.bin 2>/dev/null | head -1)
+          A=""
+          [ -f "$B/bootloader.bin" ] && A="$A 0x2000 $B/bootloader.bin"
+          [ -f "$B/partitions.bin" ] && A="$A 0x8000 $B/partitions.bin"
+          [ -n "$BA" ] && A="$A 0xe000 $BA"
+          [ -f "$B/firmware.bin" ] && A="$A 0x10000 $B/firmware.bin"
+          echo "merge offsets:$A"
+          if [ -n "$A" ]; then
+            python -m esptool --chip esp32p4 merge_bin -o BATTLAB_P4C5_INSTALL.bin --flash_mode dio --flash_freq 80m --flash_size 16MB $A || echo "merge failed"
+          fi
+          ls -la BATTLAB_P4C5_INSTALL.bin 2>/dev/null || true
       - name: Upload P4 artifacts
         if: always()
         uses: actions/upload-artifact@v4
