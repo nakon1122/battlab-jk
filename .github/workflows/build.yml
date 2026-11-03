@@ -75,3 +75,27 @@ jobs:
           git add -f firmware/
           git commit -qm "firmware for ${GITHUB_SHA::7} (${{ job.status }})"
           git push -f origin firmware-build 2>&1 | tail -5
+
+  # ESP32-P4C5 (experimental): new RISC-V toolchain via the pioarduino platform.
+  # Separate job, continue-on-error, so a P4 failure never blocks the real release.
+  p4:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build ESP32-P4C5 (phase 1)
+        run: pio run -e p4c5 2>&1 | tee p4-build.log
+      - name: Upload P4 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p4c5-build
+          path: |
+            .pio/build/p4c5/firmware.bin
+            p4-build.log
+          if-no-files-found: ignore
