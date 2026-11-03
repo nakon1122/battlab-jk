@@ -14,6 +14,7 @@ const char *displayCfgSet(JsonObjectConst) { return "this board has no screen"; 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 #include "logo.h"
+#include "lux_dongle.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -97,10 +98,13 @@ static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_MUTED, C_ACCENT, C_GOOD, C_WARN,
     C_BAD, C_BLUE;
 
 // Screen layout: header 0..40, content 44..276, tab bar 278..320.
-static const int TAB_Y = 278, TAB_H = 42, TABS = 7, TAB_W = 68;
-enum Page { P_HOME, P_CELLS, P_BMS, P_PARAM, P_LED, P_SETUP, P_INFO };
-static const char *const TAB_NAMES[TABS] = {"HOME", "CELLS", "BMS", "PARAM",
-                                            "LED",  "SETUP", "INFO"};
+// An 8th tab (INV, LuxPower inverter read from its Wi-Fi dongle) appears when the dongle reader is on.
+static const int TAB_Y = 278, TAB_H = 42, TABS_MAX = 8;
+enum Page { P_HOME, P_CELLS, P_BMS, P_PARAM, P_LED, P_SETUP, P_INFO, P_INV };
+static const char *const TAB_NAMES[TABS_MAX] = {"HOME", "CELLS", "BMS", "PARAM",
+                                                "LED",  "SETUP", "INFO", "INV"};
+static int tabCount() { return luxd::enabled() ? 8 : 7; }
+static int tabW() { return tabCount() == 8 ? 60 : 68; }
 
 // --------------------------------------------------------- settings ----
 struct DispCfg {
@@ -336,6 +340,7 @@ static void tabs(int page) {
   tft.drawFastHLine(0, TAB_Y, 480, C_LINE);
   tft.setFont(&fonts::FreeSansBold9pt7b);
   tft.setTextDatum(textdatum_t::middle_center);
+  const int TABS = tabCount(), TAB_W = tabW();
   for (int i = 0; i < TABS; i++) {
     bool sel = i == page;
     if (sel) tft.fillRect(i * TAB_W + 6, TAB_Y + 1, TAB_W - 12, 3, C_ACCENT);
@@ -345,6 +350,101 @@ static void tabs(int page) {
   }
 }
 
+
+// ------------------------------------------------------- INV (LuxPower) ----
+// Inverter(s) read straight from the LuxPower Wi-Fi dongle. Two inverters
+// (parallel system) are added together, with one line per inverter below.
+static void tile(int x, int y, int w, int h, const char *lbl, const String &value, const char *unit, uint16_t accent);
+static uint16_t blend565(uint16_t a, uint16_t b, float k);
+static void invPage(bool force) {
+  luxd::View v[2];
+  int n = luxd::views(v, 2);
+  if (!n) {
+    if (!force) return;
+    clearContent();
+    tft.setTextDatum(textdatum_t::middle_center);
+    tft.setFont(&fonts::FreeSansBold12pt7b);
+    tft.setTextColor(C_TEXT, C_BG);
+    tft.drawString("LuxPower inverter", 240, 120);
+    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setTextColor(C_MUTED, C_BG);
+    tft.drawString("Waiting for the Wi-Fi dongle (port 8000)", 240, 160);
+    tft.drawString("Set its IP in the web page: Settings", 240, 186);
+    return;
+  }
+  float soc = 0, vb = 0, p = 0, ppv = 0, pl = 0, pg = 0, epv = 0, el = 0;
+  bool fresh = false;
+  for (int i = 0; i < n; i++) {
+    soc += v[i].soc / n; vb += v[i].v / n; p += v[i].p; ppv += v[i].ppv;
+    pl += v[i].pload; pg += v[i].pgrid; epv += v[i].epv; el += v[i].eload;
+    fresh |= v[i].fresh;
+  }
+  // battery card (left)
+  LGFX_Sprite b(&tft);
+  b.setColorDepth(16);
+  if (b.createSprite(142, 176)) {
+    b.fillSprite(C_BG);
+    b.fillRoundRect(0, 0, 142, 176, 12, C_CARD);
+    uint16_t col = soc <= 15 ? C_BAD : soc <= 35 ? C_WARN : C_GOOD;
+    b.setFont(&fonts::FreeSans9pt7b);
+    b.setTextDatum(textdatum_t::top_left);
+    b.setTextColor(C_MUTED, C_CARD);
+    b.drawString(n > 1 ? "BATTERY x2" : "BATTERY", 12, 8);
+    // battery outline with fill
+    b.drawRoundRect(14, 34, 104, 46, 8, col);
+    b.drawRoundRect(15, 35, 102, 44, 7, col);
+    b.fillRoundRect(118, 49, 6, 16, 2, col);
+    int w = int(96 * std::max(0.f, std::min(100.f, soc)) / 100.f);
+    if (w > 0) b.fillRoundRect(18, 38, std::max(w, 6), 38, 5, col);
+    // moving light while charging / discharging
+    if (fabsf(p) > 30 && w > 12) {
+      int pos = int(millis() / 25 % 120) - 20;
+      if (p < 0) pos = 116 - pos;
+      for (int k = -6; k <= 6; k++) {
+        int x = 18 + pos + k;
+        if (x >= 18 && x < 18 + w) b.drawFastVLine(x, 38, 38, blend565(col, C_TEXT, 0.45f - fabsf(k) * 0.07f));
+      }
+    }
+    b.setFont(&fonts::FreeSansBold18pt7b);
+    b.setTextDatum(textdatum_t::middle_center);
+    b.setTextColor(C_TEXT, C_CARD);
+    b.drawString(String(int(soc + .5f)) + "%", 71, 108);
+    b.setFont(&fonts::FreeSans9pt7b);
+    b.setTextColor(C_MUTED, C_CARD);
+    b.drawString(fmt(vb, 1) + " V", 71, 138);
+    b.setTextColor(p > 30 ? C_GOOD : p < -30 ? C_WARN : C_MUTED, C_CARD);
+    b.drawString(fabsf(p) < 30 ? String("idle") : (p > 0 ? "+" : "-") + fmt(fabsf(p), 0) + " W", 71, 160);
+    b.pushSprite(9, 46);
+    b.deleteSprite();
+  }
+  // tiles (right)
+  int x0 = 158, x1 = 316, w = 156, h = 56;
+  tile(x0, 46, w, h, "SOLAR", fmt(ppv, 0), "W", C_WARN);
+  tile(x1, 46, w, h, "HOME", fmt(pl, 0), "W", C_BLUE);
+  tile(x0, 106, w, h, pg >= 0 ? "GRID IN" : "GRID OUT", fmt(fabsf(pg), 0), "W", C_MUTED);
+  tile(x1, 106, w, h, "BATTERY", fmt(fabsf(p), 0), "W", p >= 0 ? C_GOOD : C_WARN);
+  tile(x0, 166, w, h, "PV TODAY", fmt(epv, 1), "kWh", C_WARN);
+  tile(x1, 166, w, h, "LOAD TODAY", fmt(el, 1), "kWh", C_BLUE);
+  // one line per inverter
+  LGFX_Sprite s(&tft);
+  s.setColorDepth(8);
+  if (!s.createSprite(462, 46)) return;
+  s.fillSprite(C_BG);
+  s.fillRoundRect(0, 0, 462, 46, 10, C_CARD);
+  s.setFont(&fonts::FreeSans9pt7b);
+  s.setTextDatum(textdatum_t::middle_left);
+  for (int i = 0; i < n; i++) {
+    int y = n > 1 ? 13 + i * 20 : 23;
+    s.setTextColor(v[i].fresh ? C_TEXT : C_BAD, C_CARD);
+    s.drawString(String(v[i].sn + 6) + "  " + String(int(v[i].soc)) + "%  PV " + fmt(v[i].ppv, 0) +
+                     "W  Load " + fmt(v[i].pload, 0) + "W", 12, y);
+  }
+  s.setTextDatum(textdatum_t::middle_right);
+  s.setTextColor(fresh ? C_ACCENT : C_BAD, C_CARD);
+  s.drawString(fresh ? "DONGLE LIVE" : "NO DATA", 450, 23);
+  s.pushSprite(9, 228);
+  s.deleteSprite();
+}
 // --------------------------------------------------------------- HOME ----
 static void tileDraw(int x, int y, int w, int h, const char *lbl, const String &value, const char *unit,
                      uint16_t accent, const String &old, int roll);
@@ -1761,8 +1861,8 @@ static void displayTask(void *) {
       } else if (confirmDlg.active) {
         if (confirmTouch(tp.x, tp.y)) drawnPage = -1; // repaint the page
       } else if (tp.y >= TAB_Y) {
-        int t = tp.x / TAB_W;
-        if (t >= TABS) t = TABS - 1;
+        int t = tp.x / tabW();
+        if (t >= tabCount()) t = tabCount() - 1;
         if (t >= 0) page = t;
         if (overlay != OV_NONE) { overlay = OV_NONE; drawnPage = -1; }
       } else if (tp.y > 42) {
@@ -1810,6 +1910,9 @@ static void displayTask(void *) {
       asleep = true;
       tft.setBrightness(0);
     }
+    static int tabsShown = 0;
+    if (page >= tabCount()) page = P_HOME;
+    if (tabCount() != tabsShown) { tabsShown = tabCount(); drawnPage = -1; }
     if (!confirmDlg.active && overlay != OV_KB && (page != drawnPage || now - lastDraw > 700)) {
       bool force = page != drawnPage;
       takeDisplaySnapshot(d);
@@ -1851,6 +1954,7 @@ static void displayTask(void *) {
           case P_PARAM: paramPageDraw(d, force); break;
           case P_LED: ledPage(force); break;
           case P_SETUP: setupPage(d, force); break;
+          case P_INV: invPage(force); break;
           default:
             if (overlay == OV_WIFI) wifiOverlayDraw(force);
             else if (overlay == OV_CLOUD) cloudOverlayDraw(force);

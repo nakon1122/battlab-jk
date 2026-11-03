@@ -60,12 +60,15 @@ def header(s, status, dot=GOOD, rssi='-52 dBm', alarm=None, toast=None):
         if rssi: s.text(rssi.replace(' ', ''), 412, 21, F9, MUTED, 'rm')
     s.rect(0, 39, 480, 1, LINE)
 
+LUX_TABS = False  # 8th tab INV shows when the LuxPower dongle reader is on
 def tabs(s, page):
+    names = TABS + (['INV'] if LUX_TABS else [])
+    tw = 60 if LUX_TABS else TAB_W
     s.rect(0, TAB_Y, 480, 42, CARD); s.rect(0, TAB_Y, 480, 1, LINE)
-    for i, t in enumerate(TABS):
+    for i, t in enumerate(names):
         sel = i == page
-        if sel: s.rect(i*TAB_W + 6, TAB_Y + 1, TAB_W - 12, 3, ACCENT)
-        s.text(t, i*TAB_W + TAB_W/2 + (2 if i == 6 else 0), TAB_Y + 23, F9B, ACCENT if sel else MUTED, 'mm')
+        if sel: s.rect(i*tw + 6, TAB_Y + 1, tw - 12, 3, ACCENT)
+        s.text(t, i*tw + tw/2 + (2 if i == len(names) - 1 else 0), TAB_Y + 23, F9B, ACCENT if sel else MUTED, 'mm')
 
 # ------------------------------------------------------------ sample data
 random.seed(7)
@@ -393,6 +396,58 @@ def param_jbd():
     s.button((322, 242, 56, 34), '<', f=F12B); s.button((418, 242, 56, 34), '>', f=F12B); s.text('1/5', 398, 260, F9, MUTED, 'mm')
     tabs(s, 3); return s
 
+
+def inv_page(units=None):
+    """INV tab: LuxPower inverter(s) read straight from the Wi-Fi dongle (mirrors invPage())"""
+    global LUX_TABS
+    LUX_TABS = True
+    s = Scr(); header(s, 'JK02_24S  LIVE', GOOD)
+    if not units:
+        s.text('LuxPower inverter', 240, 120, F12B, TEXT, 'mm')
+        s.text('Waiting for the Wi-Fi dongle (port 8000)', 240, 160, F9, MUTED, 'mm')
+        s.text('Set its IP in the web page: Settings', 240, 186, F9, MUTED, 'mm')
+        tabs(s, 7); LUX_TABS = False; return s
+    n = len(units)
+    soc = sum(u['soc'] for u in units) / n; vb = sum(u['v'] for u in units) / n
+    p = sum(u['p'] for u in units); ppv = sum(u['ppv'] for u in units); pl = sum(u['pl'] for u in units)
+    pg = sum(u['pg'] for u in units); epv = sum(u['epv'] for u in units); el = sum(u['el'] for u in units)
+    s.rr(9, 46, 142, 176, 12, fill=CARD)
+    col = BAD if soc <= 15 else WARN if soc <= 35 else GOOD
+    s.text('BATTERY x2' if n > 1 else 'BATTERY', 21, 54, F9, MUTED, 'lt')
+    s.rr(23, 80, 104, 46, 8, outline=col); s.rr(24, 81, 102, 44, 7, outline=col)
+    s.rr(127, 95, 6, 16, 2, fill=col)
+    w = int(96 * soc / 100)
+    s.rr(27, 84, max(w, 6), 38, 5, fill=col)
+    for k in range(-6, 7):  # moving light (one frame)
+        x = 27 + int(w * .55) + k
+        s.rect(x, 84, 1, 38, blend(col, TEXT, .45 - abs(k) * .07))
+    s.text(f'{round(soc)}%', 80, 154, F18B, TEXT, 'mm')
+    s.text(f'{vb:.1f} V', 80, 184, F9, MUTED, 'mm')
+    s.text('idle' if abs(p) < 30 else f"{'+' if p > 0 else '-'}{abs(p):.0f} W", 80, 206, F9, GOOD if p > 30 else WARN if p < -30 else MUTED, 'mm')
+    x0, x1, tw, th = 158, 316, 156, 56
+    tile(s, x0, 46, tw, th, 'SOLAR', f'{ppv:.0f}', 'W', WARN)
+    tile(s, x1, 46, tw, th, 'HOME', f'{pl:.0f}', 'W', BLUE)
+    tile(s, x0, 106, tw, th, 'GRID IN' if pg >= 0 else 'GRID OUT', f'{abs(pg):.0f}', 'W', MUTED)
+    tile(s, x1, 106, tw, th, 'BATTERY', f'{abs(p):.0f}', 'W', GOOD if p >= 0 else WARN)
+    tile(s, x0, 166, tw, th, 'PV TODAY', f'{epv:.1f}', 'kWh', WARN)
+    tile(s, x1, 166, tw, th, 'LOAD TODAY', f'{el:.1f}', 'kWh', BLUE)
+    s.rr(9, 228, 462, 46, 10, fill=CARD)
+    for i, u in enumerate(units):
+        y = 228 + (13 + i * 20 if n > 1 else 23)
+        s.text(f"{u['sn'][-4:]}  {u['soc']}%  PV {u['ppv']}W  Load {u['pl']}W", 21, y, F9, TEXT)
+    s.text('DONGLE LIVE', 459, 251, F9, ACCENT, 'rm')
+    tabs(s, 7)
+    LUX_TABS = False
+    return s
+
+def home_lux():
+    global LUX_TABS
+    LUX_TABS = True
+    s = home(); LUX_TABS = False
+    return s
+
+LUX2 = [dict(sn='61730V3039', soc=31, v=53.4, p=3778, ppv=4946, pl=938, pg=0, epv=18.4, el=6.1),
+        dict(sn='61730V3123', soc=30, v=53.3, p=3383, ppv=4795, pl=933, pg=0, epv=17.9, el=5.8)]
 shots = [
     ('01_boot.png', 'Boot: BattLab logo, 5 s', boot()),
     ('02_touch_calibration.png', 'First start: touch calibration', calib()),
@@ -425,6 +480,10 @@ shots = [
     ('28_anim_roll.png', 'Animation C5: changed numbers roll up (VOLTAGE tile)', home(roll=('77.38', '77.41', 2))),
     ('29_anim_alarm.png', 'Animation C6: new alarm slides in, screen edge blinks red', home(soc=12, alarm='LOW SOC 12%', border=BAD)),
     ('30_anim_cells.png', 'Animation C7: cell bars grow one after another', cells(CELLS20, grow_fr=3)),
+    ('31_inv_parallel.png', 'INV (new): 2 LuxPower inverters in parallel read straight from their Wi-Fi dongles', inv_page(LUX2)),
+    ('32_inv_single.png', 'INV: one inverter, battery discharging at night', inv_page([dict(sn='61730V3039', soc=64, v=52.6, p=-1240, ppv=0, pl=1180, pg=0, epv=21.3, el=9.4)])),
+    ('33_inv_waiting.png', 'INV: dongle not answering yet', inv_page()),
+    ('34_home_8tabs.png', 'Tab bar gets an 8th tab INV when the dongle reader is on', home_lux()),
 ]
 paths = []
 for name, cap, s in shots:

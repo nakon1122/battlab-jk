@@ -1,6 +1,8 @@
 // BattLab x LuxPower: poll LuxPower cloud (same web API the LuxPower View app uses) and store
 // each inverter as a BattLab device, plus one combined device per parallel group.
 // Runs every minute from pg_cron (x-cron-secret) or on demand by a signed-in user (own account only).
+// When a BattLab board reads the inverters straight from their Wi-Fi dongles (ingest2 -> lux_store with
+// src = dongle) the cloud login is skipped and fresh dongle data is never overwritten.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const SERVERS = [
@@ -61,7 +63,7 @@ function mapData(rt: any, en: any, item: any) {
   const pgrid = (n(rt.pToUser) ?? 0) - (n(rt.pToGrid) ?? 0); // + = import
   const soc = n(rt.soc) ?? n(item?.soc);
   return {
-    inv: 1, fw: "luxpower", state: rt.lost ? "OFFLINE" : "LIVE", bms: "LuxPower",
+    inv: 1, src: "cloud", fw: "luxpower", state: rt.lost ? "OFFLINE" : "LIVE", bms: "LuxPower",
     model: modelName(rt, item), status: rt.statusText || item?.statusText || "",
     soc, v, i: v ? +(p / v).toFixed(2) : null, p,
     t1: n(rt.tBat), mos: n(rt.tinner),
@@ -82,7 +84,7 @@ function combine(parts: { sn: string; d: any }[], pen: any) {
   const en = (k: string, alt: string) => e10(pen, k) ?? (parts.every((x) => n(x.d[alt]) != null) ? +sum(alt).toFixed(2) : null);
   const m = parts[0].d.model;
   return {
-    inv: 1, par: parts.length, fw: "luxpower", bms: "LuxPower", state: parts.some((x) => x.d.state === "LIVE") ? "LIVE" : "OFFLINE",
+    inv: 1, src: "cloud", par: parts.length, fw: "luxpower", bms: "LuxPower", state: parts.some((x) => x.d.state === "LIVE") ? "LIVE" : "OFFLINE",
     model: m + " ×" + parts.length, status: parts.map((x) => x.d.status).filter(Boolean).join(" / "),
     soc: n(pen?.soc) ?? avg("soc"), v, p, i: v ? +(p / v).toFixed(2) : null, t1: max("t1"), mos: max("mos"),
     ppv: sum("ppv"), pload: sum("pload"), pgrid: sum("pgrid"), pinv: sum("pinv"), vac: avg("vac"),
@@ -93,7 +95,15 @@ function combine(parts: { sn: string; d: any }[], pen: any) {
   };
 }
 
-async function pollOne(a: { owner: string; username: string; password: string; server: string | null }) {
+async function pollOne(a: { owner: string; username: string; password: string; server: string | null }, force = false) {
+  // a BattLab board reads every inverter straight from its Wi-Fi dongle: no need to ask the LuxPower cloud
+  if (!force) {
+    const { data: fresh } = await sb.rpc("lux_dongle_fresh", { p_owner: a.owner });
+    if (fresh) {
+      await sb.rpc("lux_status", { p_owner: a.owner, p_status: "ok", p_error: null, p_server: null, p_inverters: null });
+      return { owner: a.owner, ok: true, dongle: true };
+    }
+  }
   const lg = await login(a.username, a.password, a.server);
   if (!lg.s) { await sb.rpc("lux_status", { p_owner: a.owner, p_status: "error", p_error: lg.err ?? "login failed", p_server: null, p_inverters: null }); return { owner: a.owner, ok: false, err: lg.err }; }
   const { base, cookie } = lg.s;

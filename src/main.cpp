@@ -26,13 +26,14 @@
 #include <vector>
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
+#include "lux_dongle.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.8.7-cyd35"
+#define BATTLAB_FW "2.8.8-cyd35"
 #else
-#define BATTLAB_FW "2.8.7-s3"
+#define BATTLAB_FW "2.8.8-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -2065,6 +2066,8 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   }
   if (c == "bms_read") { Guard g; readWanted = true; return "reading"; }
   if (c == "radio_max") { radioSetMaxPower(a["on"] | true); return radioMax ? "TX max" : "TX low"; }
+  if (c == "lux_set") { luxd::configure(a["ips"] | "", a["on"] | false); return (a["on"] | false) ? "LuxPower dongle on" : "LuxPower dongle off"; }
+  if (c == "lux_scan") { luxd::scan(); return "looking for LuxPower dongles"; }
   if (c == "wifi_scan") { netScanStart(); wscanWanted = true; return "scanning Wi-Fi"; }
   if (c == "wifi_ap") { apChangeWanted = true; apChangeTo = a["on"] | true; return apChangeTo ? "hotspot on" : "hotspot off"; }
   if (c == "home_wifi") {
@@ -2208,7 +2211,7 @@ static void cloudTask(void *) {
   // between uploads (the screen needs them).
   http.setReuse(false);
   const uint32_t FAST_MS = 5000;
-  const size_t DOC = 6144;
+  size_t DOC = 6144;
 #else
   http.setReuse(true); // S3 has RAM to keep the connection open
   const uint32_t FAST_MS = 2500;
@@ -2245,12 +2248,16 @@ static void cloudTask(void *) {
       live = shared.linked && shared.have && uint32_t(millis() - shared.stamp) < 15000;
       paired = cloudPaired;
     }
-    uint32_t every = fast && paired ? FAST_MS : live ? 10000 : (paired ? 60000 : 20000);
+    bool luxNow = luxd::fresh(); // inverter read from a LuxPower dongle: upload it every 10 s
+    uint32_t every = fast && paired ? FAST_MS : (live || luxNow) ? 10000 : (paired ? 60000 : 20000);
     String json;
     bool sentWscan = false;
     {
 #ifndef BATTLAB_DISPLAY
       { Guard g; DOC = 10240 + size_t(shared.bankN) * 1700; }
+      if (luxNow) DOC += 4096;
+#else
+      DOC = luxNow ? 9216 : 6144;
 #endif
       DynamicJsonDocument body(DOC);
       body["p_token"] = devToken;
@@ -2315,6 +2322,21 @@ static void cloudTask(void *) {
       lo["mode"] = led.mode;
       lo["color"] = led.color;
       lo["level"] = led.level;
+      { // dongle settings + state for the website
+        auto lx = c.createNestedObject("lux");
+        DynamicJsonDocument t(2048);
+        luxd::statusJson(t.to<JsonObject>());
+        lx["on"] = t["on"];
+        lx["ips"] = t["ips"];
+        auto ds = lx.createNestedArray("d");
+        for (JsonObject x : t["dongles"].as<JsonArray>()) {
+          auto o = ds.createNestedObject();
+          o["ip"] = x["ip"]; o["st"] = x["st"]; o["dl"] = x["dl"];
+          if (x.containsKey("err")) o["err"] = x["err"];
+        }
+        lx["scan"] = t["scan"];
+      }
+      if (luxNow) luxd::cloudJson(d.createNestedArray("lux"));
       c["ap"] = wifiOn;
       c["tx"] = radioMax;
       c["ssid"] = staSsid;
@@ -3688,6 +3710,24 @@ void setup() {
     netForgetHomeWifi();
     web.send(202, "application/json", "{\"forgotten\":true}");
   });
+  web.on("/api/lux", HTTP_GET, []() {
+    DynamicJsonDocument d(4096);
+    luxd::statusJson(d.to<JsonObject>());
+    json(200, d);
+  });
+  web.on("/api/lux", HTTP_POST, []() {
+    if (!localRequest()) return;
+    if (web.arg("plain").length() > 256) { error(413, "Too large"); return; }
+    StaticJsonDocument<256> in;
+    if (deserializeJson(in, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
+    luxd::configure(in["ips"] | "", in["on"] | false);
+    web.send(202, "application/json", "{\"saved\":true}");
+  });
+  web.on("/api/lux/scan", HTTP_POST, []() {
+    if (!localRequest()) return;
+    luxd::scan();
+    web.send(202, "application/json", "{\"scanning\":true}");
+  });
   web.on("/api/led", HTTP_GET, []() {
     DynamicJsonDocument d(1024);
     ledJson(d);
@@ -3821,6 +3861,7 @@ void setup() {
   xTaskCreatePinnedToCore(bleWorker, "ble", 12288, nullptr, 1, nullptr, 0);
   ledLoad();
   xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
+  luxd::start();
   xTaskCreatePinnedToCore(cloudTask, "cloud", 10240, nullptr, 1, nullptr, 1);
 #ifndef BATTLAB_DISPLAY
   xTaskCreatePinnedToCore(rs485Task, "rs485", 6144, nullptr, 1, nullptr, 1);
