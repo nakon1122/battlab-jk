@@ -66,9 +66,12 @@ if not old.get('history') and old.get('boards'):  # first run with history: keep
 hist.insert(0, {'version': ver_main, 'date': now[:10], 'notes': notes, 'zip': man.get('zip'),
                 'boards': {k: {'app': v['url'], 'install': (v.get('install') or {}).get('url')} for k, v in man['boards'].items()}})
 dirs = sorted([d for d in fw.iterdir() if d.is_dir()], key=lambda d: [int(x) for x in d.name.split('.')], reverse=True)
-for d in dirs[3:]:
-    shutil.rmtree(d)
-keep = {d.name for d in dirs[:3]}
-man['history'] = [h for h in hist if h['version'] in keep][:3]
+KEEP = 5  # releases kept on the site (downgrade / reinstall from the website)
+inuse = {v['url'].split('/')[1] for v in man['boards'].values()}  # e.g. the Cloud Screen may lag behind
+keep = {d.name for d in dirs[:KEEP]}
+for d in dirs[KEEP:]:
+    if d.name not in inuse:
+        shutil.rmtree(d)
+man['history'] = [h for h in hist if h['version'] in keep][:KEEP]
 (fw / 'manifest.json').write_text(json.dumps(man, ensure_ascii=False, indent=2))
 print(json.dumps({k: v['version'] for k, v in man['boards'].items()}), 'history', [h['version'] for h in man['history']])
