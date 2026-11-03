@@ -227,3 +227,33 @@ end $$;
 -- the owner of BattLab Cloud
 insert into public.admins(user_id, role) select id, 'super' from auth.users where lower(email) = 'khunbossz@gmail.com'
 on conflict (user_id) do update set role = 'super';
+
+-- customer forgot the password: a super admin sets a new one (bcrypt, same format Supabase Auth uses)
+create extension if not exists pgcrypto with schema extensions;
+create or replace function public.admin_set_password(p_user uuid, p_password text) returns text
+language plpgsql security definer set search_path to 'public', 'auth', 'extensions' as $$
+declare em text;
+begin
+  perform public.admin_check();
+  if p_password is null or length(p_password) < 8 or length(p_password) > 72 then raise exception 'password must be 8-72 characters'; end if;
+  update auth.users set encrypted_password = extensions.crypt(p_password, extensions.gen_salt('bf')),
+         email_confirmed_at = coalesce(email_confirmed_at, now()), updated_at = now()
+   where id = p_user returning email into em;
+  if em is null then raise exception 'account not found'; end if;
+  perform public.admin_note('set_password', p_user::text, jsonb_build_object('email', em));
+  return em;
+end $$;
+create or replace function public.admin_confirm_user(p_user uuid) returns text
+language plpgsql security definer set search_path to 'public', 'auth' as $$
+declare em text;
+begin
+  perform public.admin_check();
+  update auth.users set email_confirmed_at = coalesce(email_confirmed_at, now()), updated_at = now() where id = p_user returning email into em;
+  if em is null then raise exception 'account not found'; end if;
+  perform public.admin_note('confirm_email', p_user::text, jsonb_build_object('email', em));
+  return em;
+end $$;
+revoke all on function public.admin_set_password(uuid,text) from public, anon;
+revoke all on function public.admin_confirm_user(uuid) from public, anon;
+grant execute on function public.admin_set_password(uuid,text) to authenticated;
+grant execute on function public.admin_confirm_user(uuid) to authenticated;
