@@ -88,8 +88,25 @@ jobs:
           python-version: "3.11"
       - name: Install PlatformIO
         run: pip install platformio
+      - name: Install esptool
+        run: pip install esptool==4.8.1
       - name: Build ESP32-P4C5 (phase 1)
         run: pio run -e p4c5 2>&1 | tee p4-build.log
+      - name: Merge a single flashable image
+        run: |
+          python - <<'PY'
+          import json, subprocess
+          d = json.load(open(".pio/build/p4c5/flasher_args.json"))
+          fl = d.get("flash_settings", {})
+          args = ["python","-m","esptool","--chip","esp32p4","merge_bin","-o","p4out_merge.bin",
+                  "--flash_mode", fl.get("flash_mode","dio"), "--flash_freq", fl.get("flash_freq","80m"),
+                  "--flash_size", fl.get("flash_size","16MB")]
+          for off, fname in sorted(d["flash_files"].items(), key=lambda x: int(x[0],16)):
+              args += [off, fname]
+          print(" ".join(args))
+          subprocess.run(args, cwd=".pio/build/p4c5", check=True)
+          PY
+          cp .pio/build/p4c5/p4out_merge.bin BATTLAB_P4C5_INSTALL.bin
       - name: Upload P4 artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -106,6 +123,10 @@ jobs:
           git config user.email "battlab-ci@users.noreply.github.com"
           mkdir -p p4out
           cp .pio/build/p4c5/firmware.bin p4out/BATTLAB_P4C5_APP.bin 2>/dev/null || true
+          cp BATTLAB_P4C5_INSTALL.bin p4out/ 2>/dev/null || true
+          cp .pio/build/p4c5/bootloader.bin p4out/P4_BOOTLOADER.bin 2>/dev/null || true
+          cp .pio/build/p4c5/partitions.bin p4out/P4_PARTITIONS.bin 2>/dev/null || true
+          cp .pio/build/p4c5/flasher_args.json p4out/ 2>/dev/null || true
           cp p4-build.log p4out/ 2>/dev/null || true
           git checkout --orphan p4-build
           git read-tree --empty
