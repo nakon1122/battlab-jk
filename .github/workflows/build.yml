@@ -99,3 +99,16 @@ jobs:
             .pio/build/p4c5/firmware.bin
             p4-build.log
           if-no-files-found: ignore
+      - name: Publish P4 binary to the p4-build branch
+        if: always()
+        run: |
+          git config user.name "battlab-ci"
+          git config user.email "battlab-ci@users.noreply.github.com"
+          mkdir -p p4out
+          cp .pio/build/p4c5/firmware.bin p4out/BATTLAB_P4C5_APP.bin 2>/dev/null || true
+          cp p4-build.log p4out/ 2>/dev/null || true
+          git checkout --orphan p4-build
+          git read-tree --empty
+          git add -f p4out/
+          git commit -qm "P4 build for ${GITHUB_SHA::7} (${{ job.status }})" || exit 0
+          git push -f origin p4-build 2>&1 | tail -5
