@@ -148,29 +148,34 @@ def tile_roll(s, x, y, w, h, lbl, old, new, unit, accent, r):
     dl.text((6 * S, (h - 4 - 22 + (4 - r) * step) * S), new, font=F18B, fill=TEXT, anchor='ls')
     s.im.paste(layer, ((x + 6) * S, (y + 22) * S))
 
+# Layout C: symmetric power gauge (regen left / drive right) + RANGE/SOC/VOLT/CURRENT tiles.
+# Mirrors evMeter/evHome/evTile in src/display.cpp (same coords, fonts and colours).
+def _ev_tile(s, x, y, w, h, label, val, unit, accent, big=False):
+    s.rr(x, y, w, h, 10, fill=CARD); s.rr(x, y + 10, 4, h - 20, 2, fill=accent)
+    s.text(label, x + 12, y + 8, F9, MUTED, 'lt')
+    f = F24B if big else F18B
+    s.text(val, x + 12, y + h - 8, f, TEXT, 'ls')
+    s.text(unit, x + 16 + s.width(val, f), y + h - 12, F9, MUTED, 'ls')
+
 def ev_home(p=2400, rk=42, soc=71, whkm=34, v=76.4, regen=False, alarm=None, peak=5000):
     s = Scr(); header(s, 'JK02_32S  LIVE', alarm=alarm)
     if regen:
         r = f'REGEN +{-p/1000:.1f} kW'; w = s.width(r, F9B) + 24
         s.rect(300, 2, 180, 36, BG); s.rr(476 - w, 7, w, 26, 13, fill=GOOD); s.text(r, 476 - w/2, 21, F9B, BG, 'mm')
-    cx, cy, r0, r1 = 150, 214, 108, 126; z = 180 + 180 * .2
-    s.arc(cx, cy, r0, r1, 180, 360, LINE)
-    if p > 1: s.arc(cx, cy, r0, r1, z, z + (360 - z) * min(1, p / peak), WARN)
-    elif p < -1: s.arc(cx, cy, r0, r1, z - (z - 180) * min(1, -p / (peak * .3)), z, GOOD)
-    s.text(f'{p/1000:.1f}', cx, cy - 70, F24B, GOOD if p < -1 else TEXT, 'mm')
-    s.text('kW regen' if p < -1 else 'kW', cx, cy - 38, F9, MUTED, 'mm')
-    s.text('REGEN', 30, 226, F9, MUTED, 'mm'); s.text(f'{peak//1000} kW', 268, 226, F9, MUTED, 'mm')
-    s.rr(300, 46, 170, 186, 12, fill=CARD)
-    s.text('Range left', 312, 56, F9, MUTED, 'lt')
-    low = alarm is not None
-    s.text(str(rk), 312, 78, F24B, WARN if low else TEXT, 'lt')
-    s.text(f'km  {whkm} Wh/km', 312, 122, F9, MUTED, 'lt')
-    s.text(f'SOC {soc}%', 312, 146, F9, MUTED, 'lt')
-    s.rr(312, 168, 146, 8, 4, fill=LINE); s.rr(312, 168, int(146 * soc / 100), 8, 4, fill=BAD if soc <= 15 else WARN if soc <= 35 else GOOD)
-    s.text('Voltage', 312, 186, F9, MUTED, 'lt'); s.text(f'{v:.1f} V', 312, 204, F12B, TEXT, 'lt')
+    cx, cy, r0, r1 = 120, 182, 90, 110
+    s.arc(cx, cy, r0, r1, 150, 390, LINE)
+    if p > 1: s.arc(cx, cy, r0, r1, 270, 270 + 120 * min(1, p / peak), WARN)
+    elif p < -1: s.arc(cx, cy, r0, r1, 270 - 120 * min(1, -p / (peak * .4)), 270, GOOD)
+    s.text(f'{abs(p)/1000:.1f}', cx, cy - 9, F24B, GOOD if p < -1 else TEXT, 'mm')
+    s.text('kW regen' if p < -1 else 'kW drive' if p > 1 else 'kW', cx, cy + 23, F9, MUTED, 'mm')
+    low = alarm is not None; cur = -p / v
+    _ev_tile(s, 250, 46, 110, 90, 'RANGE', str(rk), 'km', BAD if low else ACCENT, big=True)
+    _ev_tile(s, 364, 46, 108, 90, 'SOC', str(soc), '%', WARN)
+    _ev_tile(s, 250, 142, 110, 90, 'VOLT', f'{v:.1f}', 'V', BLUE)
+    _ev_tile(s, 364, 142, 108, 90, 'CURRENT', f'{cur:.1f}', 'A', GOOD if cur > .5 else WARN)
     s.rr(9, 234, 462, 40, 10, fill=CARD)
-    s.text(f'20S  d6mV  31C  {-p/v:.1f}A', 21, 254, F9, TEXT)
-    pill(s, 313, 241, 'CHG', True); pill(s, 391, 241, 'DSG', True)
+    s.text(f'20S  d6mV  31C  {whkm} Wh/km', 21, 254, F9, TEXT)
+    pill(s, 304, 241, 'CHG', True); pill(s, 382, 241, 'DSG', True)
     tabs(s, 0); return s
 
 def boot_shine(progress=.35, shine=150, step='Starting Bluetooth'):

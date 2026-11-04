@@ -714,71 +714,70 @@ static void flowAnim(const DisplaySnap &d) {
 }
 
 // ----------------------------------------------------------- EV HOME ----
-// Motorbike / car profile: drive-power meter (green = regen), range in km.
+// Motorbike / car profile (layout C): a symmetric power gauge (idle at top,
+// regen sweeps left in green, drive sweeps right in orange) with the live kW in
+// the middle, plus RANGE / SOC / VOLT / CURRENT tiles. The needle eases so the
+// motion stays smooth instead of jumping.
 static float evShown = 0, evPeak = 3000;
 static float evTarget = 0;
+static const int EV_CX = 120, EV_CY = 182, EV_R0 = 90, EV_R1 = 110;
 static void evMeter(float p) { // p in W: + = driving, - = regen
-  const int cx = 150, cy = 214, r1 = 126, r0 = 108;
-  float span = 180.f, z = 180 + span * .2f;
-  tft.fillArc(cx, cy, r0, r1, 180, 360, C_LINE);
-  if (p > 1) tft.fillArc(cx, cy, r0, r1, z, z + (360 - z) * std::min(1.f, p / evPeak), C_WARN);
-  else if (p < -1) tft.fillArc(cx, cy, r0, r1, z - (z - 180) * std::min(1.f, -p / (evPeak * .3f)), z, C_GOOD);
-  tft.fillRect(cx - 2 + int((r0 - 6) * cosf(z * 0.0174533f)), cy - 4 + int((r0 - 6) * sinf(z * 0.0174533f)), 4, 4, C_MUTED);
+  tft.fillArc(EV_CX, EV_CY, EV_R0, EV_R1, 150, 390, C_LINE);          // 240deg track, gap at the bottom
+  if (p > 1) tft.fillArc(EV_CX, EV_CY, EV_R0, EV_R1, 270, 270 + 120 * std::min(1.f, p / evPeak), C_WARN);
+  else if (p < -1) tft.fillArc(EV_CX, EV_CY, EV_R0, EV_R1, 270 - 120 * std::min(1.f, -p / (evPeak * .4f)), 270, C_GOOD);
   LGFX_Sprite t(&tft);
   t.setColorDepth(8);
-  if (!t.createSprite(160, 74)) return;
+  if (!t.createSprite(150, 70)) return;
   t.fillSprite(C_BG);
   t.setTextDatum(textdatum_t::middle_center);
   t.setFont(&fonts::FreeSansBold24pt7b);
   t.setTextColor(p < -1 ? C_GOOD : C_TEXT, C_BG);
-  t.drawString(fmt(p / 1000.f, 1), 80, 30);
+  t.drawString(fmt(std::fabs(p) / 1000.f, 1), 75, 26);
   t.setFont(&fonts::FreeSans9pt7b);
   t.setTextColor(C_MUTED, C_BG);
-  t.drawString(p < -1 ? "kW regen" : "kW", 80, 62);
-  t.pushSprite(cx - 80, cy - 100);
+  t.drawString(p < -1 ? "kW regen" : p > 1 ? "kW drive" : "kW", 75, 58);
+  t.pushSprite(EV_CX - 75, EV_CY - 35);
   t.deleteSprite();
+}
+// one data tile inside the right-hand sprite
+static void evTile(LGFX_Sprite &b, int x, int y, int w, int h, const char *label,
+                   const String &val, const char *unit, uint16_t accent, bool big) {
+  b.fillRoundRect(x, y, w, h, 10, C_CARD);
+  b.fillRoundRect(x, y + 10, 4, h - 20, 2, accent);
+  b.setFont(&fonts::FreeSans9pt7b);
+  b.setTextDatum(textdatum_t::top_left);
+  b.setTextColor(C_MUTED, C_CARD);
+  b.drawString(label, x + 12, y + 8);
+  b.setFont(big ? &fonts::FreeSansBold24pt7b : &fonts::FreeSansBold18pt7b);
+  b.setTextDatum(textdatum_t::bottom_left);
+  b.setTextColor(C_TEXT, C_CARD);
+  b.drawString(val, x + 12, y + h - 8);
+  int vw = b.textWidth(val);
+  b.setFont(&fonts::FreeSans9pt7b);
+  b.setTextColor(C_MUTED, C_CARD);
+  b.drawString(unit, x + 16 + vw, y + h - 12);
 }
 static void evHome(const DisplaySnap &d, bool force) {
   const auto &s = d.sample;
   bool ok = d.live;
-  evTarget = ok ? -(s.voltage * s.current) : 0;
+  evTarget = ok ? -(s.voltage * s.current) : 0;       // + = drive, - = regen
   evPeak = std::max(evPeak, std::fabs(evTarget));
-  if (force) {
-    evShown = 0;
-    evMeter(0);
-    tft.setFont(&fonts::FreeSans9pt7b);
-    tft.setTextDatum(textdatum_t::middle_center);
-    tft.setTextColor(C_MUTED, C_BG);
-    tft.drawString("REGEN", 30, 226);
-    tft.drawString(String(int(evPeak / 1000 + .5f)) + " kW", 268, 226);
-  }
+  if (force) { evShown = 0; evMeter(0); }
   float rk = evRangeKm(d);
+  bool low = rk >= 0 && d.rangeAlarm && rk < d.rangeAlarm;
+  int soc = ok ? int(s.soc + .5f) : 0;
+  // right-hand 2x2 tiles: RANGE / SOC / VOLT / CURRENT (screen x 250..472)
   LGFX_Sprite b(&tft);
   b.setColorDepth(8);
-  if (!b.createSprite(170, 186)) return;
+  if (!b.createSprite(224, 188)) return;
   b.fillSprite(C_BG);
-  b.fillRoundRect(0, 0, 170, 186, 12, C_CARD);
-  b.setFont(&fonts::FreeSans9pt7b);
-  b.setTextDatum(textdatum_t::top_left);
-  b.setTextColor(C_MUTED, C_CARD);
-  b.drawString("Range left", 12, 10);
-  b.setFont(&fonts::FreeSansBold24pt7b);
-  bool low = rk >= 0 && d.rangeAlarm && rk < d.rangeAlarm;
-  b.setTextColor(low ? C_WARN : C_TEXT, C_CARD);
-  b.drawString(rk < 0 ? String("--") : String(int(rk + .5f)), 12, 32);
-  b.setFont(&fonts::FreeSans9pt7b);
-  b.setTextColor(C_MUTED, C_CARD);
-  b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : (d.whkm ? String("km  ") + d.whkm + " Wh/km" : String("km")), 12, 76);
-  int soc = ok ? int(s.soc + .5f) : 0;
-  b.drawString(String("SOC ") + (ok ? String(soc) + "%" : String("--")), 12, 100);
-  b.fillRoundRect(12, 122, 146, 8, 4, C_LINE);
-  if (soc > 0) b.fillRoundRect(12, 122, 146 * std::min(soc, 100) / 100, 8, 4, soc <= 15 ? C_BAD : soc <= 35 ? C_WARN : C_GOOD);
-  b.drawString("Voltage", 12, 140);
-  b.setFont(&fonts::FreeSansBold12pt7b);
-  b.setTextColor(C_TEXT, C_CARD);
-  b.drawString(ok ? fmt(s.voltage, 1) + " V" : String("--"), 12, 158);
-  b.pushSprite(300, 46);
+  evTile(b, 2, 0, 110, 90, "RANGE", rk < 0 ? String("--") : String(int(rk + .5f)), "km", low ? C_BAD : C_ACCENT, true);
+  evTile(b, 116, 0, 108, 90, "SOC", ok ? String(soc) : String("--"), "%", C_WARN, false);
+  evTile(b, 2, 96, 110, 90, "VOLT", ok ? fmt(s.voltage, 1) : String("--"), "V", C_BLUE, false);
+  evTile(b, 116, 96, 108, 90, "CURRENT", ok ? fmt(s.current, 1) : String("--"), "A", (ok && s.current > .5f) ? C_GOOD : C_WARN, false);
+  b.pushSprite(248, 46);
   b.deleteSprite();
+  // footer: pack summary + CHG/DSG
   LGFX_Sprite st(&tft);
   st.setColorDepth(8);
   if (!st.createSprite(462, 40)) return;
@@ -790,7 +789,7 @@ static void evHome(const DisplaySnap &d, bool force) {
   st.setFont(&fonts::FreeSans9pt7b);
   st.setTextDatum(textdatum_t::middle_left);
   st.setTextColor(C_TEXT, C_CARD);
-  st.drawString(ok && imn >= 0 ? String(s.count) + "S  d" + String(int((mx - mn) * 1000 + .5f)) + "mV  " + fmt(s.temp1, 0) + "C  " + fmt(s.current, 1) + "A"
+  st.drawString(ok && imn >= 0 ? String(s.count) + "S  d" + String(int((mx - mn) * 1000 + .5f)) + "mV  " + fmt(s.temp1, 0) + "C" + (d.whkm ? String("  ") + d.whkm + " Wh/km" : String(""))
                                : String(d.linked ? "Waiting for BMS data" : "Not connected - open BMS tab"), 12, 20);
   pill(st, 304, 7, "CHG", ok && s.charge);
   pill(st, 382, 7, "DSG", ok && s.discharge);

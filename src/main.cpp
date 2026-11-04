@@ -31,7 +31,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.9.0-cyd35"
+#define BATTLAB_FW "2.9.1-cyd35"
 #else
 #define BATTLAB_FW "2.9.0-s3"
 #endif
