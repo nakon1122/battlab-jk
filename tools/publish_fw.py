@@ -10,12 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 src, site = Path(sys.argv[1]), Path(sys.argv[2])
 notes = sys.argv[3] if len(sys.argv) > 3 else ''
 zipf = Path(sys.argv[4]) if len(sys.argv) > 4 else None
-ver_main = re.search(r'#define BATTLAB_FW "([0-9.]+)-cyd35"', (ROOT / 'src/main.cpp').read_text()).group(1)
+ver_cyd = re.search(r'#define BATTLAB_FW "([0-9.]+)-cyd35"', (ROOT / 'src/main.cpp').read_text()).group(1)
+ver_s3 = re.search(r'#define BATTLAB_FW "([0-9.]+)-s3"', (ROOT / 'src/main.cpp').read_text()).group(1)
 ver_view = re.search(r'#define BATTLAB_FW "([0-9.]+)-cloudscreen"', (ROOT / 'src/viewer/viewer.cpp').read_text()).group(1)
+ver_main = ver_cyd  # the release / zip number tracks the CYD build
 # board: app image, version, merged install image, chip, bootloader, offset of bootloader
+# each board carries its OWN firmware version so an unchanged board is not offered a needless update
 boards = {
-    's3': ('BATTLAB_S3_APP_UPDATE.bin', ver_main, 'BATTLAB_S3_BLEFIX_INSTALL.bin', 'ESP32-S3', 'S3_BOOTLOADER.bin', 'S3_PARTITIONS.bin', 0x0, 'ESP32-S3 (BMS board)'),
-    'cyd35': ('BATTLAB_CYD35_APP_UPDATE.bin', ver_main, 'BATTLAB_CYD35_INSTALL.bin', 'ESP32', 'CYD_BOOTLOADER.bin', 'CYD_PARTITIONS.bin', 0x1000, 'CYD 3.5" (BMS screen)'),
+    's3': ('BATTLAB_S3_APP_UPDATE.bin', ver_s3, 'BATTLAB_S3_BLEFIX_INSTALL.bin', 'ESP32-S3', 'S3_BOOTLOADER.bin', 'S3_PARTITIONS.bin', 0x0, 'ESP32-S3 (BMS board)'),
+    'cyd35': ('BATTLAB_CYD35_APP_UPDATE.bin', ver_cyd, 'BATTLAB_CYD35_INSTALL.bin', 'ESP32', 'CYD_BOOTLOADER.bin', 'CYD_PARTITIONS.bin', 0x1000, 'CYD 3.5" (BMS screen)'),
     'cloudscreen': ('BATTLAB_CLOUDSCREEN_APP_UPDATE.bin', ver_view, 'BATTLAB_CLOUDSCREEN_INSTALL.bin', 'ESP32', 'CYD_BOOTLOADER.bin', 'CYD_PARTITIONS.bin', 0x1000, 'Cloud Screen (CYD 3.5")'),
 }
 fw = site / 'fw'
