@@ -33,7 +33,7 @@
 #ifdef BATTLAB_CYD35
 #define BATTLAB_FW "2.9.1-cyd35"
 #else
-#define BATTLAB_FW "2.9.0-s3"
+#define BATTLAB_FW "2.9.2-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -734,15 +734,30 @@ void bleWorker(void *) {
   auto runMatch = [&]() {
     setBtm("scan");
     scan->clearResults();
-    NimBLEScanResults res = scan->start(8, false);
-    struct Cand { std::string mac; uint8_t type; std::string name; };
-    std::vector<Cand> cands;
-    for (int i = 0; i < res.getCount() && cands.size() < 20; i++) {
+    NimBLEScanResults res = scan->start(10, false);
+    int scanned = res.getCount();
+    // Collect every nearby device. The Bluetooth NAME is NOT used to pick packs (users rename them),
+    // so a renamed JK is still tried: devices advertising the JK service come first, then the strongest
+    // nearby unknowns. pjConnect confirms each is really JK (needs the 0xffe0 service), so non-JK fall out.
+    struct Raw { std::string mac; uint8_t type; std::string name; int rssi; bool jk; };
+    std::vector<Raw> all;
+    for (int i = 0; i < scanned; i++) {
       auto dev = res.getDevice(i);
       String up = dev.getName().c_str();
       up.toUpperCase();
-      if (up.startsWith("JK") || (dev.haveServiceUUID() && dev.isAdvertisingService(NimBLEUUID(uint16_t(0xffe0)))))
-        cands.push_back({dev.getAddress().toString(), dev.getAddressType(), dev.getName().substr(0, 19)});
+      bool jk = up.startsWith("JK") ||
+                (dev.haveServiceUUID() && (dev.isAdvertisingService(NimBLEUUID(uint16_t(0xffe0))) ||
+                                           dev.isAdvertisingService(NimBLEUUID(uint16_t(0xff00)))));
+      all.push_back({dev.getAddress().toString(), dev.getAddressType(), dev.getName().substr(0, 19), dev.getRSSI(), jk});
+    }
+    std::sort(all.begin(), all.end(), [](const Raw &a, const Raw &b) { return a.jk != b.jk ? a.jk : a.rssi > b.rssi; });
+    struct Cand { std::string mac; uint8_t type; std::string name; };
+    std::vector<Cand> cands;
+    int unknown = 0;
+    for (auto &c : all) {
+      if (cands.size() >= 12) break;
+      if (!c.jk) { if (c.rssi < -88 || unknown >= 6) continue; unknown++; } // only strong, nearby unknowns
+      cands.push_back({c.mac, c.type, c.name});
     }
     jk::Sample ps[16];
     bool have[16];
@@ -809,7 +824,7 @@ void bleWorker(void *) {
       }
     }
     btSave();
-    setBtm(String("done:") + n + "/" + total + ":" + cands.size());
+    setBtm(String("done:") + scanned + ":" + got.size() + ":" + n + ":" + total); // scanned : JK-responded : matched : packs
   };
   auto runJob = [&](const PackJob &j) {
     BtLink L;
