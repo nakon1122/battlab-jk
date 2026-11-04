@@ -13,7 +13,8 @@ zipf = Path(sys.argv[4]) if len(sys.argv) > 4 else None
 ver_cyd = re.search(r'#define BATTLAB_FW "([0-9.]+)-cyd35"', (ROOT / 'src/main.cpp').read_text()).group(1)
 ver_s3 = re.search(r'#define BATTLAB_FW "([0-9.]+)-s3"', (ROOT / 'src/main.cpp').read_text()).group(1)
 ver_view = re.search(r'#define BATTLAB_FW "([0-9.]+)-cloudscreen"', (ROOT / 'src/viewer/viewer.cpp').read_text()).group(1)
-ver_main = ver_cyd  # the release / zip number tracks the CYD build
+_vn = lambda v: tuple(int(x) for x in re.search(r'(\d+)\.(\d+)\.(\d+)', v).groups())
+ver_main = max([ver_cyd, ver_s3, ver_view], key=_vn)  # release / zip number = highest board version
 # board: app image, version, merged install image, chip, bootloader, offset of bootloader
 # each board carries its OWN firmware version so an unchanged board is not offered a needless update
 boards = {
