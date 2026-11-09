@@ -367,12 +367,12 @@ def pairing(paired=False):
         s.text('PAIR CODE FOR THIS SCREEN', 12, 58, F9, MUTED)
     s.text('Q7MX-4KTD', 12, 100, F24B, GOOD if paired else ACCENT)
     if paired:
-        s.text('Website: nakon1122.github.io/battlab-cloud', 12, 150, F9, TEXT)
+        s.text('Website: batterycloud.battlab.net', 12, 150, F9, TEXT)
         s.text('Remove it on the website to pair with another account.', 12, 174, F9, TEXT)
         s.text('Cloud: online   Data today 4.2 MB (ECO)', 12, 206, F9, MUTED)
         s.text(f'Firmware {FW}   IP 192.168.1.64   RAM 151k', 12, 232, F9, MUTED)
     else:
-        s.text('1. On your phone open  nakon1122.github.io/battlab-cloud', 12, 148, F9, TEXT)
+        s.text('1. On your phone open  batterycloud.battlab.net', 12, 148, F9, TEXT)
         s.text('2. Sign in, tap  Add device  and enter the code', 12, 174, F9, TEXT)
         s.text('3. Every battery of that account appears here', 12, 200, F9, TEXT)
         s.circle(18, 240, 6, WARN); s.text('Cloud: waiting for pairing', 32, 241, F9, TEXT)

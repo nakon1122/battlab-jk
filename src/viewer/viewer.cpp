@@ -24,7 +24,7 @@
 #include "improv_serial.h"
 #include <string>
 
-#define BATTLAB_FW "2.8.8-cloudscreen"
+#define BATTLAB_FW "2.9.3-cloudscreen"
 
 // ------------------------------------------------------------ display ----
 class LGFX : public lgfx::LGFX_Device {
@@ -594,7 +594,7 @@ static void parseHist(JsonDocument &d, const String &id, int hours) {
 }
 
 static void runOta(WiFiClientSecure &tls, const String &url) {
-  if (!url.startsWith(String("https://") + CLOUD_SITE + "/fw/") || !url.endsWith(".bin")) {
+  if (!CLOUD_FW_URL_OK(url)) {
     Lock l;
     netToast = "Update URL not allowed";
     return;

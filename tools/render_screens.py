@@ -360,7 +360,7 @@ def cloud():
     s.button((390, 46, 84, 40), 'BACK')
     s.text('PAIR CODE', 12, 52, F9, MUTED, 'lt')
     s.text('K7Q2-9XMA', 12, 104, F24B, ACCENT)
-    s.text('1. On your phone open  nakon1122.github.io/battlab-cloud', 12, 150, F9, TEXT)
+    s.text('1. On your phone open  batterycloud.battlab.net', 12, 150, F9, TEXT)
     s.text('2. Sign in and tap  Add device', 12, 176, F9, TEXT)
     s.text('3. Enter the pair code above', 12, 202, F9, TEXT)
     s.circle(18, 246, 6, WARN); s.text('Cloud: online - add on website', 32, 247, F9, TEXT)

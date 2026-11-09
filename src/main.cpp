@@ -31,9 +31,9 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.9.1-cyd35"
+#define BATTLAB_FW "2.9.3-cyd35"
 #else
-#define BATTLAB_FW "2.9.2-s3"
+#define BATTLAB_FW "2.9.3-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -2206,7 +2206,7 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   }
   if (c == "ota") {
     String url = a["url"] | "";
-    if (!url.startsWith(String("https://") + CLOUD_SITE + "/fw/") || !url.endsWith(".bin") || url.length() > 200) {
+    if (!CLOUD_FW_URL_OK(url) || url.length() > 200) {
       ok = false;
       return "update URL not allowed";
     }
