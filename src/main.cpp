@@ -27,13 +27,14 @@
 #include "cloud_config.h"
 #include "cloud_ca_bundle.h"
 #include "lux_dongle.h"
+#include "inv_dongle.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #ifdef BATTLAB_CYD35
-#define BATTLAB_FW "2.9.3-cyd35"
+#define BATTLAB_FW "2.10.0-cyd35"
 #else
-#define BATTLAB_FW "2.9.3-s3"
+#define BATTLAB_FW "2.10.0-s3"
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -2111,6 +2112,8 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   if (c == "radio_max") { radioSetMaxPower(a["on"] | true); return radioMax ? "TX max" : "TX low"; }
   if (c == "lux_set") { luxd::configure(a["ips"] | "", a["on"] | false); return (a["on"] | false) ? "LuxPower dongle on" : "LuxPower dongle off"; }
   if (c == "lux_scan") { luxd::scan(); return "looking for LuxPower dongles"; }
+  if (c == "inv_set") { invd::configure(a["s"] | "", a["on"] | false); return (a["on"] | false) ? "inverter dongle on" : "inverter dongle off"; }
+  if (c == "inv_scan") { invd::scan(); return "looking for inverter dongles"; }
   if (c == "wifi_scan") { netScanStart(); wscanWanted = true; return "scanning Wi-Fi"; }
   if (c == "wifi_ap") { apChangeWanted = true; apChangeTo = a["on"] | true; return apChangeTo ? "hotspot on" : "hotspot off"; }
   if (c == "home_wifi") {
@@ -2299,7 +2302,8 @@ static void cloudTask(void *) {
       paired = cloudPaired;
     }
     bool luxNow = luxd::fresh(); // inverter read from a LuxPower dongle: upload it every 10 s
-    uint32_t every = fast && paired ? FAST_MS : (live || luxNow) ? 10000 : (paired ? 60000 : 20000);
+    bool invNow = invd::fresh(); // inverter of another brand read from its home dongle
+    uint32_t every = fast && paired ? FAST_MS : (live || luxNow || invNow) ? 10000 : (paired ? 60000 : 20000);
     String json;
     bool sentWscan = false;
     {
@@ -2309,6 +2313,7 @@ static void cloudTask(void *) {
 #else
       DOC = luxNow ? 9216 : 6144;
 #endif
+      DOC += 2560; // other-brand dongle settings + up to 2 inverters
       DynamicJsonDocument body(DOC);
       body["p_token"] = devToken;
       body["p_pair"] = pairCode;
@@ -2387,6 +2392,8 @@ static void cloudTask(void *) {
         lx["scan"] = t["scan"];
       }
       if (luxNow) luxd::cloudJson(d.createNestedArray("lux"));
+      invd::statusJson(c.createNestedObject("inv"));
+      if (invNow) invd::cloudJson(d.createNestedArray("inv"));
       c["ap"] = wifiOn;
       c["tx"] = radioMax;
       c["ssid"] = staSsid;
@@ -3845,6 +3852,24 @@ void setup() {
     luxd::scan();
     web.send(202, "application/json", "{\"scanning\":true}");
   });
+  web.on("/api/inv", HTTP_GET, []() {
+    DynamicJsonDocument d(3072);
+    invd::statusJson(d.to<JsonObject>());
+    json(200, d);
+  });
+  web.on("/api/inv", HTTP_POST, []() {
+    if (!localRequest()) return;
+    if (web.arg("plain").length() > 256) { error(413, "Too large"); return; }
+    StaticJsonDocument<384> in;
+    if (deserializeJson(in, web.arg("plain"))) { error(400, "Invalid JSON"); return; }
+    invd::configure(in["s"] | "", in["on"] | false);
+    web.send(202, "application/json", "{\"saved\":true}");
+  });
+  web.on("/api/inv/scan", HTTP_POST, []() {
+    if (!localRequest()) return;
+    invd::scan();
+    web.send(202, "application/json", "{\"scanning\":true}");
+  });
   web.on("/api/led", HTTP_GET, []() {
     DynamicJsonDocument d(1024);
     ledJson(d);
@@ -3979,6 +4004,7 @@ void setup() {
   ledLoad();
   xTaskCreatePinnedToCore(ledTask, "led", 3072, nullptr, 1, nullptr, 1);
   luxd::start();
+  invd::start();
   xTaskCreatePinnedToCore(cloudTask, "cloud", 10240, nullptr, 1, nullptr, 1);
 #ifndef BATTLAB_DISPLAY
   xTaskCreatePinnedToCore(rs485Task, "rs485", 10240, nullptr, 1, nullptr, 1);

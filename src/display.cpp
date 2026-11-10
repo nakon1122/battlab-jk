@@ -15,6 +15,7 @@ const char *displayCfgSet(JsonObjectConst) { return "this board has no screen"; 
 #include <LovyanGFX.hpp>
 #include "logo.h"
 #include "lux_dongle.h"
+#include "inv_dongle.h"
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
@@ -103,7 +104,7 @@ static const int TAB_Y = 278, TAB_H = 42, TABS_MAX = 8;
 enum Page { P_HOME, P_CELLS, P_BMS, P_PARAM, P_LED, P_SETUP, P_INFO, P_INV };
 static const char *const TAB_NAMES[TABS_MAX] = {"HOME", "CELLS", "BMS", "PARAM",
                                                 "LED",  "SETUP", "INFO", "INV"};
-static int tabCount() { return luxd::enabled() ? 8 : 7; }
+static int tabCount() { return (luxd::enabled() || invd::enabled()) ? 8 : 7; }
 static int tabW() { return tabCount() == 8 ? 60 : 68; }
 
 // --------------------------------------------------------- settings ----
@@ -359,16 +360,18 @@ static uint16_t blend565(uint16_t a, uint16_t b, float k);
 static void invPage(bool force) {
   luxd::View v[2];
   int n = luxd::views(v, 2);
+  if (n < 2) n += invd::views(v + n, 2 - n);
+  bool other = !luxd::enabled() && invd::enabled();
   if (!n) {
     if (!force) return;
     clearContent();
     tft.setTextDatum(textdatum_t::middle_center);
     tft.setFont(&fonts::FreeSansBold12pt7b);
     tft.setTextColor(C_TEXT, C_BG);
-    tft.drawString("LuxPower inverter", 240, 120);
+    tft.drawString(other ? "Inverter" : "LuxPower inverter", 240, 120);
     tft.setFont(&fonts::FreeSans9pt7b);
     tft.setTextColor(C_MUTED, C_BG);
-    tft.drawString("Waiting for the Wi-Fi dongle (port 8000)", 240, 160);
+    tft.drawString(other ? "Waiting for the Wi-Fi dongle" : "Waiting for the Wi-Fi dongle (port 8000)", 240, 160);
     tft.drawString("Set its IP in the web page: Settings", 240, 186);
     return;
   }

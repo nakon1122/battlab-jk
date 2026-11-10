@@ -402,14 +402,14 @@ def param_jbd():
     tabs(s, 3); return s
 
 
-def inv_page(units=None):
+def inv_page(units=None, other=False):
     """INV tab: LuxPower inverter(s) read straight from the Wi-Fi dongle (mirrors invPage())"""
     global LUX_TABS
     LUX_TABS = True
     s = Scr(); header(s, 'JK02_24S  LIVE', GOOD)
     if not units:
-        s.text('LuxPower inverter', 240, 120, F12B, TEXT, 'mm')
-        s.text('Waiting for the Wi-Fi dongle (port 8000)', 240, 160, F9, MUTED, 'mm')
+        s.text('Inverter' if other else 'LuxPower inverter', 240, 120, F12B, TEXT, 'mm')
+        s.text('Waiting for the Wi-Fi dongle' if other else 'Waiting for the Wi-Fi dongle (port 8000)', 240, 160, F9, MUTED, 'mm')
         s.text('Set its IP in the web page: Settings', 240, 186, F9, MUTED, 'mm')
         tabs(s, 7); LUX_TABS = False; return s
     n = len(units)
@@ -489,6 +489,9 @@ shots = [
     ('32_inv_single.png', 'INV: one inverter, battery discharging at night', inv_page([dict(sn='61730V3039', soc=64, v=52.6, p=-1240, ppv=0, pl=1180, pg=0, epv=21.3, el=9.4)])),
     ('33_inv_waiting.png', 'INV: dongle not answering yet', inv_page()),
     ('34_home_8tabs.png', 'Tab bar gets an 8th tab INV when the dongle reader is on', home_lux()),
+    ('35_inv_powmr.png', 'INV (new in 2.10.0): PowMr / SmartESS inverter read from its Wi-Fi dongle (24 V battery, charging from solar)', inv_page([dict(sn='7020241004', soc=87, v=26.4, p=317, ppv=750, pl=412, pg=0, epv=3.4, el=0)])),
+    ('36_inv_deye.png', 'INV (new in 2.10.0): Deye inverter read from its Solarman dongle, selling to the grid', inv_page([dict(sn='2301234567', soc=66, v=52.9, p=1100, ppv=2400, pl=800, pg=-250, epv=12.3, el=9.6)])),
+    ('37_inv_other_waiting.png', 'INV (new in 2.10.0): other-brand dongle not answering yet', inv_page(other=True)),
 ]
 paths = []
 for name, cap, s in shots:
