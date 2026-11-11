@@ -19,4 +19,5 @@ void configure(const String &ips, bool on); // comma separated, max 2
 void scan();                         // look for dongles on the LAN (port 8000)
 int views(View *out, int max);       // for the screen
 bool enabled();
+void hint(char *out, size_t n);     // short status line for the screen (searching / no answer / moved)
 } // namespace luxd

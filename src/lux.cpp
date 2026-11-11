@@ -36,6 +36,11 @@ static volatile bool scanWanted = false, cfgChanged = false;
 static bool scanBusy = false;
 static String scanFound = "[]", scanNote;
 static uint32_t scanAt = 0;
+// auto search: when no dongle answers for 5 min (its IP changed), look for it again (at most every 30 min)
+static uint32_t lastLive = 0, lastAuto = 0, autoAt = 0;
+static String autoNote;
+static const uint32_t AUTO_AFTER = 5 * 60000UL, AUTO_EVERY = 30 * 60000UL;
+static const int SCAN_BATCH = 4; // sockets open at the same time; the cloud upload and the web page need the rest
 
 static void load() {
   Preferences p;
@@ -164,18 +169,14 @@ static void serviceDongle(int di) {
   if (now - d.lastRx > 45000) { G g; drop(d, "no data from dongle for 45 s"); }
 }
 
-// non-blocking connect to every host of the /24 on port 8000, 24 at a time
-static void doScan() {
-  { G g; scanBusy = true; scanNote = "scanning"; }
-  String found = "[";
+// hosts of the /24 with port 8000 open (last octet), at most `max`.
+// Only SCAN_BATCH sockets at a time: opening 24 used up every lwIP socket and the
+// cloud upload hung until the 10-min watchdog restarted the board (fixed in 2.10.1).
+static int portScan(IPAddress me, int *hosts, int max) {
   int nf = 0;
-  IPAddress me = WiFi.localIP();
-  if (WiFi.status() != WL_CONNECTED || (uint32_t)me == 0) {
-    G g; scanBusy = false; scanNote = "not on home Wi-Fi"; return;
-  }
-  for (int start = 1; start < 255; start += 24) {
-    int fds[24], hosts[24], n = 0;
-    for (int h = start; h < start + 24 && h < 255; h++) {
+  for (int start = 1; start < 255 && nf < max; start += SCAN_BATCH) {
+    int fds[SCAN_BATCH], hs[SCAN_BATCH], n = 0;
+    for (int h = start; h < start + SCAN_BATCH && h < 255; h++) {
       if (h == me[3]) continue;
       int s = lwip_socket(AF_INET, SOCK_STREAM, 0);
       if (s < 0) break;
@@ -186,11 +187,12 @@ static void doScan() {
       a.sin_port = htons(PORT);
       a.sin_addr.s_addr = (uint32_t)IPAddress(me[0], me[1], me[2], h);
       lwip_connect(s, (sockaddr *)&a, sizeof a);
-      fds[n] = s; hosts[n] = h; n++;
+      fds[n] = s; hs[n] = h; n++;
     }
+    if (!n) { vTaskDelay(pdMS_TO_TICKS(200)); continue; } // no free socket now: let the others finish
     uint32_t t0 = millis();
-    bool done[24] = {false};
-    while (millis() - t0 < 700) {
+    bool done[SCAN_BATCH] = {false};
+    while (millis() - t0 < 600) {
       fd_set w; FD_ZERO(&w);
       int mx = -1, left = 0;
       for (int i = 0; i < n; i++) if (!done[i]) { FD_SET(fds[i], &w); if (fds[i] > mx) mx = fds[i]; left++; }
@@ -202,21 +204,102 @@ static void doScan() {
           done[i] = true;
           int e = 0; socklen_t l = sizeof e;
           lwip_getsockopt(fds[i], SOL_SOCKET, SO_ERROR, &e, &l);
-          if (!e && nf < 8) {
-            if (nf++) found += ",";
-            found += "\"" + IPAddress(me[0], me[1], me[2], hosts[i]).toString() + "\"";
-          }
+          if (!e && nf < max) hosts[nf++] = hs[i];
         }
     }
     for (int i = 0; i < n; i++) lwip_close(fds[i]);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(15));
   }
+  return nf;
+}
+
+// does a LuxPower dongle answer at this address? (a valid frame with a datalog serial within 4 s)
+static bool probe(const IPAddress &a) {
+  WiFiClient c;
+  if (!c.connect(a, PORT, 2000)) return false;
+  uint8_t f[38];
+  luxl::buildReadInput(f, nullptr, nullptr, 0, 40);
+  c.write(f, sizeof f);
+  luxl::Splitter sp;
+  bool ok = false;
+  uint32_t t0 = millis();
+  while (!ok && millis() - t0 < 4000 && c.connected()) {
+    int k = c.available();
+    if (k <= 0) { vTaskDelay(pdMS_TO_TICKS(25)); continue; }
+    uint8_t b[128];
+    int r = c.read(b, k > (int)sizeof b ? sizeof b : k);
+    if (r <= 0) break;
+    sp.push(b, r);
+    size_t n;
+    while (!ok && (n = sp.frame())) {
+      luxl::Inv tmp;
+      char dl[11] = {0};
+      if (luxl::decode(sp.buf, n, tmp, dl) != luxl::K_BAD && luxl::validSerial(dl)) ok = true;
+      sp.drop(n);
+    }
+  }
+  c.stop();
+  return ok;
+}
+
+// manual (button) or automatic search. Found list: LuxPower dongles first,
+// or every host with port 8000 when none answered like a dongle.
+static void doScan(bool autoMode) {
+  { G g; scanBusy = true; scanNote = autoMode ? "auto: searching" : "scanning"; }
+  IPAddress me = WiFi.localIP();
+  if (WiFi.status() != WL_CONNECTED || (uint32_t)me == 0) {
+    G g; scanBusy = false; scanNote = "not on home Wi-Fi"; return;
+  }
+  int hosts[8];
+  int nh = portScan(me, hosts, 8);
+  String lux[MAXD];
+  int nl = 0;
+  bool isLux[8] = {false};
+  for (int i = 0; i < nh; i++) {
+    isLux[i] = probe(IPAddress(me[0], me[1], me[2], hosts[i]));
+    if (isLux[i] && nl < MAXD) lux[nl++] = IPAddress(me[0], me[1], me[2], hosts[i]).toString();
+  }
+  String found = "[";
+  int nf = 0;
+  for (int pass = 0; pass < 2; pass++)
+    for (int i = 0; i < nh; i++) {
+      if (nl ? (pass == 0 ? !isLux[i] : true) : pass == 1) continue;
+      if (nf++) found += ",";
+      found += "\"";
+      found += IPAddress(me[0], me[1], me[2], hosts[i]).toString();
+      found += "\"";
+    }
   found += "]";
+  String note = nl ? "found" : nh ? "port 8000 open but no LuxPower answer" : "no device with port 8000";
+  String moved;
+  if (autoMode && nl) {
+    // dongles that answered first, then the old addresses (kept in case one is only switched off)
+    String cur, nw;
+    int k = 0;
+    for (int i = 0; i < nl; i++) { if (k++) nw += ","; nw += lux[i]; }
+    {
+      G g;
+      for (auto &d : dg) {
+        if (!d.ip.length()) continue;
+        if (cur.length()) cur += ",";
+        cur += d.ip;
+        bool dup = false;
+        for (int i = 0; i < nl; i++) if (lux[i] == d.ip) dup = true;
+        if (!dup && k < MAXD) { if (k++) nw += ","; nw += d.ip; }
+      }
+    }
+    if (nw != cur) { configure(nw, true); moved = nw; }
+  }
   G g;
   scanFound = found;
   scanBusy = false;
   scanAt = millis();
-  scanNote = nf ? "found" : "no device with port 8000";
+  scanNote = note;
+  if (autoMode) {
+    autoAt = millis();
+    if (moved.length()) { autoNote = "dongle moved to "; autoNote += moved; }
+    else autoNote = nl ? "dongle found, same IP" : "no LuxPower dongle on the Wi-Fi";
+  }
 }
 
 static void task(void *) {
@@ -228,8 +311,9 @@ static void task(void *) {
       for (auto &d : dg) { d.cli.stop(); d.conn = false; d.sp.n = 0; d.nextTry = 0; d.st = "off"; d.err = ""; }
       for (auto &s : inv) s = Slot();
       load();
+      lastLive = millis();
     }
-    if (scanWanted) { scanWanted = false; doScan(); }
+    if (scanWanted) { scanWanted = false; doScan(false); }
     bool en;
     { G g; en = on; }
     if (!en || WiFi.status() != WL_CONNECTED) {
@@ -237,12 +321,18 @@ static void task(void *) {
       continue;
     }
     for (int i = 0; i < MAXD; i++) if (dg[i].ip.length()) serviceDongle(i);
+    uint32_t now = millis();
+    bool live = false, any = false;
+    for (auto &d : dg) { if (d.ip.length()) any = true; if (d.st == "live") live = true; }
+    if (live || !any) lastLive = now;
+    else if (now - lastLive > AUTO_AFTER && (!lastAuto || now - lastAuto > AUTO_EVERY)) { lastAuto = now; doScan(true); }
   }
 }
 
 void start() {
   mtx = xSemaphoreCreateMutex();
   load();
+  lastLive = millis();
   xTaskCreatePinnedToCore(task, "lux", 6144, nullptr, 1, nullptr, 1);
 }
 
@@ -318,6 +408,25 @@ void statusJson(JsonObject o) {
   sc["busy"] = scanBusy || scanWanted;
   sc["note"] = scanNote;
   sc["found"] = serialized(scanFound);
+  if (autoNote.length()) { o["auto"] = autoNote; o["autoAgo"] = (now - autoAt) / 1000; }
+}
+
+// one short line for the screen while no inverter data comes in
+void hint(char *out, size_t n) {
+  G g;
+  out[0] = 0;
+  if (!on) return;
+  if (scanBusy || scanWanted) { snprintf(out, n, "Searching the home Wi-Fi for the dongle..."); return; }
+  if (autoNote.length() && millis() - autoAt < 15 * 60000UL) { snprintf(out, n, "Auto search: %s", autoNote.c_str()); return; }
+  for (auto &d : dg)
+    if (d.ip.length() && d.st != "live" && d.err.length()) {
+      uint32_t now = millis();
+      if (lastAuto && now - lastAuto < AUTO_EVERY)
+        snprintf(out, n, "%s: no answer - next search in %u min", d.ip.c_str(), unsigned((AUTO_EVERY - (now - lastAuto)) / 60000 + 1));
+      else
+        snprintf(out, n, "%s: no answer - auto search after 5 min", d.ip.c_str());
+      return;
+    }
 }
 
 int views(View *out, int max) {

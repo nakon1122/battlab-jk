@@ -402,7 +402,7 @@ def param_jbd():
     tabs(s, 3); return s
 
 
-def inv_page(units=None, other=False):
+def inv_page(units=None, other=False, hint=None):
     """INV tab: LuxPower inverter(s) read straight from the Wi-Fi dongle (mirrors invPage())"""
     global LUX_TABS
     LUX_TABS = True
@@ -410,7 +410,11 @@ def inv_page(units=None, other=False):
     if not units:
         s.text('Inverter' if other else 'LuxPower inverter', 240, 120, F12B, TEXT, 'mm')
         s.text('Waiting for the Wi-Fi dongle' if other else 'Waiting for the Wi-Fi dongle (port 8000)', 240, 160, F9, MUTED, 'mm')
-        s.text('Set its IP in the web page: Settings', 240, 186, F9, MUTED, 'mm')
+        if hint:
+            s.text(hint, 240, 186, F9, WARN, 'mm')
+            s.text('or set its IP in the web page: Settings', 240, 212, F9, MUTED, 'mm')
+        else:
+            s.text('Set its IP in the web page: Settings', 240, 186, F9, MUTED, 'mm')
         tabs(s, 7); LUX_TABS = False; return s
     n = len(units)
     soc = sum(u['soc'] for u in units) / n; vb = sum(u['v'] for u in units) / n
@@ -492,6 +496,9 @@ shots = [
     ('35_inv_powmr.png', 'INV (new in 2.10.0): PowMr / SmartESS inverter read from its Wi-Fi dongle (24 V battery, charging from solar)', inv_page([dict(sn='7020241004', soc=87, v=26.4, p=317, ppv=750, pl=412, pg=0, epv=3.4, el=0)])),
     ('36_inv_deye.png', 'INV (new in 2.10.0): Deye inverter read from its Solarman dongle, selling to the grid', inv_page([dict(sn='2301234567', soc=66, v=52.9, p=1100, ppv=2400, pl=800, pg=-250, epv=12.3, el=9.6)])),
     ('37_inv_other_waiting.png', 'INV (new in 2.10.0): other-brand dongle not answering yet', inv_page(other=True)),
+    ('38_inv_no_answer.png', 'INV (new in 2.10.1): saved dongle IP does not answer - auto search starts after 5 min', inv_page(hint='192.168.1.76: no answer - auto search after 5 min')),
+    ('39_inv_searching.png', 'INV (new in 2.10.1): searching the home Wi-Fi for the dongle (about 40 s)', inv_page(hint='Searching the home Wi-Fi for the dongle...')),
+    ('40_inv_moved.png', 'INV (new in 2.10.1): dongle found at a new IP, saved and connecting', inv_page(hint='Auto search: dongle moved to 192.168.1.80')),
 ]
 paths = []
 for name, cap, s in shots:

@@ -363,7 +363,11 @@ static void invPage(bool force) {
   if (n < 2) n += invd::views(v + n, 2 - n);
   bool other = !luxd::enabled() && invd::enabled();
   if (!n) {
-    if (!force) return;
+    static char lastH[72] = {1};
+    char hh[72] = {0};
+    if (!other) luxd::hint(hh, sizeof hh);
+    if (!force && !strcmp(hh, lastH)) return;
+    memcpy(lastH, hh, sizeof hh);
     clearContent();
     tft.setTextDatum(textdatum_t::middle_center);
     tft.setFont(&fonts::FreeSansBold12pt7b);
@@ -372,7 +376,10 @@ static void invPage(bool force) {
     tft.setFont(&fonts::FreeSans9pt7b);
     tft.setTextColor(C_MUTED, C_BG);
     tft.drawString(other ? "Waiting for the Wi-Fi dongle" : "Waiting for the Wi-Fi dongle (port 8000)", 240, 160);
-    tft.drawString("Set its IP in the web page: Settings", 240, 186);
+    const char *h = hh;
+    if (h[0]) tft.setTextColor(C_WARN, C_BG);
+    tft.drawString(h[0] ? h : "Set its IP in the web page: Settings", 240, 186);
+    if (h[0]) { tft.setTextColor(C_MUTED, C_BG); tft.drawString("or set its IP in the web page: Settings", 240, 212); }
     return;
   }
   float soc = 0, vb = 0, p = 0, ppv = 0, pl = 0, pg = 0, epv = 0, el = 0;
