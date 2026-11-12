@@ -25,11 +25,11 @@
 #include <string>
 
 #ifdef BATTLAB_ES3C40
-#define BATTLAB_FW "2.10.1-cloudscreen-es3c40"
+#define BATTLAB_FW "2.11.0-cloudscreen-es3c40"
 #define VIEWER_OTA_KEY "cloudscreen_es3c40"
 #define VIEWER_CHIP "ESP32-S3"
 #else
-#define BATTLAB_FW "2.9.3-cloudscreen"
+#define BATTLAB_FW "2.11.0-cloudscreen"
 #define VIEWER_OTA_KEY "cloudscreen"
 #define VIEWER_CHIP "ESP32"
 #endif
@@ -116,6 +116,25 @@ public:
 
 static LGFX tft;
 static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_MUTED, C_ACCENT, C_GOOD, C_WARN, C_BAD, C_BLUE;
+// design B: extra theme colours (shadow, selected tab, status pills, graph fill, battery outline, text on accent)
+static uint16_t C_SH, C_SEL, C_OKP, C_OFFP, C_FILL, C_BATT, C_ONACC;
+
+// ---- Inter smooth fonts (anti-aliased VLW in flash, tools/make_vlw.py)
+#include "ui_fonts.h"
+static const lgfx::IFont *F_R15 = &fonts::FreeSans9pt7b, *F_S15 = &fonts::FreeSansBold9pt7b, *F_S12 = &fonts::FreeSans9pt7b,
+                         *F_R19 = &fonts::FreeSans12pt7b, *F_B19 = &fonts::FreeSansBold12pt7b, *F_B27 = &fonts::FreeSansBold18pt7b,
+                         *F_B36 = &fonts::FreeSansBold24pt7b, *F_B84 = &fonts::FreeSansBold24pt7b;
+static void fontsInit() {
+  static lgfx::PointerWrapper w[8];
+  static lgfx::VLWfont v[8];
+  const uint8_t *src[8] = {VLW_R15, VLW_S15, VLW_S12, VLW_R19, VLW_B19, VLW_B27, VLW_B36, VLW_B84};
+  const size_t len[8] = {sizeof VLW_R15, sizeof VLW_S15, sizeof VLW_S12, sizeof VLW_R19, sizeof VLW_B19, sizeof VLW_B27, sizeof VLW_B36, sizeof VLW_B84};
+  const lgfx::IFont **dst[8] = {&F_R15, &F_S15, &F_S12, &F_R19, &F_B19, &F_B27, &F_B36, &F_B84};
+  for (int i = 0; i < 8; i++) {
+    w[i].set(src[i], len[i]);
+    if (v[i].loadFont(&w[i])) *dst[i] = &v[i];
+  }
+}
 
 static const int TAB_Y = 278, TAB_H = 42, TABS = 6, TAB_W = 80;
 enum Page { P_ALL, P_HOME, P_CELLS, P_GRAPH, P_CTRL, P_SETUP };
@@ -126,7 +145,9 @@ struct DispCfg {
   uint8_t bl = 4, sleep = 0, rot = 1, lowSoc = 15, hiTemp = 55;
   bool beep = true, offAlarm = true, show = false;
   uint8_t eco = 1; // data saver: 0 normal, 1 eco, 2 max (less internet / Supabase egress)
+  uint8_t theme = 0, dayFrom = 6; // 0 auto (day dayFrom..dayFrom+12 h), 1 day, 2 night
 } dcfg;
+static bool nightNow = true;
 static const uint8_t SLEEP_MIN[4] = {0, 1, 5, 10};
 static const uint8_t BL_LEVEL[6] = {0, 40, 90, 140, 200, 255};
 static void dcfgLoad() {
@@ -141,7 +162,11 @@ static void dcfgLoad() {
   dcfg.offAlarm = p.getBool("offalarm", true);
   dcfg.show = p.getBool("show", false);
   dcfg.eco = p.getUChar("eco", 1);
+  dcfg.theme = p.getUChar("theme", 0);
+  dcfg.dayFrom = p.getUChar("dayf", 6);
   p.end();
+  if (dcfg.theme > 2) dcfg.theme = 0;
+  if (dcfg.dayFrom < 4 || dcfg.dayFrom > 9) dcfg.dayFrom = 6;
   if (dcfg.eco > 2) dcfg.eco = 1;
   if (dcfg.bl < 1 || dcfg.bl > 5) dcfg.bl = 4;
   if (dcfg.sleep > 3) dcfg.sleep = 0;
@@ -158,7 +183,36 @@ static void dcfgSave() {
   p.putBool("offalarm", dcfg.offAlarm);
   p.putBool("show", dcfg.show);
   p.putUChar("eco", dcfg.eco);
+  p.putUChar("theme", dcfg.theme);
+  p.putUChar("dayf", dcfg.dayFrom);
   p.end();
+}
+// ---- day / night colours (design B layout; night uses the "A" navy + mint palette)
+static void themeApply(bool night) {
+  nightNow = night;
+  auto c = [](uint8_t r, uint8_t g, uint8_t b) { return tft.color565(r, g, b); };
+  if (night) {
+    C_BG = c(7, 11, 18); C_CARD = c(16, 23, 34); C_SH = c(4, 6, 10); C_LINE = c(34, 46, 64);
+    C_TEXT = c(232, 240, 248); C_MUTED = c(120, 138, 160); C_ACCENT = c(0, 214, 190);
+    C_GOOD = c(52, 211, 120); C_WARN = c(255, 170, 60); C_BAD = c(255, 82, 96); C_BLUE = c(80, 160, 255);
+    C_SEL = c(14, 52, 58); C_OKP = c(14, 52, 40); C_OFFP = c(70, 20, 28); C_FILL = c(12, 48, 52);
+    C_BATT = c(70, 88, 110); C_ONACC = c(7, 11, 18);
+  } else {
+    C_BG = c(236, 240, 245); C_CARD = c(255, 255, 255); C_SH = c(214, 220, 228); C_LINE = c(222, 228, 236);
+    C_TEXT = c(18, 28, 40); C_MUTED = c(104, 116, 132); C_ACCENT = c(0, 122, 255);
+    C_GOOD = c(22, 170, 90); C_WARN = c(232, 120, 10); C_BAD = c(226, 50, 64); C_BLUE = c(0, 122, 255);
+    C_SEL = c(225, 238, 255); C_OKP = c(220, 240, 228); C_OFFP = c(253, 228, 230); C_FILL = c(222, 235, 255);
+    C_BATT = c(170, 180, 192); C_ONACC = c(255, 255, 255);
+  }
+}
+static bool themeWantNight() {
+  if (dcfg.theme == 1) return false;
+  if (dcfg.theme == 2) return true;
+  time_t now = time(nullptr);
+  if (now < 1700000000) return true; // no clock yet
+  struct tm t;
+  localtime_r(&now, &t);
+  return !(t.tm_hour >= dcfg.dayFrom && t.tm_hour < dcfg.dayFrom + 12);
 }
 
 // ------------------------------------------------------------- model ----
@@ -812,15 +866,17 @@ static bool hit(const Btn &b, int x, int y) { return x >= b.x && x < b.x + b.w &
 static void button(const Btn &b, const String &label, bool selected, uint16_t accent = 0,
                    const lgfx::IFont *font = nullptr, bool enabled = true) {
   uint16_t bg = selected ? (accent ? accent : C_ACCENT) : C_CARD;
-  tft.fillRoundRect(b.x, b.y, b.w, b.h, 10, bg);
-  if (!selected) tft.drawRoundRect(b.x, b.y, b.w, b.h, 10, C_LINE);
-  tft.setFont(font ? font : &fonts::FreeSansBold9pt7b);
+  int r = std::min(b.h / 2, 14);
+  tft.fillRoundRect(b.x, b.y + 2, b.w, b.h, r, C_SH);
+  tft.fillRoundRect(b.x, b.y, b.w, b.h, r, bg);
+  if (!selected && !nightNow) tft.drawRoundRect(b.x, b.y, b.w, b.h, r, C_LINE);
+  tft.setFont(font ? font : F_S15);
   tft.setTextDatum(textdatum_t::middle_center);
-  tft.setTextColor(!enabled ? C_LINE : selected ? C_BG : C_TEXT, bg);
+  tft.setTextColor(!enabled ? C_MUTED : selected ? C_ONACC : C_TEXT, bg);
   tft.drawString(label, b.x + b.w / 2, b.y + b.h / 2 + 1);
 }
 static void label(int x, int y, const String &t, uint16_t c = 0) {
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.setTextColor(c ? c : C_MUTED, C_BG);
   tft.drawString(t, x, y);
@@ -886,113 +942,142 @@ static void evalAlarm(const Model &m) {
 static const Btn B_PREV = {372, 4, 50, 32}, B_NEXT = {426, 4, 50, 32};
 static int allPage = 0;
 static void allView(const Model &m, std::vector<int> &idx, bool &grouped, int &per);
-static void header(const Model &m, int page) {
-  LGFX_Sprite s(&tft);
-  s.setColorDepth(8);
-  if (!s.createSprite(480, 40)) return;
-  s.fillSprite(C_BG);
-  {
-    static lgfx::rgb565_t line[LOGO_S_W];
-    uint8_t br = 11, bgc = 17, bb = 23;
-    for (int y = 0; y < LOGO_S_H; y++) {
-      const uint8_t *row = LOGO_S_GRAY + size_t(y) * LOGO_S_W;
-      for (int x = 0; x < LOGO_S_W; x++) {
-        uint8_t v = row[x];
-        line[x] = lgfx::rgb565_t(br + (255 - br) * v / 255, bgc + (255 - bgc) * v / 255, bb + (255 - bb) * v / 255);
-      }
-      s.pushImage(8, 5 + y, LOGO_S_W, 1, line);
+static const Btn B_THEME = {290, 6, 40, 28};
+static void themeIcon(LGFX_Sprite &s, int cx, int cy, uint16_t bg) {
+  if (nightNow) { s.fillCircle(cx, cy, 7, C_WARN); s.fillCircle(cx + 4, cy - 3, 6, bg); }
+  else {
+    s.fillCircle(cx, cy, 4, C_WARN);
+    for (int k = 0; k < 8; k++) {
+      float a = k * 0.785398f;
+      s.drawLine(cx + 6 * cosf(a), cy + 6 * sinf(a), cx + 8 * cosf(a), cy + 8 * sinf(a), C_WARN);
     }
   }
+}
+static void header(const Model &m, int page) {
+  LGFX_Sprite s(&tft);
+  s.setColorDepth(16);
+  if (!s.createSprite(480, 40)) return;
+  s.fillSprite(C_BG);
   bool ok = m.status == "online";
-  s.fillCircle(124, 20, 6, ok ? C_GOOD : m.status.startsWith("waiting") || m.status.startsWith("Wi-Fi") ? C_WARN : C_BAD);
-  if (dcfg.eco) { // data saver on: the dot becomes a leaf (vein + stem)
-    s.fillTriangle(118, 14, 124, 14, 118, 20, C_BG);
-    s.drawLine(119, 25, 128, 16, C_BG);
-  }
-  s.setFont(&fonts::FreeSans9pt7b);
-  s.setTextDatum(textdatum_t::middle_left);
   bool nav = page != P_ALL && page != P_SETUP && m.devs.size() > 1;
   std::vector<int> vidx;
   bool vgrp;
   int vper;
   allView(m, vidx, vgrp, vper);
   bool pager = page == P_ALL && (int)vidx.size() > vper;
-  int right = nav || pager ? 364 : 420;
+  int right = B_THEME.x - 8;
+  // title: page name or the battery shown
   String txt;
   if (millis() < toastUntil) txt = toast;
-  else if (!ok) txt = "Cloud: " + m.status;
-  else if (page == P_ALL || page == P_SETUP) {
-    int live = 0;
-    float pw = 0;
+  else if (page == P_ALL) txt = m.paired ? "My batteries" : "BattLab Cloud";
+  else if (page == P_SETUP) txt = "Setup";
+  else {
     for (auto &d : m.devs)
-      if (d.live()) { live++; pw += d.p; }
-    txt = String(m.devs.size()) + " batteries  " + live + " live";
-    if (live) txt += std::fabs(pw) >= 1000 ? "  " + fmt(pw / 1000, 2) + "kW" : "  " + fmt(pw, 0) + "W";
-  } else {
-    for (auto &d : m.devs)
-      if (d.id == m.f.id) txt = d.name + "  " + devState(d);
+      if (d.id == m.f.id) txt = d.name;
+    if (!txt.length()) txt = "BattLab";
   }
   extern uint32_t regenUntil;
   extern float regenKw;
+  s.setTextDatum(textdatum_t::middle_left);
   if (millis() < regenUntil && !alarmText.length()) { // EV braking puts energy back
+    s.setFont(F_S15);
     String r = String("REGEN +") + fmt(regenKw, 1) + " kW";
-    int w = std::min(right - 138, int(s.textWidth(r)) + 24);
-    s.fillRoundRect(136, 7, w, 26, 13, C_GOOD);
-    s.setTextColor(C_BG, C_GOOD);
-    s.drawString(r, 148, 21);
+    int w = std::min(right - 12, int(s.textWidth(r)) + 26);
+    s.fillRoundRect(10, 7, w, 26, 13, C_GOOD);
+    s.setTextColor(C_ONACC, C_GOOD);
+    s.drawString(r, 23, 21);
   } else if (alarmText.length() && millis() >= toastUntil) {
-    int w = std::min(right - 138, int(s.textWidth(alarmText)) + 24);
-    s.fillRoundRect(136, 7, w, 26, 13, C_BAD);
-    s.setTextColor(C_TEXT, C_BAD);
-    s.drawString(alarmText, 148, 21);
+    s.setFont(F_S15);
+    int w = std::min(right - 12, int(s.textWidth(alarmText)) + 26);
+    s.fillRoundRect(10, 7, w, 26, 13, C_BAD);
+    s.setTextColor(C_ONACC == C_BG ? C_TEXT : C_ONACC, C_BAD);
+    s.drawString(alarmText, 23, 21);
   } else {
-    while (txt.length() && s.textWidth(txt) > right - 140) txt.remove(txt.length() - 1);
+    s.setFont(millis() < toastUntil ? F_S15 : F_B19);
+    while (txt.length() && s.textWidth(txt) > right - 14) txt.remove(txt.length() - 1);
     s.setTextColor(C_TEXT, C_BG);
-    s.drawString(txt, 138, 21);
+    s.drawString(txt, 12, 21);
   }
-  time_t now = time(nullptr);
-  if (now > 1700000000) { // clock (Thailand time from NTP)
-    struct tm t;
-    localtime_r(&now, &t);
-    char hhmm[8];
-    snprintf(hhmm, sizeof hhmm, "%02d:%02d", t.tm_hour, t.tm_min);
-    s.setFont(&fonts::FreeSansBold9pt7b);
-    s.setTextDatum(textdatum_t::middle_right);
-    s.setTextColor(C_TEXT, C_BG);
-    if (!(nav || pager)) s.drawString(hhmm, 472, 21);
-    s.setFont(&fonts::FreeSans9pt7b);
-  }
+  // day / night chip (tap to switch)
+  s.fillRoundRect(B_THEME.x, B_THEME.y + 1, B_THEME.w, B_THEME.h, 14, C_SH);
+  s.fillRoundRect(B_THEME.x, B_THEME.y, B_THEME.w, B_THEME.h, 14, C_CARD);
+  themeIcon(s, B_THEME.x + B_THEME.w / 2, B_THEME.y + B_THEME.h / 2, C_CARD);
+  uint16_t dot = ok ? C_GOOD : m.status.startsWith("waiting") || m.status.startsWith("Wi-Fi") ? C_WARN : C_BAD;
   if (nav || pager) {
+    s.fillCircle(350, 20, 6, dot);
+    if (dcfg.eco) { s.fillTriangle(344, 14, 350, 14, 344, 20, C_BG); s.drawLine(345, 25, 354, 16, C_BG); }
     for (int k = 0; k < 2; k++) {
       Btn b = k ? B_NEXT : B_PREV;
-      s.fillRoundRect(b.x, b.y, b.w, b.h, 8, C_CARD);
-      s.drawRoundRect(b.x, b.y, b.w, b.h, 8, C_LINE);
-      s.setFont(&fonts::FreeSansBold12pt7b);
-      s.setTextDatum(textdatum_t::middle_center);
-      s.setTextColor(C_TEXT, C_CARD);
-      s.drawString(k ? ">" : "<", b.x + b.w / 2, b.y + b.h / 2 + 1);
+      s.fillRoundRect(b.x, b.y + 2, b.w, b.h, 14, C_SH);
+      s.fillRoundRect(b.x, b.y, b.w, b.h, 14, C_CARD);
+      int cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      if (k) s.fillTriangle(cx - 5, cy - 8, cx - 5, cy + 8, cx + 7, cy, C_TEXT);
+      else s.fillTriangle(cx + 5, cy - 8, cx + 5, cy + 8, cx - 7, cy, C_TEXT);
+    }
+  } else {
+    // status pill: Online / Offline (leaf = data saver on)
+    uint16_t pbg = ok ? C_OKP : C_OFFP;
+    s.fillRoundRect(338, 9, 76, 22, 11, pbg);
+    s.fillCircle(351, 20, 5, dot);
+    if (dcfg.eco) { s.fillTriangle(346, 15, 351, 15, 346, 20, pbg); s.drawLine(347, 24, 355, 16, pbg); }
+    s.setFont(F_S12);
+    s.setTextColor(ok ? C_GOOD : C_BAD, pbg);
+    s.drawString(ok ? "Online" : "Offline", 361, 20);
+    time_t now = time(nullptr);
+    if (now > 1700000000) { // clock (Thailand time from NTP)
+      struct tm tmv;
+      localtime_r(&now, &tmv);
+      char hhmm[8];
+      snprintf(hhmm, sizeof hhmm, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+      s.setFont(F_S15);
+      s.setTextDatum(textdatum_t::middle_right);
+      s.setTextColor(C_TEXT, C_BG);
+      s.drawString(hhmm, 472, 20);
     }
   }
-  s.drawFastHLine(0, 39, 480, C_LINE);
   s.pushSprite(0, 0);
   s.deleteSprite();
 }
+// bottom dock: icon + name, the open page sits in a highlighted pill
+static void tabIcon(int i, int x, int y, uint16_t c, uint16_t bg) {
+  switch (i) {
+    case P_ALL: for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) tft.fillRoundRect(x + a * 9, y + b * 9, 7, 7, 2, c); break;
+    case P_HOME: tft.fillTriangle(x - 1, y + 8, x + 8, y - 1, x + 17, y + 8, c); tft.fillRect(x + 2, y + 8, 12, 8, c); break;
+    case P_CELLS: for (int k = 0; k < 4; k++) tft.fillRect(x + k * 5, y + 3 + (k & 1) * 3, 3, 13 - (k & 1) * 3, c); break;
+    case P_GRAPH:
+      for (int d = 0; d < 2; d++) { tft.drawLine(x, y + 14 + d, x + 5, y + 7 + d, c); tft.drawLine(x + 5, y + 7 + d, x + 10, y + 10 + d, c); tft.drawLine(x + 10, y + 10 + d, x + 16, y + 1 + d, c); }
+      break;
+    case P_CTRL:
+      for (int k = 0; k < 3; k++) { int lx = x + 2 + k * 6, ky = y + (k == 0 ? 5 : k == 1 ? 11 : 7); tft.drawFastVLine(lx, y, 17, c); tft.fillCircle(lx, ky, 3, c); }
+      break;
+    default:
+      tft.fillCircle(x + 8, y + 8, 7, c);
+      for (int k = 0; k < 8; k++) { float a = k * 0.785398f; tft.fillCircle(x + 8 + 7 * cosf(a), y + 8 + 7 * sinf(a), 2, c); }
+      tft.fillCircle(x + 8, y + 8, 3, bg);
+  }
+}
 static void tabs(int page) {
-  tft.fillRect(0, TAB_Y, 480, TAB_H, C_CARD);
-  tft.drawFastHLine(0, TAB_Y, 480, C_LINE);
-  tft.setTextDatum(textdatum_t::middle_center);
+  static const char *const NM[TABS] = {"All", "Home", "Cells", "Graph", "Control", "Setup"};
+  tft.fillRect(0, TAB_Y, 480, TAB_H, C_BG);
+  tft.fillRoundRect(4, TAB_Y + 4, 472, 36, 18, C_SH);
+  tft.fillRoundRect(4, TAB_Y + 2, 472, 36, 18, C_CARD);
+  tft.setFont(F_S12);
+  tft.setTextDatum(textdatum_t::middle_left);
   for (int i = 0; i < TABS; i++) {
     bool sel = i == page;
-    tft.setFont(sel ? &fonts::FreeSansBold9pt7b : &fonts::FreeSans9pt7b);
-    if (sel) tft.fillRect(i * TAB_W + 8, TAB_Y + 1, TAB_W - 16, 3, C_ACCENT);
-    tft.setTextColor(sel ? C_ACCENT : C_MUTED, C_CARD);
-    tft.drawString(TAB_NAMES[i], i * TAB_W + TAB_W / 2, TAB_Y + TAB_H / 2 + 2);
+    int x0 = i * TAB_W;
+    int tw = tft.textWidth(NM[i]), w = 18 + 4 + tw, ix = x0 + (TAB_W - w) / 2;
+    uint16_t bg = sel ? C_SEL : C_CARD, c = sel ? C_ACCENT : C_MUTED;
+    if (sel) tft.fillRoundRect(x0 + 3, TAB_Y + 5, TAB_W - 6, 30, 15, C_SEL);
+    tabIcon(i, ix, TAB_Y + 11, c, bg);
+    tft.setTextColor(c, bg);
+    tft.drawString(NM[i], ix + 22, TAB_Y + 20);
   }
 }
 
 // --------------------------------------------------------- ALL page ----
 static String allKey;
-static Btn cardBtn(int k) { return {8 + (k % 2) * 236, 46 + (k / 2) * 76, 228, 72}; }
+static Btn cardBtn(int k) { return {8 + (k % 2) * 236, 44 + (k / 2) * 116, 228, 108}; }
 // ---- groups (set on the website): chips on top, totals line, 4 cards per page
 static int gSel = -1; // -1 = every battery
 static std::vector<String> groupsOf(const Model &m) {
@@ -1013,63 +1098,91 @@ static void allView(const Model &m, std::vector<int> &idx, bool &grouped, int &p
   idx.clear();
   for (size_t i = 0; i < m.devs.size(); i++)
     if (!grouped || gSel < 0 || m.devs[i].group == G[gSel]) idx.push_back(i);
-  per = grouped ? 4 : 6;
+  per = 4;
 }
 static Btn cardBtnG(int k, bool grouped) { return grouped ? Btn{8 + (k % 2) * 236, 104 + (k / 2) * 86, 228, 80} : cardBtn(k); }
+// battery outline with a fill for the charge level
+static void battIcon(lgfx::LGFXBase &s, int x, int y, int w, int h, float soc, uint16_t bg) {
+  s.fillRoundRect(x, y, w, h, 7, C_BATT);
+  s.fillRoundRect(x + 2, y + 2, w - 4, h - 4, 5, bg);
+  s.fillRoundRect(x + w, y + h / 2 - 6, 5, 12, 2, C_BATT);
+  if (!std::isnan(soc)) { int fw = std::max(6, int((w - 8) * std::max(0.f, std::min(100.f, soc)) / 100)); s.fillRoundRect(x + 4, y + 4, fw, h - 8, 4, socColor(soc)); }
+}
 static Btn gChip(int i, int n) { int w = std::min(116, 464 / (n + 1)); return {8 + i * w, 44, w - 4, 28}; }
 static void card(const Btn &b, const DevSum &d, bool sel) {
   LGFX_Sprite s(&tft);
   s.setColorDepth(16);
-  if (!s.createSprite(b.w, b.h)) return;
+  if (!s.createSprite(b.w, b.h + 2)) return;
   s.fillSprite(C_BG);
   bool alarm = d.live() && ((dcfg.lowSoc && d.soc < dcfg.lowSoc) || (dcfg.hiTemp && maxTemp(d) > dcfg.hiTemp));
-  s.fillRoundRect(0, 0, b.w, b.h, 10, C_CARD);
-  if (sel || alarm) s.drawRoundRect(0, 0, b.w, b.h, 10, alarm ? C_BAD : C_ACCENT);
-  if (sel && !alarm) s.drawRoundRect(1, 1, b.w - 2, b.h - 2, 9, C_ACCENT);
-  s.fillCircle(14, 15, 5, d.live() ? C_GOOD : d.online() ? C_WARN : C_BAD);
-  s.setFont(&fonts::FreeSansBold9pt7b);
-  s.setTextDatum(textdatum_t::middle_left);
-  s.setTextColor(C_TEXT, C_CARD);
+  s.fillRoundRect(0, 2, b.w, b.h, 14, C_SH);
+  s.fillRoundRect(0, 0, b.w, b.h, 14, C_CARD);
+  if (sel || alarm) { s.drawRoundRect(0, 0, b.w, b.h, 14, alarm ? C_BAD : C_ACCENT); s.drawRoundRect(1, 1, b.w - 2, b.h - 2, 13, alarm ? C_BAD : C_ACCENT); }
+  bool big = b.h >= 100;
   String nm = d.name;
   if (d.bank > 1) nm = String("x") + d.bank + " " + nm; // RS485 bank of packs
-  while (nm.length() && s.textWidth(nm) > 140) nm.remove(nm.length() - 1);
-  s.drawString(nm, 26, 15);
-  s.setFont(&fonts::FreeSansBold12pt7b);
-  s.setTextDatum(textdatum_t::middle_right);
-  s.setTextColor(d.live() ? C_TEXT : C_MUTED, C_CARD);
-  s.drawString(d.live() ? String(int(d.soc + .5f)) + "%" : String("--"), b.w - 10, 16);
-  s.setFont(&fonts::FreeSans9pt7b);
+  s.setFont(F_S15);
   s.setTextDatum(textdatum_t::middle_left);
-  if (d.live()) {
+  s.setTextColor(d.live() ? C_TEXT : C_MUTED, C_CARD);
+  int nmax = big ? b.w - 28 : b.w - 90;
+  while (nm.length() && s.textWidth(nm) > nmax) nm.remove(nm.length() - 1);
+  s.drawString(nm, 14, 18);
+  if (!d.live()) {
+    bool on = d.online();
+    String st = on ? String("No BMS") : d.age < 0 ? String("Never seen") : String("Offline");
+    s.setFont(F_S12);
+    int pw = s.textWidth(st) + 24;
+    s.fillRoundRect(14, big ? 40 : 32, pw, 22, 11, on ? C_OKP : C_OFFP);
+    s.setTextDatum(textdatum_t::middle_center);
+    s.setTextColor(on ? C_WARN : C_BAD, on ? C_OKP : C_OFFP);
+    s.drawString(st, 14 + pw / 2, (big ? 40 : 32) + 11);
+    s.setFont(F_R15);
+    s.setTextDatum(textdatum_t::middle_left);
+    s.setTextColor(C_MUTED, C_CARD);
+    s.drawString(on ? String("Board online, connect a BMS") : d.age < 0 ? String("Not connected yet") : String("Last seen ") + ageText(d.age) + " ago", 14, b.h - 20);
+  } else if (big) {
+    s.setFont(F_B36);
     s.setTextColor(C_TEXT, C_CARD);
-    s.drawString(fmt(d.v, 1) + "V  " + fmt(d.i, 1) + "A  " + fmt(d.p, 0) + "W", 10, 37);
+    String sp = String(int(d.soc + .5f)) + "%";
+    s.drawString(sp, 14, 54);
+    battIcon(s, 124, 40, 82, 28, d.soc, C_CARD);
+    s.setFont(F_S15);
+    s.setTextColor(d.i < -0.3f ? C_WARN : C_ACCENT, C_CARD);
+    s.drawString((d.p > 0 ? "+" : "") + fmt(d.p, 0) + " W", 14, b.h - 18);
+    s.setFont(F_R15);
+    s.setTextDatum(textdatum_t::middle_right);
     s.setTextColor(C_MUTED, C_CARD);
-    String l3 = String(d.i > 0.3f ? "CHG" : d.i < -0.3f ? "DSG" : "IDLE") + "  " + fmt(d.t1, 0) + "C";
-    if (!std::isnan(d.cmax) && !std::isnan(d.cmin)) l3 += "  d" + String(int((d.cmax - d.cmin) * 1000 + .5f)) + "mV";
-    s.drawString(l3, 10, 54);
+    s.drawString(fmt(d.v, 1) + " V \xC2\xB7 " + fmt(d.t1, 0) + "\xC2\xB0" "C", b.w - 14, b.h - 18);
   } else {
-    s.setTextColor(d.online() ? C_WARN : C_MUTED, C_CARD);
-    s.drawString(devState(d), 10, 37);
+    s.setFont(F_B27);
+    s.setTextDatum(textdatum_t::middle_right);
+    s.setTextColor(C_TEXT, C_CARD);
+    s.drawString(String(int(d.soc + .5f)) + "%", b.w - 12, 19);
+    s.fillRoundRect(14, 38, b.w - 28, 10, 5, C_LINE);
+    s.fillRoundRect(14, 38, std::max(10, int((b.w - 28) * std::max(0.f, std::min(100.f, d.soc)) / 100)), 10, 5, socColor(d.soc));
+    s.setFont(F_S15);
+    s.setTextDatum(textdatum_t::middle_left);
+    s.setTextColor(d.i < -0.3f ? C_WARN : C_ACCENT, C_CARD);
+    s.drawString((d.p > 0 ? "+" : "") + fmt(d.p, 0) + " W", 14, b.h - 17);
+    s.setFont(F_R15);
+    s.setTextDatum(textdatum_t::middle_right);
     s.setTextColor(C_MUTED, C_CARD);
-    s.drawString(d.online() ? String("board online, connect a BMS") : String("last seen ") + ageText(d.age) + " ago", 10, 54);
+    s.drawString(fmt(d.v, 1) + " V \xC2\xB7 " + fmt(d.t1, 0) + "\xC2\xB0" "C", b.w - 14, b.h - 17);
   }
-  int w = d.live() ? int((b.w - 20) * std::max(0.f, std::min(100.f, d.soc)) / 100) : 0;
-  s.fillRoundRect(10, b.h - 6, b.w - 20, 3, 1, C_LINE);
-  if (w > 0) s.fillRoundRect(10, b.h - 6, w, 3, 1, socColor(d.soc));
   s.pushSprite(b.x, b.y);
   s.deleteSprite();
 }
 static void pairScreen(const Model &m) {
   clearContent();
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextDatum(textdatum_t::top_left);
   tft.setTextColor(C_MUTED, C_BG);
   tft.drawString("PAIR CODE FOR THIS SCREEN", 12, 50);
-  tft.setFont(&fonts::FreeSansBold24pt7b);
+  tft.setFont(F_B36);
   tft.setTextColor(C_ACCENT, C_BG);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.drawString(pairCode, 12, 100);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextColor(C_TEXT, C_BG);
   tft.drawString(String("1. On your phone open  ") + CLOUD_SITE, 12, 148);
   tft.drawString("2. Sign in, tap  Add device  and enter the code", 12, 174);
@@ -1099,8 +1212,8 @@ static void allPageDraw(const Model &m, bool force) {
   if (grouped) {
     auto G = groupsOf(m);
     int n = std::min<int>(G.size(), 6);
-    button(gChip(0, n), "ALL", gSel < 0, 0, &fonts::FreeSansBold9pt7b);
-    for (int i = 0; i < n; i++) button(gChip(i + 1, n), groupLabel(G[i], i), gSel == i, 0, &fonts::FreeSansBold9pt7b);
+    button(gChip(0, n), "ALL", gSel < 0, 0, F_S15);
+    for (int i = 0; i < n; i++) button(gChip(i + 1, n), groupLabel(G[i], i), gSel == i, 0, F_S15);
     // totals of the shown group
     float pw = 0, kwh = 0, ei = 0, eo = 0;
     int live = 0;
@@ -1113,8 +1226,8 @@ static void allPageDraw(const Model &m, bool force) {
       if (!std::isnan(d.cap) && !std::isnan(d.v)) kwh += d.cap * d.v / 1000;
       if (!std::isnan(d.ein)) { ei += d.ein; eo += d.eout; haveE = true; }
     }
-    tft.fillRoundRect(8, 76, 464, 24, 8, C_CARD);
-    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.fillRoundRect(8, 76, 464, 24, 12, C_CARD);
+    tft.setFont(F_R15);
     tft.setTextDatum(textdatum_t::middle_left);
     tft.setTextColor(C_TEXT, C_CARD);
     String t = String(idx.size()) + " bat  " + (pw > 0 ? "+" : "") + fmt(pw / 1000, 2) + "kW  " + fmt(kwh, 1) + "kWh left";
@@ -1127,12 +1240,6 @@ static void allPageDraw(const Model &m, bool force) {
     size_t j = allPage * per + k;
     if (j >= idx.size()) break;
     card(cardBtnG(k, grouped), m.devs[idx[j]], m.devs[idx[j]].id == focusId);
-  }
-  if (pages > 1 && !grouped) {
-    tft.setFont(&fonts::FreeSans9pt7b);
-    tft.setTextDatum(textdatum_t::bottom_right);
-    tft.setTextColor(C_MUTED, C_BG);
-    tft.drawString(String(allPage + 1) + "/" + pages, 472, TAB_Y - 1);
   }
 }
 
@@ -1159,40 +1266,42 @@ static void tile(int x, int y, int w, int h, const char *lbl, const String &valu
 }
 static void tileDraw(int x, int y, int w, int h, const char *lbl, const String &value, const char *unit, uint16_t accent,
                      const String &old, int roll) {
+  (void)accent;
   LGFX_Sprite s(&tft);
   s.setColorDepth(16);
-  if (!s.createSprite(w, h)) return;
+  if (!s.createSprite(w, h + 2)) return;
   s.fillSprite(C_BG);
-  s.fillRoundRect(0, 0, w, h, 10, C_CARD);
-  s.fillRoundRect(0, 10, 4, h - 20, 2, accent);
+  s.fillRoundRect(0, 2, w, h, 12, C_SH);
+  s.fillRoundRect(0, 0, w, h, 12, C_CARD);
   s.setTextColor(C_MUTED, C_CARD);
-  s.setFont(&fonts::FreeSans9pt7b);
-  s.setTextDatum(textdatum_t::top_left);
-  s.drawString(lbl, 12, 5);
+  s.setFont(F_R15);
+  s.setTextDatum(textdatum_t::middle_left);
+  s.drawString(lbl, 12, 17);
   s.setTextColor(C_TEXT, C_CARD);
-  s.setFont(&fonts::FreeSansBold18pt7b);
-  s.setTextDatum(textdatum_t::bottom_left);
+  s.setFont(F_B27);
+  s.setTextDatum(textdatum_t::baseline_left);
   if (roll > 0) { // old value slides up and out, new one comes in from below
-    int step = (h - 22) / 4;
-    s.setClipRect(6, 22, w - 6, h - 22);
-    s.drawString(old, 12, h - 4 - roll * step);
-    s.drawString(value, 12, h - 4 + (4 - roll) * step);
+    int step = (h - 30) / 4;
+    s.setClipRect(6, 30, w - 6, h - 32);
+    s.drawString(old, 12, h - 13 - roll * step);
+    s.drawString(value, 12, h - 13 + (4 - roll) * step);
     s.clearClipRect();
-  } else s.drawString(value, 12, h - 4);
+  } else s.drawString(value, 12, h - 13);
   int vw = s.textWidth(value);
-  s.setFont(&fonts::FreeSans9pt7b);
+  s.setFont(F_S15);
   s.setTextColor(C_MUTED, C_CARD);
-  s.drawString(unit, 16 + vw, h - 8);
+  s.drawString(unit, 16 + vw, h - 13);
   s.pushSprite(x, y);
   s.deleteSprite();
 }
-static void pill(LGFX_Sprite &s, int x, int y, const char *t, bool on) {
-  uint16_t bg = on ? C_GOOD : C_LINE;
-  s.fillRoundRect(x, y, 66, 26, 13, bg);
-  s.setTextColor(on ? C_BG : C_MUTED, bg);
-  s.setFont(&fonts::FreeSansBold9pt7b);
+static void pill(lgfx::LGFXBase &s, int x, int y, const char *t, bool on, int w = 66) {
+  uint16_t bg = on ? C_OKP : C_LINE;
+  s.fillRoundRect(x, y, w, 26, 13, bg);
+  s.fillCircle(x + 13, y + 13, 4, on ? C_GOOD : C_MUTED);
+  s.setTextColor(on ? C_GOOD : C_MUTED, bg);
+  s.setFont(F_S15);
   s.setTextDatum(textdatum_t::middle_center);
-  s.drawString(t, x + 33, y + 14);
+  s.drawString(t, x + w / 2 + 6, y + 13);
 }
 static String homeKey;
 static bool bigMode = false;
@@ -1204,21 +1313,21 @@ static void bigHome(const DevSum &d) {
   if (!b.createSprite(480, 236)) return;
   b.fillSprite(C_BG);
   b.setTextDatum(textdatum_t::middle_center);
-  b.setFont(&fonts::FreeSansBold24pt7b);
-  b.setTextSize(2.4f);
+  b.setFont(F_B84);
+  b.setTextSize(1.3f);
   b.setTextColor(C_TEXT, C_BG);
-  b.drawString(soc < 0 ? String("--") : String(soc) + "%", 240, 74);
+  b.drawString(soc < 0 ? String("--") : String(soc) + "%", 240, 70);
   b.setTextSize(1);
   b.fillRoundRect(40, 132, 400, 14, 7, C_LINE);
   if (soc > 0) b.fillRoundRect(40, 132, 4 * std::min(soc, 100), 14, 7, socColor(d.soc));
-  b.setFont(&fonts::FreeSansBold18pt7b);
+  b.setFont(F_B27);
   b.setTextColor(d.i < 0 ? C_WARN : C_GOOD, C_BG);
   b.drawString(ok ? fmt(d.p, 0) + " W" : String("--"), 130, 186);
   b.setTextColor(C_TEXT, C_BG);
   b.drawString(ok ? fmt(d.v, 1) + " V" : String("--"), 350, 186);
-  b.setFont(&fonts::FreeSans9pt7b);
+  b.setFont(F_R15);
   b.setTextColor(C_MUTED, C_BG);
-  b.drawString(ok ? d.name + "   " + fmt(d.i, 1) + " A   " + fmt(d.t1, 0) + " C" : d.name + "  " + devState(d), 240, 222);
+  b.drawString(ok ? d.name + "   " + fmt(d.i, 1) + " A   " + fmt(d.t1, 0) + "\xC2\xB0" "C" : d.name + "  " + devState(d), 240, 222);
   b.pushSprite(0, 41);
   b.deleteSprite();
 }
@@ -1235,7 +1344,7 @@ static void flowAnim(const DevSum *d) {
   LGFX_Sprite s(&tft);
   s.setColorDepth(16);
   if (!s.createSprite(96, 20)) return;
-  s.fillSprite(C_BG);
+  s.fillSprite(C_CARD);
   if (dir == 0) s.fillRoundRect(24, 8, 48, 4, 2, C_LINE);
   else {
     uint16_t on = dir > 0 ? C_GOOD : C_WARN;
@@ -1255,7 +1364,7 @@ static void flowAnim(const DevSum *d) {
       else s.fillTriangle(x, 4, x + 14, 4, x + 7, 16, c);
     }
   }
-  s.pushSprite(106 - 48, 150 + 36);
+  s.pushSprite(124, 54);
   s.deleteSprite();
 }
 // ----------------------------------------------------------- EV HOME ----
@@ -1274,10 +1383,10 @@ static void evMeter(float p) {
   if (!t.createSprite(160, 74)) return;
   t.fillSprite(C_BG);
   t.setTextDatum(textdatum_t::middle_center);
-  t.setFont(&fonts::FreeSansBold24pt7b);
+  t.setFont(F_B36);
   t.setTextColor(p < -1 ? C_GOOD : C_TEXT, C_BG);
   t.drawString(fmt(p / 1000.f, 1), 80, 30);
-  t.setFont(&fonts::FreeSans9pt7b);
+  t.setFont(F_R15);
   t.setTextColor(C_MUTED, C_BG);
   t.drawString(p < -1 ? "kW regen" : "kW", 80, 62);
   t.pushSprite(cx - 80, cy - 100);
@@ -1291,7 +1400,7 @@ static void evHome(const DevSum &d, bool force) {
     clearContent();
     evShown = 0;
     evMeter(0);
-    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setFont(F_R15);
     tft.setTextDatum(textdatum_t::middle_center);
     tft.setTextColor(C_MUTED, C_BG);
     tft.drawString("REGEN", 30, 226);
@@ -1303,15 +1412,15 @@ static void evHome(const DevSum &d, bool force) {
   if (!b.createSprite(170, 186)) return;
   b.fillSprite(C_BG);
   b.fillRoundRect(0, 0, 170, 186, 12, C_CARD);
-  b.setFont(&fonts::FreeSans9pt7b);
+  b.setFont(F_R15);
   b.setTextDatum(textdatum_t::top_left);
   b.setTextColor(C_MUTED, C_CARD);
   b.drawString("Range left", 12, 10);
-  b.setFont(&fonts::FreeSansBold24pt7b);
+  b.setFont(F_B36);
   bool low = rk >= 0 && d.rangeAlarm && rk < d.rangeAlarm;
   b.setTextColor(low ? C_WARN : C_TEXT, C_CARD);
   b.drawString(rk < 0 ? String("--") : String(int(rk + .5f)), 12, 32);
-  b.setFont(&fonts::FreeSans9pt7b);
+  b.setFont(F_R15);
   b.setTextColor(C_MUTED, C_CARD);
   b.drawString(rk < 0 ? (d.whkm ? "km (no capacity)" : "set Wh/km on web") : (d.whkm ? String("km  ") + d.whkm + " Wh/km" : String("km")), 12, 76);
   int soc = ok ? int(d.soc + .5f) : 0;
@@ -1319,7 +1428,7 @@ static void evHome(const DevSum &d, bool force) {
   b.fillRoundRect(12, 122, 146, 8, 4, C_LINE);
   if (soc > 0) b.fillRoundRect(12, 122, 146 * std::min(soc, 100) / 100, 8, 4, socColor(d.soc));
   b.drawString("Voltage", 12, 140);
-  b.setFont(&fonts::FreeSansBold12pt7b);
+  b.setFont(F_B19);
   b.setTextColor(C_TEXT, C_CARD);
   b.drawString(ok ? fmt(d.v, 1) + " V" : String("--"), 12, 158);
   b.pushSprite(300, 46);
@@ -1329,7 +1438,7 @@ static void evHome(const DevSum &d, bool force) {
   if (!st.createSprite(462, 40)) return;
   st.fillSprite(C_BG);
   st.fillRoundRect(0, 0, 462, 40, 10, C_CARD);
-  st.setFont(&fonts::FreeSans9pt7b);
+  st.setFont(F_R15);
   st.setTextDatum(textdatum_t::middle_left);
   st.setTextColor(C_TEXT, C_CARD);
   st.drawString(ok ? d.name + "  " + fmt(d.t1, 0) + "C  " + fmt(d.i, 1) + "A" : d.name + "  " + devState(d), 12, 20);
@@ -1360,15 +1469,15 @@ static void pageWipe(int dir) {
   clearContent();
 }
 static void alarmFlash() {
-  tft.setFont(&fonts::FreeSans9pt7b);
-  int w = std::min(330, int(tft.textWidth(alarmText)) + 24);
+  tft.setFont(F_S15);
+  int w = std::min(270, int(tft.textWidth(alarmText)) + 26);
   for (int k = 0; k <= 4; k++) {
     int y = -28 + k * 9;
-    tft.fillRect(136, 0, w, 40, C_BG);
-    tft.fillRoundRect(136, y, w, 26, 13, C_BAD);
-    tft.setTextColor(C_TEXT, C_BAD);
+    tft.fillRect(10, 0, w, 40, C_BG);
+    tft.fillRoundRect(10, y, w, 26, 13, C_BAD);
+    tft.setTextColor(C_ONACC == C_BG ? C_TEXT : C_ONACC, C_BAD);
     tft.setTextDatum(textdatum_t::middle_left);
-    tft.drawString(alarmText, 148, y + 14);
+    tft.drawString(alarmText, 23, y + 14);
     vTaskDelay(pdMS_TO_TICKS(20));
   }
   for (int i = 0; i < 6; i++) {
@@ -1406,82 +1515,87 @@ static void homePage(const Model &m, bool force) {
     if (!histWanted) { histWanted = true; histWantId = d.id; histWantHours = m.h.id == d.id && m.h.hours ? m.h.hours : 24; M.h.loading = true; }
   }
   bool ok = d.live();
-  // gauge
-  const int cx = 106, cy = 150, r1 = 86, r0 = 71;
   float soc = ok ? d.soc : NAN;
-  tft.fillRect(0, 41, 210, 236, C_BG);
-  tft.fillArc(cx, cy, r0, r1, 135, 405, C_LINE);
-  if (force && ok && soc > 0) // sweep 0 -> SOC when the page opens
-    for (int k = 1; k <= 10; k++) {
-      float e = k / 10.f;
+  // ---- left card: state, big SOC, battery, time to full / empty, today
+  const int LX = 8, LY = 44, LW = 222, LH = 228;
+  if (force) {
+    tft.fillRect(0, 41, 480, TAB_Y - 41, C_BG);
+    tft.fillRoundRect(LX, LY + 2, LW, LH, 16, C_SH);
+    tft.fillRoundRect(LX, LY, LW, LH, 16, C_CARD);
+  } else tft.fillRect(LX + 8, LY + 6, 112, 30, C_CARD);
+  tft.setFont(F_S15);
+  tft.setTextDatum(textdatum_t::middle_left);
+  bool chg = ok && d.i > 0.3f, dsg = ok && d.i < -0.3f;
+  tft.setTextColor(!ok ? C_WARN : chg ? C_GOOD : dsg ? C_WARN : C_MUTED, C_CARD);
+  tft.drawString(!ok ? (d.online() ? "No BMS" : "Offline") : chg ? "Charging" : dsg ? "Discharging" : "Idle", LX + 14, LY + 20);
+  {
+    LGFX_Sprite n(&tft);
+    n.setColorDepth(16);
+    if (n.createSprite(LW - 16, 74)) {
+      n.fillSprite(C_CARD);
+      n.setFont(F_B84);
+      n.setTextDatum(textdatum_t::middle_left);
+      n.setTextColor(C_TEXT, C_CARD);
+      String sv = ok ? String(int(soc + .5f)) : String("--");
+      n.drawString(sv, 4, 40);
+      int nw = n.textWidth(sv);
+      n.setFont(F_B27);
+      n.setTextColor(C_MUTED, C_CARD);
+      n.drawString("%", 10 + nw, 22);
+      n.pushSprite(LX + 8, LY + 38);
+      n.deleteSprite();
+    }
+  }
+  tft.fillRect(LX + 8, LY + 114, LW - 12, 40, C_CARD);
+  if (force && ok && soc > 0) // battery fills up when the page opens
+    for (int k = 1; k <= 8; k++) {
+      float e = k / 8.f;
       e = 1 - (1 - e) * (1 - e) * (1 - e);
-      tft.fillArc(cx, cy, r0, r1, 135, 135 + 270.f * std::min(100.f, soc) * e / 100.f, socColor(soc));
-      vTaskDelay(pdMS_TO_TICKS(30));
+      battIcon(tft, LX + 14, LY + 118, LW - 36, 32, soc * e, C_CARD);
+      vTaskDelay(pdMS_TO_TICKS(25));
     }
-  if (ok && soc > 0) tft.fillArc(cx, cy, r0, r1, 135, 135 + 270.f * std::min(100.f, soc) / 100.f, socColor(soc));
-  tft.setTextDatum(textdatum_t::middle_center);
-  tft.setTextColor(C_TEXT, C_BG);
-  tft.setFont(&fonts::FreeSansBold24pt7b);
-  tft.drawString(ok ? String(int(soc + .5f)) + "%" : String("--"), cx, cy - 4);
-  tft.setFont(&fonts::FreeSans9pt7b);
-  tft.setTextColor(ok ? C_MUTED : C_WARN, C_BG);
-  tft.drawString(ok ? String("SOC") : devState(d), cx, cy + (ok ? 25 : 34));
-  int x0 = 214, x1 = 346, w = 126, h = 56;
-  tile(x0, 46, w, h, "VOLTAGE", ok ? fmt(d.v, 2) : "--", "V", C_ACCENT);
-  tile(x1, 46, w, h, "CURRENT", ok ? fmt(d.i, 1) : "--", "A", d.i < 0 ? C_WARN : C_GOOD);
-  tile(x0, 106, w, h, "POWER", ok ? fmt(d.p, 0) : "--", "W", C_BLUE);
-  tile(x1, 106, w, h, "REMAIN", ok ? fmt(d.cap, 1) : "--", "Ah", C_ACCENT);
-  tile(x0, 166, w, h, "TEMP", ok ? fmt(d.t1, 0) : "--", "C", C_WARN);
-  tile(x1, 166, w, h, "MOS", ok ? fmt(d.mos, 0) : "--", "C", C_WARN);
-  LGFX_Sprite b(&tft);
-  b.setColorDepth(8);
-  if (!b.createSprite(462, 46)) return;
-  b.fillSprite(C_BG);
-  b.fillRoundRect(0, 0, 462, 46, 10, C_CARD);
-  b.setFont(&fonts::FreeSans9pt7b);
-  b.setTextDatum(textdatum_t::middle_left);
-  b.setTextColor(C_TEXT, C_CARD);
-  String line;
+  battIcon(tft, LX + 14, LY + 118, LW - 36, 32, soc, C_CARD);
+  tft.fillRect(LX + 8, LY + 156, LW - 12, 70, C_CARD);
+  tft.setFont(F_S15);
+  tft.setTextDatum(textdatum_t::middle_left);
+  tft.setTextColor(C_TEXT, C_CARD);
+  String l1;
   if (ok) {
-    if (m.f.n) line = String(m.f.n) + "S ";
-    if (!std::isnan(d.cmax)) line += "d" + String(int((d.cmax - d.cmin) * 1000 + .5f)) + "mV ";
     float full = (!std::isnan(d.cap) && d.soc > 3) ? d.cap / (d.soc / 100.f) : NAN;
-    if (d.i > 0.3f && !std::isnan(full)) line += " full " + hm((full - d.cap) / d.i);
-    else if (d.i < -0.3f && !std::isnan(d.cap)) line += " empty " + hm(d.cap / -d.i);
-    if (d.cyc >= 0) line += "  " + String(d.cyc) + "cyc";
-  } else {
-    line = d.online() ? "Board online - connect a BMS (CONTROL > BOARD)" : "Offline - last data " + ageText(d.age) + " ago";
+    if (chg && !std::isnan(full)) l1 = "Full in " + hm((full - d.cap) / d.i);
+    else if (dsg && !std::isnan(d.cap)) l1 = "Empty in " + hm(d.cap / -d.i);
+    else l1 = m.f.n ? String(m.f.n) + "S pack" : String("Standby");
+  } else l1 = d.online() ? "Connect a BMS" : "Last data " + ageText(d.age) + " ago";
+  tft.drawString(l1, LX + 14, LY + 166);
+  if (ok && !std::isnan(d.cap)) {
+    tft.setFont(F_R15);
+    tft.setTextDatum(textdatum_t::middle_right);
+    tft.setTextColor(C_MUTED, C_CARD);
+    tft.drawString(fmt(d.cap, 0) + " Ah left", LX + LW - 14, LY + 166);
   }
+  tft.setFont(F_R15);
+  tft.setTextDatum(textdatum_t::middle_left);
+  tft.setTextColor(C_MUTED, C_CARD);
+  tft.drawString(ok ? "Today +" + fmt(m.ein, 2) + " / -" + fmt(m.eout, 2) + " kWh" : String(" "), LX + 14, LY + 188);
   if (ok) {
-    b.drawString(line, 12, 14);
-    b.setTextColor(C_MUTED, C_CARD);
-    b.drawString("today +" + fmt(m.ein, 2) + " / -" + fmt(m.eout, 2) + " kWh", 12, 33);
-    // SOC sparkline from the cloud history
-    if (m.h.id == d.id && m.h.soc.size() > 1) {
-      const int sx = 196, sw = 112, sy = 8, sh = 30;
-      int n = m.h.soc.size(), px = -1, py = 0;
-      b.drawRect(sx, sy, sw, sh + 1, C_LINE);
-      for (int k = 0; k < n; k++) {
-        float v = m.h.soc[k];
-        if (std::isnan(v)) { px = -1; continue; }
-        int x = sx + k * (sw - 1) / (n - 1), y = sy + sh - int(sh * std::max(0.f, std::min(100.f, v)) / 100);
-        if (px >= 0) b.drawLine(px, py, x, y, C_ACCENT);
-        px = x;
-        py = y;
-      }
-      b.setFont(&fonts::Font0);
-      b.setTextDatum(textdatum_t::top_left);
-      b.drawString(String("SOC ") + m.h.hours + "h", sx + 3, sy + 2);
-      b.setFont(&fonts::FreeSans9pt7b);
-      b.setTextDatum(textdatum_t::middle_left);
+    pill(tft, LX + 14, LY + 198, "CHG", d.chg, 70);
+    pill(tft, LX + 90, LY + 198, "DSG", d.dsg, 70);
+    if (d.cyc >= 0) {
+      tft.setFont(F_R15);
+      tft.setTextDatum(textdatum_t::middle_right);
+      tft.setTextColor(C_MUTED, C_CARD);
+      tft.drawString(String(d.cyc) + " cyc", LX + LW - 14, LY + 211);
     }
-    pill(b, 316, 10, "CHG", d.chg);
-    pill(b, 388, 10, "DSG", d.dsg);
-  } else {
-    b.drawString(line, 12, 23);
   }
-  b.pushSprite(9, 228);
-  b.deleteSprite();
+  // ---- right: six tiles
+  const int x0 = 238, x1 = 356, w = 114, h = 70;
+  String dmv = ok && !std::isnan(d.cmax) && !std::isnan(d.cmin) ? String(int((d.cmax - d.cmin) * 1000 + .5f)) : String("--");
+  tile(x0, 44, w, h, "Voltage", ok ? fmt(d.v, 2) : "--", "V", C_ACCENT);
+  tile(x1, 44, w, h, "Current", ok ? (d.i > 0 ? "+" : "") + fmt(d.i, 1) : "--", "A", C_ACCENT);
+  tile(x0, 120, w, h, "Power", ok ? fmt(d.p, 0) : "--", "W", C_ACCENT);
+  tile(x1, 120, w, h, "Temp", ok ? fmt(d.t1, 0) : "--", "\xC2\xB0" "C", C_ACCENT);
+  tile(x0, 196, w, h, "Cell \xCE\x94", dmv, "mV", C_ACCENT);
+  tile(x1, 196, w, h, "MOS", ok ? fmt(d.mos, 0) : "--", "\xC2\xB0" "C", C_ACCENT);
 }
 
 // -------------------------------------------------------- CELLS page ----
@@ -1510,7 +1624,7 @@ static void cellsPage(const Model &m, bool force) {
       Btn b = packBtn(k, np);
       bool sel = k == ps, stale = PK[k].age > 90;
       String t = String("#") + PK[k].a + (np <= 6 ? " " : "") + (std::isnan(PK[k].soc) ? String("--") : String(int(PK[k].soc + .5f)) + "%");
-      button(b, t, sel, 0, np > 6 ? &fonts::FreeSans9pt7b : nullptr, !stale);
+      button(b, t, sel, 0, np > 6 ? F_R15 : nullptr, !stale);
       if (!sel) tft.fillRoundRect(b.x + 6, b.y + b.h - 5, std::max(2, int((b.w - 12) * std::max(0.f, std::min(100.f, std::isnan(PK[k].soc) ? 0.f : PK[k].soc)) / 100)), 3, 1, socColor(PK[k].soc));
     }
   }
@@ -1522,9 +1636,10 @@ static void cellsPage(const Model &m, bool force) {
     if (cells[i] > mx) mx = cells[i], imx = i;
   }
   bool dense = n > 24 || (np && n > 16);
-  int cols = n <= 16 && !np ? 2 : 4, rows = (n + cols - 1) / cols;
+  int cols = n <= 8 && !np ? 2 : 4, rows = (n + cols - 1) / cols;
   int gap = dense ? 3 : 4, gridH = np ? (dense ? 166 : 140) : dense ? 204 : 178, gy = np ? 86 : 46;
-  int cw = 462 / cols - 6, ch = std::min(36, gridH / rows - gap), barH = ch < 28 ? 3 : 5;
+  int cw = 462 / cols - 6, ch = std::min(44, gridH / rows - gap), barH = ch < 28 ? 3 : 6;
+  bool roomy = ch >= 38; // name + value on one line, bar under it
   float lo = mx < 3.7f ? 2.5f : 2.8f, hi = mx < 3.7f ? 3.65f : 4.25f;
   LGFX_Sprite c(&tft);
   c.setColorDepth(16);
@@ -1534,22 +1649,39 @@ static void cellsPage(const Model &m, bool force) {
     float v = cells[i];
     float grow = std::min(1.f, std::max(0.f, fr / 6.f * 1.5f - i * .5f / n));
     c.fillSprite(C_BG);
-    c.fillRoundRect(0, 0, cw, ch, 6, C_CARD);
+    c.fillRoundRect(0, 0, cw, ch, 10, C_CARD);
     float f = std::max(0.f, std::min(1.f, (v - lo) / (hi - lo))) * grow;
-    c.fillRoundRect(0, ch - barH, int(cw * f), barH, 1, i == imx ? C_BAD : i == imn ? C_BLUE : C_GOOD);
-    c.setFont(&fonts::FreeSans9pt7b);
-    c.setTextDatum(textdatum_t::middle_left);
-    c.setTextColor(C_MUTED, C_CARD);
-    c.drawString(String(i + 1), 8, ch / 2 - (barH > 3 ? 1 : 0));
-    c.setTextDatum(textdatum_t::middle_right);
-    c.setTextColor(i == imx ? C_BAD : i == imn ? C_BLUE : C_TEXT, C_CARD);
-    c.drawString(fmt(v, 3), cw - 8, ch / 2 - (barH > 3 ? 1 : 0));
+    uint16_t bc = i == imx ? C_BAD : i == imn ? C_BLUE : C_GOOD;
+    char num[4];
+    snprintf(num, sizeof num, "%02d", i + 1);
+    if (roomy) {
+      c.fillRoundRect(10, ch - 13, cw - 20, barH, 3, C_LINE);
+      if (f > 0) c.fillRoundRect(10, ch - 13, std::max(barH, int((cw - 20) * f)), barH, 3, bc);
+      c.setFont(F_S12);
+      c.setTextDatum(textdatum_t::middle_left);
+      c.setTextColor(C_MUTED, C_CARD);
+      c.drawString(num, 10, 15);
+      c.setFont(F_B19);
+      c.setTextDatum(textdatum_t::middle_right);
+      c.setTextColor(i == imx ? C_BAD : i == imn ? C_BLUE : C_TEXT, C_CARD);
+      c.drawString(fmt(v, 3), cw - 10, 15);
+    } else {
+      c.fillRoundRect(6, ch - barH - 2, int((cw - 12) * f), barH, 1, bc);
+      c.setFont(F_R15);
+      c.setTextDatum(textdatum_t::middle_left);
+      c.setTextColor(C_MUTED, C_CARD);
+      c.drawString(num, 8, ch / 2 - (barH > 3 ? 1 : 0));
+      c.setTextDatum(textdatum_t::middle_right);
+      c.setTextColor(i == imx ? C_BAD : i == imn ? C_BLUE : C_TEXT, C_CARD);
+      c.drawString(fmt(v, 3), cw - 8, ch / 2 - (barH > 3 ? 1 : 0));
+    }
     c.pushSprite(12 + (i % cols) * (cw + 6), gy + (i / cols) * (ch + gap));
   }
   c.deleteSprite();
   int sh = dense ? 24 : 42, sy = dense ? 252 : 230;
-  tft.fillRoundRect(9, sy, 462, sh, dense ? 8 : 10, C_CARD);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.fillRoundRect(9, sy + 2, 462, sh, dense ? 10 : 14, C_SH);
+  tft.fillRoundRect(9, sy, 462, sh, dense ? 10 : 14, C_CARD);
+  tft.setFont(F_R15);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.setTextColor(C_TEXT, C_CARD);
   if (np) {
@@ -1561,16 +1693,16 @@ static void cellsPage(const Model &m, bool force) {
     return;
   }
   tft.drawString(String("min ") + fmt(mn, 3) + " (#" + (imn + 1) + ")  max " + fmt(mx, 3) + " (#" + (imx + 1) +
-                     ")  delta " + int((mx - mn) * 1000 + .5f) + " mV",
+                     ")   \xCE\x94 " + int((mx - mn) * 1000 + .5f) + " mV",
                  21, sy + sh / 2);
 }
 
 // -------------------------------------------------------- GRAPH page ----
 static int gMetric = 0, gRange = 1;
 static const int G_HOURS[3] = {6, 24, 168};
-static const char *const G_RANGE[3] = {"6H", "24H", "7D"};
-static const char *const G_NAMES[5] = {"SOC", "VOLT", "AMP", "WATT", "TEMP"};
-static const char *const G_UNITS[5] = {"%", "V", "A", "W", "C"};
+static const char *const G_RANGE[3] = {"6 h", "24 h", "7 d"};
+static const char *const G_NAMES[5] = {"SOC", "Volt", "Amp", "Watt", "Temp"};
+static const char *const G_UNITS[5] = {"%", "V", "A", "W", "\xC2\xB0" "C"};
 static Btn gBtn(int i) { return {8 + i * 77, 46, 73, 34}; }
 static const Btn G_RANGE_B = {398, 46, 74, 34};
 static String graphKey;
@@ -1594,8 +1726,9 @@ static void graphPage(const Model &m, bool force) {
   button(G_RANGE_B, G_RANGE[gRange], true, C_BLUE);
   const std::vector<float> *pv[5] = {&m.h.soc, &m.h.v, &m.h.i, &m.h.p, &m.h.tp};
   const std::vector<float> &v = *pv[gMetric];
-  tft.fillRoundRect(8, 86, 464, 188, 10, C_CARD);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.fillRoundRect(8, 88, 464, 184, 14, C_SH);
+  tft.fillRoundRect(8, 86, 464, 184, 14, C_CARD);
+  tft.setFont(F_R15);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.setTextColor(C_MUTED, C_CARD);
   bool fresh = m.h.id == dp->id && m.h.hours == G_HOURS[gRange];
@@ -1631,6 +1764,17 @@ static void graphPage(const Model &m, bool force) {
     tft.drawFastHLine(px, y0, pw, C_MUTED);
   }
   int lx = -1, ly = -1;
+  int base = py + ph;
+  if (lo < 0 && hi > 0) base = py + int(ph * (hi / (hi - lo)));
+  for (int i = 0; i < n; i++) { // soft area under the line
+    if (std::isnan(v[i])) { lx = -1; continue; }
+    int x = X(i), y = py + int(ph * (hi - v[i]) / (hi - lo));
+    if (x < px) { lx = -1; continue; }
+    if (lx >= 0) { tft.fillTriangle(lx, ly, x, y, x, base, C_FILL); tft.fillTriangle(lx, ly, lx, base, x, base, C_FILL); }
+    lx = x;
+    ly = y;
+  }
+  lx = -1;
   for (int i = 0; i < n; i++) {
     if (std::isnan(v[i])) { lx = -1; continue; }
     int x = X(i), y = py + int(ph * (hi - v[i]) / (hi - lo));
@@ -1642,6 +1786,7 @@ static void graphPage(const Model &m, bool force) {
     lx = x;
     ly = y;
   }
+  if (lx >= 0) { tft.fillCircle(lx, ly, 5, C_ACCENT); tft.fillCircle(lx, ly, 2, C_CARD); }
   tft.setTextColor(C_MUTED, C_CARD);
   const char *ticks[3][3] = {{"-6h", "-3h", "now"}, {"-24h", "-12h", "now"}, {"-7d", "-3.5d", "now"}};
   for (int k = 0; k < 3; k++) {
@@ -1715,11 +1860,11 @@ static const Btn C_CANCEL = {70, 196, 160, 46}, C_OK = {250, 196, 160, 46};
 static void drawConfirm() {
   tft.fillRoundRect(40, 62, 400, 196, 14, C_CARD);
   tft.drawRoundRect(40, 62, 400, 196, 14, dlg.warn ? C_BAD : C_WARN);
-  tft.setFont(&fonts::FreeSansBold12pt7b);
+  tft.setFont(F_B19);
   tft.setTextDatum(textdatum_t::middle_center);
   tft.setTextColor(C_WARN, C_CARD);
   tft.drawString("Send to battery?", 240, 90);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextColor(C_TEXT, C_CARD);
   tft.drawString(dlg.line1, 240, 130);
   tft.setTextColor(dlg.warn ? C_BAD : C_MUTED, C_CARD);
@@ -1767,7 +1912,7 @@ static void statusLine(const Model &m) {
   uint16_t col = c.s == "done" ? C_GOOD : c.s == "error" || c.s == "expired" ? C_BAD : C_WARN;
   String st = c.s == "pending" ? "waiting" : c.s == "sent" ? "received" : c.s;
   String t = cmdLabel(c.c) + ": " + st + (c.r.length() && c.s != "done" ? " - " + c.r : String(""));
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextDatum(textdatum_t::middle_right);
   tft.setTextColor(col, C_BG);
   while (t.length() && tft.textWidth(t) > STATUS_AREA.w) t.remove(t.length() - 1);
@@ -1798,7 +1943,7 @@ static void packRow(const Focus &f, int ps) {
     Btn b = pkBtn(k, np);
     const PackSum &p = f.packs[k];
     String t = String("#") + p.a + (np <= 6 ? String(" ") + (std::isnan(p.soc) ? String("--") : String(int(p.soc + .5f)) + "%") : String(""));
-    button(b, t, k == ps, 0, &fonts::FreeSansBold9pt7b);
+    button(b, t, k == ps, 0, F_S15);
     if (p.bt) tft.fillCircle(b.x + b.w - 9, b.y + 8, 3, C_BLUE);
   }
 }
@@ -1847,15 +1992,15 @@ static void ctlPage(const Model &m, bool force) {
       tft.fillRoundRect(b.x, b.y, b.w, b.h, 12, bg);
       tft.drawRoundRect(b.x, b.y, b.w, b.h, 12, avail ? (on ? C_GOOD : C_LINE) : C_LINE);
       tft.setTextDatum(textdatum_t::middle_center);
-      tft.setFont(&fonts::FreeSans9pt7b);
-      tft.setTextColor(on && avail && known ? C_BG : C_MUTED, bg);
+      tft.setFont(F_R15);
+      tft.setTextColor(on && avail && known ? C_ONACC : C_MUTED, bg);
       tft.drawString(nm[i], b.x + b.w / 2, b.y + 22);
-      tft.setFont(&fonts::FreeSansBold18pt7b);
-      tft.setTextColor(!avail ? C_LINE : on && known ? C_BG : C_TEXT, bg);
+      tft.setFont(F_B27);
+      tft.setTextColor(!avail ? C_LINE : on && known ? C_ONACC : C_TEXT, bg);
       tft.drawString(!known ? "?" : on ? "ON" : "OFF", b.x + b.w / 2, b.y + 52);
     }
     button(mRead(), bankUi ? String("READ #") + f.packs[ps].a : String("READ BMS"), false, 0, nullptr, live && canW);
-    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setFont(F_R15);
     tft.setTextDatum(textdatum_t::middle_left);
     tft.setTextColor(C_MUTED, C_BG);
     if (bankUi && !canW) {
@@ -1887,7 +2032,7 @@ static void ctlPage(const Model &m, bool force) {
         PInfo p = pInfo(f2, i);
         int y = pY0 + r * 38;
         tft.fillRoundRect(8, y, 270, 34, 8, C_CARD);
-        tft.setFont(&fonts::FreeSans9pt7b);
+        tft.setFont(F_R15);
         tft.setTextDatum(textdatum_t::middle_left);
         tft.setTextColor(C_MUTED, C_CARD);
         String nm = p.name;
@@ -1895,25 +2040,25 @@ static void ctlPage(const Model &m, bool force) {
         tft.drawString(nm, 18, y + 17);
         bool have = pHas(f2, i);
         bool edited = have && pendSet[i] && std::fabs(pend[i] - pVal(f2, i)) > p.step / 2;
-        tft.setFont(&fonts::FreeSansBold9pt7b);
+        tft.setFont(F_S15);
         tft.setTextDatum(textdatum_t::middle_right);
         tft.setTextColor(edited ? C_WARN : have ? C_TEXT : C_MUTED, C_CARD);
         tft.drawString(have ? fmtParam(f2, i, edited ? pend[i] : pVal(f2, i)) : String("not read"), 270, y + 17);
-        button(pMinus(r), "-", false, 0, &fonts::FreeSansBold12pt7b);
-        button(pPlus(r), "+", false, 0, &fonts::FreeSansBold12pt7b);
+        button(pMinus(r), "-", false, 0, F_B19);
+        button(pPlus(r), "+", false, 0, F_B19);
         button(pSet(r), "SET", edited, C_WARN);
       }
-      button(PP_PREV, "<", false, 0, &fonts::FreeSansBold12pt7b);
-      button(PP_NEXT, ">", false, 0, &fonts::FreeSansBold12pt7b);
-      tft.setFont(&fonts::FreeSans9pt7b);
+      button(PP_PREV, "<", false, 0, F_B19);
+      button(PP_NEXT, ">", false, 0, F_B19);
+      tft.setFont(F_R15);
       tft.setTextDatum(textdatum_t::middle_center);
       tft.setTextColor(C_MUTED, C_BG);
       tft.drawString(String(pPage + 1) + "/" + pPages(f2), 96, 258);
     }
   } else if (ctlSub == 2) {
     button(L_ON, f.ledOn ? "LED ON" : "LED OFF", f.ledOn, C_GOOD);
-    button(L_MINUS, "-", false, 0, &fonts::FreeSansBold12pt7b);
-    button(L_PLUS, "+", false, 0, &fonts::FreeSansBold12pt7b);
+    button(L_MINUS, "-", false, 0, F_B19);
+    button(L_PLUS, "+", false, 0, F_B19);
     for (int i = 0; i < 4; i++) {
       int hgt = 10 + i * 6;
       tft.fillRoundRect(362 + i * 13, 120 - hgt, 9, hgt, 3, i < f.ledLevel ? C_ACCENT : C_LINE);
@@ -1930,7 +2075,7 @@ static void ctlPage(const Model &m, bool force) {
     button(D_MATCH, f.btm.startsWith("check") || f.btm == "scan" || f.btm == "queued" ? "MATCHING..." : "AUTO MATCH", true);
     button(D_CLEAR, "CLEAR", false);
     button(D_RST, "RESTART", false);
-    tft.setFont(&fonts::FreeSansBold9pt7b);
+    tft.setFont(F_S15);
     tft.setTextDatum(textdatum_t::middle_left);
     tft.setTextColor(C_TEXT, C_BG);
     tft.drawString("Bluetooth of each pack (for settings)", 12, 142);
@@ -1939,10 +2084,10 @@ static void ctlPage(const Model &m, bool force) {
       const PackSum &p = f.packs[k];
       int y = 156 + k * 27;
       tft.fillRoundRect(8, y, 464, 25, 7, C_CARD);
-      tft.setFont(&fonts::FreeSansBold9pt7b);
+      tft.setFont(F_S15);
       tft.setTextColor(C_TEXT, C_CARD);
       tft.drawString(String("#") + p.a, 18, y + 13);
-      tft.setFont(&fonts::FreeSans9pt7b);
+      tft.setFont(F_R15);
       tft.setTextColor(p.bt ? C_MUTED : C_WARN, C_CARD);
       tft.drawString(p.bt ? (p.btName.length() ? p.btName : String("JK")) : String("not found yet"), 60, y + 13);
       tft.setTextDatum(textdatum_t::middle_right);
@@ -1956,7 +2101,7 @@ static void ctlPage(const Model &m, bool force) {
       if (t.startsWith("done:")) { t = t.substring(5); int c = t.indexOf(':'); t = "matched " + (c > 0 ? t.substring(0, c) : t); }
       else if (t.startsWith("check:")) t = "checking " + t.substring(6);
       else if (t == "scan" || t == "queued") t = "scanning...";
-      tft.setFont(&fonts::FreeSans9pt7b);
+      tft.setFont(F_R15);
       tft.setTextDatum(textdatum_t::middle_right);
       tft.setTextColor(C_MUTED, C_BG);
       tft.drawString(t, 468, 142);
@@ -1983,18 +2128,18 @@ static void ctlPage(const Model &m, bool force) {
         bool cur = f.devs[k].mac.equalsIgnoreCase(f.mac);
         tft.fillRoundRect(r.x, r.y, r.w, r.h, 8, C_CARD);
         if (cur) tft.drawRoundRect(r.x, r.y, r.w, r.h, 8, C_GOOD);
-        tft.setFont(&fonts::FreeSansBold9pt7b);
+        tft.setFont(F_S15);
         tft.setTextDatum(textdatum_t::middle_left);
         tft.setTextColor(f.devs[k].cand ? C_TEXT : C_MUTED, C_CARD);
         String nm = f.devs[k].name.length() ? f.devs[k].name : String("(no name)");
         if (nm.length() > 22) nm = nm.substring(0, 22);
         tft.drawString(nm, r.x + 10, r.y + 16);
-        tft.setFont(&fonts::FreeSans9pt7b);
+        tft.setFont(F_R15);
         tft.setTextDatum(textdatum_t::middle_right);
         tft.setTextColor(C_MUTED, C_CARD);
         tft.drawString(f.devs[k].mac + "  " + f.devs[k].rssi, r.x + r.w - 10, r.y + 16);
       }
-      if (pages > 1) button(PP_PREV, ">", false, 0, &fonts::FreeSansBold12pt7b);
+      if (pages > 1) button(PP_PREV, ">", false, 0, F_B19);
     }
   }
   statusLine(m);
@@ -2113,48 +2258,56 @@ static void ctlTouch(const Model &m, int x, int y) {
 }
 
 // -------------------------------------------------------- SETUP page ----
-static const Btn S_BL_MINUS = {150, 46, 52, 40}, S_BL_PLUS = {300, 46, 52, 40}, S_ROTATE = {370, 46, 104, 40},
-                 S_SOC_MINUS = {150, 138, 52, 40}, S_SOC_PLUS = {270, 138, 52, 40}, S_BEEP = {340, 138, 134, 40},
-                 S_T_MINUS = {150, 184, 52, 40}, S_T_PLUS = {270, 184, 52, 40}, S_OFF = {340, 184, 134, 40},
-                 S_WIFI = {8, 230, 88, 42}, S_PAIR = {101, 230, 88, 42}, S_SHOW = {194, 230, 92, 42},
-                 S_CAL = {291, 230, 92, 42}, S_ECO = {388, 230, 86, 42};
-static Btn sleepBtn(int i) { return {150 + i * 82, 92, 76, 40}; }
+static const Btn S_BL_MINUS = {150, 44, 52, 34}, S_BL_PLUS = {300, 44, 52, 34}, S_ROTATE = {370, 44, 104, 34},
+                 S_SOC_MINUS = {150, 158, 52, 34}, S_SOC_PLUS = {270, 158, 52, 34}, S_BEEP = {340, 158, 134, 34},
+                 S_T_MINUS = {150, 196, 52, 34}, S_T_PLUS = {270, 196, 52, 34}, S_OFF = {340, 196, 134, 34},
+                 S_WIFI = {8, 236, 88, 36}, S_PAIR = {101, 236, 88, 36}, S_SHOW = {194, 236, 92, 36},
+                 S_CAL = {291, 236, 92, 36}, S_ECO = {388, 236, 86, 36}, S_DAYF = {360, 82, 114, 34};
+static Btn sleepBtn(int i) { return {150 + i * 82, 120, 76, 34}; }
+static Btn themeBtn(int i) { return {150 + i * 68, 82, 64, 34}; } // DAY, NIGHT, AUTO
 static String setupKey;
 static void valueBox(int x, int y, const String &v) {
-  tft.fillRect(x, y, 64, 40, C_BG);
-  tft.setFont(&fonts::FreeSansBold12pt7b);
+  tft.fillRect(x, y, 64, 34, C_BG);
+  tft.setFont(F_B19);
   tft.setTextDatum(textdatum_t::middle_center);
   tft.setTextColor(C_TEXT, C_BG);
-  tft.drawString(v, x + 32, y + 21);
+  tft.drawString(v, x + 32, y + 17);
 }
 static void applyBacklight() { tft.setBrightness(BL_LEVEL[dcfg.bl]); }
 static bool wantCalibrate = false, wantRotate = false;
 static void setupPage(bool force) {
-  String key = String(int(dcfg.eco)) + int(dcfg.bl) + int(dcfg.sleep) + int(dcfg.rot) + int(dcfg.lowSoc) + "/" + int(dcfg.hiTemp) + B(dcfg.beep) + B(dcfg.offAlarm) + B(dcfg.show) +
+  String key = String(int(dcfg.theme)) + int(dcfg.dayFrom) + B(nightNow) + int(dcfg.eco) + int(dcfg.bl) + int(dcfg.sleep) + int(dcfg.rot) + int(dcfg.lowSoc) + "/" + int(dcfg.hiTemp) + B(dcfg.beep) + B(dcfg.offAlarm) + B(dcfg.show) +
                B(WiFi.status() == WL_CONNECTED);
   if (!force && key == setupKey) return;
   setupKey = key;
   clearContent();
-  label(12, 66, "Screen");
-  button(S_BL_MINUS, "-", false, 0, &fonts::FreeSansBold12pt7b);
-  button(S_BL_PLUS, "+", false, 0, &fonts::FreeSansBold12pt7b);
+  label(12, 61, "Screen");
+  button(S_BL_MINUS, "-", false, 0, F_B19);
+  button(S_BL_PLUS, "+", false, 0, F_B19);
   for (int i = 0; i < 5; i++) {
-    int h = 10 + i * 6;
-    tft.fillRoundRect(210 + i * 17, 84 - h, 12, h, 3, i < dcfg.bl ? C_ACCENT : C_LINE);
+    int h = 8 + i * 5;
+    tft.fillRoundRect(210 + i * 17, 74 - h, 12, h, 3, i < dcfg.bl ? C_ACCENT : C_LINE);
   }
   button(S_ROTATE, "ROTATE", false);
-  label(12, 112, "Sleep");
+  label(12, 99, "Theme");
+  static const char *const TH[3] = {"DAY", "NIGHT", "AUTO"};
+  static const uint8_t TV[3] = {1, 2, 0};
+  for (int i = 0; i < 3; i++) button(themeBtn(i), TH[i], dcfg.theme == TV[i]);
+  char dw[16];
+  snprintf(dw, sizeof dw, "%02d:00-%02d:00", dcfg.dayFrom, dcfg.dayFrom + 12);
+  button(S_DAYF, dw, false, 0, F_S12, dcfg.theme == 0);
+  label(12, 137, "Sleep");
   const char *sl[4] = {"OFF", "1 min", "5 min", "10 min"};
   for (int i = 0; i < 4; i++) button(sleepBtn(i), sl[i], dcfg.sleep == i);
-  label(12, 158, "Low SOC alarm");
-  button(S_SOC_MINUS, "-", false, 0, &fonts::FreeSansBold12pt7b);
-  valueBox(204, 138, dcfg.lowSoc ? String(dcfg.lowSoc) + "%" : String("off"));
-  button(S_SOC_PLUS, "+", false, 0, &fonts::FreeSansBold12pt7b);
+  label(12, 175, "Low SOC alarm");
+  button(S_SOC_MINUS, "-", false, 0, F_B19);
+  valueBox(204, 158, dcfg.lowSoc ? String(dcfg.lowSoc) + "%" : String("off"));
+  button(S_SOC_PLUS, "+", false, 0, F_B19);
   button(S_BEEP, dcfg.beep ? "BEEP ON" : "BEEP OFF", dcfg.beep, C_GOOD);
-  label(12, 204, "High temp alarm");
-  button(S_T_MINUS, "-", false, 0, &fonts::FreeSansBold12pt7b);
-  valueBox(204, 184, dcfg.hiTemp ? String(dcfg.hiTemp) + "C" : String("off"));
-  button(S_T_PLUS, "+", false, 0, &fonts::FreeSansBold12pt7b);
+  label(12, 213, "High temp");
+  button(S_T_MINUS, "-", false, 0, F_B19);
+  valueBox(204, 196, dcfg.hiTemp ? String(dcfg.hiTemp) + "\xC2\xB0" "C" : String("off"));
+  button(S_T_PLUS, "+", false, 0, F_B19);
   button(S_OFF, dcfg.offAlarm ? "OFFLINE ON" : "OFFLINE OFF", dcfg.offAlarm, C_GOOD);
   button(S_WIFI, "WI-FI", WiFi.status() == WL_CONNECTED, C_GOOD);
   button(S_PAIR, "PAIRING", false);
@@ -2201,7 +2354,7 @@ static void parseNets(const String &json) {
 }
 static void kbDrawText() {
   tft.fillRoundRect(6, 64, 468, 36, 8, C_CARD);
-  tft.setFont(&fonts::FreeSans12pt7b);
+  tft.setFont(F_R19);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.setTextColor(C_TEXT, C_CARD);
   String t = kbText;
@@ -2214,7 +2367,7 @@ static void kbDraw() {
   kbDrawText();
   for (int r = 0; r < 4; r++) {
     const char *row = KB_ROWS[kbLayer][r];
-    for (int i = 0; row[i]; i++) button(kbKey(r, i), String(row[i]), false, 0, &fonts::FreeSans12pt7b);
+    for (int i = 0; row[i]; i++) button(kbKey(r, i), String(row[i]), false, 0, F_R19);
   }
   button(K_SHIFT, kbLayer >= 2 ? "#+=" : (kbLayer ? "abc" : "ABC"), kbLayer == 1 || kbLayer == 3);
   button(K_DEL, "DEL", false);
@@ -2231,11 +2384,11 @@ static void wifiOverlayDraw(bool force) {
   ovKey = key;
   if (scan.length()) parseNets(scan);
   clearContent();
-  tft.setFont(&fonts::FreeSansBold9pt7b);
+  tft.setFont(F_S15);
   tft.setTextDatum(textdatum_t::top_left);
   tft.setTextColor(conn ? C_GOOD : C_TEXT, C_BG);
   tft.drawString(conn ? "Connected: " + staSsid : String(staSsid.length() ? "Connecting: " + staSsid : "Pick your Wi-Fi"), 12, 48);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextColor(C_MUTED, C_BG);
   tft.drawString(conn ? WiFi.localIP().toString() + "   " + WiFi.RSSI() + " dBm" : String("This screen needs internet"), 12, 68);
   button(W_SCAN, scan.length() ? "SCAN" : "...", !scan.length());
@@ -2250,20 +2403,20 @@ static void wifiOverlayDraw(bool force) {
     Btn r = netRow(i);
     tft.fillRoundRect(r.x, r.y, r.w, r.h, 8, C_CARD);
     if (nets[k].ssid == staSsid) tft.drawRoundRect(r.x, r.y, r.w, r.h, 8, conn ? C_GOOD : C_WARN);
-    tft.setFont(&fonts::FreeSansBold9pt7b);
+    tft.setFont(F_S15);
     tft.setTextDatum(textdatum_t::middle_left);
     tft.setTextColor(C_TEXT, C_CARD);
     String nm = nets[k].ssid;
     if (nm.length() > 26) nm = nm.substring(0, 26);
     tft.drawString(nm, r.x + 12, r.y + 17);
-    tft.setFont(&fonts::FreeSans9pt7b);
+    tft.setFont(F_R15);
     tft.setTextDatum(textdatum_t::middle_right);
     tft.setTextColor(C_MUTED, C_CARD);
     tft.drawString(String(nets[k].lock ? "lock  " : "open  ") + nets[k].rssi, r.x + r.w - 10, r.y + 17);
   }
   if (pages > 1) {
-    button(W_UP, "<", false, 0, &fonts::FreeSansBold12pt7b);
-    button(W_DOWN, ">", false, 0, &fonts::FreeSansBold12pt7b);
+    button(W_UP, "<", false, 0, F_B19);
+    button(W_DOWN, ">", false, 0, F_B19);
   }
 }
 static void pairOverlayDraw(const Model &m, bool force) {
@@ -2274,15 +2427,15 @@ static void pairOverlayDraw(const Model &m, bool force) {
   button(W_BACK, "BACK", false);
   button(U_CHECK, "UPDATE", false);
   button(U_RESTART, "RESTART", false);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextDatum(textdatum_t::top_left);
   tft.setTextColor(C_MUTED, C_BG);
   tft.drawString(m.paired ? "PAIRED AS  " + m.name : String("PAIR CODE"), 12, 52);
-  tft.setFont(&fonts::FreeSansBold24pt7b);
+  tft.setFont(F_B36);
   tft.setTextColor(m.paired ? C_GOOD : C_ACCENT, C_BG);
   tft.setTextDatum(textdatum_t::middle_left);
   tft.drawString(pairCode, 12, 104);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextColor(C_TEXT, C_BG);
   tft.drawString(String("Website: ") + CLOUD_SITE, 12, 150);
   tft.drawString(m.paired ? String("Remove it on the website to pair with another account.")
@@ -2366,6 +2519,13 @@ static void setupTouch(int x, int y) {
   else if (hit(S_SHOW, x, y)) { dcfg.show = !dcfg.show; showToast(dcfg.show ? "Show mode: HOME rotates through all batteries" : "Show mode off"); }
   else if (hit(S_WIFI, x, y)) { overlay = OV_WIFI; ovKey = ""; if (!netScanJson().length() || nets.empty()) netScanStart(); changed = false; }
   else if (hit(S_PAIR, x, y)) { overlay = OV_PAIR; ovKey = ""; changed = false; }
+  else if (hit(themeBtn(0), x, y)) { dcfg.theme = 1; showToast("Day colours"); }
+  else if (hit(themeBtn(1), x, y)) { dcfg.theme = 2; showToast("Night colours"); }
+  else if (hit(themeBtn(2), x, y)) { dcfg.theme = 0; showToast("Auto: day colours " + String(dcfg.dayFrom) + ":00 to " + String(dcfg.dayFrom + 12) + ":00"); }
+  else if (hit(S_DAYF, x, y)) {
+    if (dcfg.theme != 0) changed = false;
+    else { dcfg.dayFrom = dcfg.dayFrom >= 8 ? 5 : dcfg.dayFrom + 1; showToast("Day colours from " + String(dcfg.dayFrom) + ":00 to " + String(dcfg.dayFrom + 12) + ":00"); }
+  }
   
 #ifndef BATTLAB_TOUCH_CAPACITIVE
   else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
@@ -2393,11 +2553,11 @@ static void calibrate() {
 #endif
   uint16_t cal[8];
   tft.fillScreen(C_BG);
-  tft.setFont(&fonts::FreeSansBold12pt7b);
+  tft.setFont(F_B19);
   tft.setTextColor(C_TEXT, C_BG);
   tft.setTextDatum(textdatum_t::middle_center);
   tft.drawString("Touch calibration", 240, 130);
-  tft.setFont(&fonts::FreeSans9pt7b);
+  tft.setFont(F_R15);
   tft.setTextColor(C_MUTED, C_BG);
   tft.drawString("Touch the tip of each corner arrow, one by one", 240, 170);
   tft.calibrateTouch(cal, C_ACCENT, C_BG, 24);
@@ -2419,7 +2579,7 @@ static void splash() {
     for (int x = 0; x < LOGO_W; x++) line[x] = lgfx::rgb565_t(row[x], row[x], row[x]);
     tft.pushImage(lx, ly + y, LOGO_W, 1, line);
   }
-  tft.setFont(&fonts::FreeSansBold9pt7b);
+  tft.setFont(F_S15);
   tft.setTextDatum(textdatum_t::middle_center);
   tft.setTextColor(C_ACCENT, TFT_BLACK);
   tft.drawString("CLOUD SCREEN", 240, 238);
@@ -2519,11 +2679,11 @@ static void uiTask(void *) {
       if (otaShown == -2) {
         tft.setBrightness(BL_LEVEL[dcfg.bl]);
         tft.fillScreen(C_BG);
-        tft.setFont(&fonts::FreeSansBold12pt7b);
+        tft.setFont(F_B19);
         tft.setTextDatum(textdatum_t::middle_center);
         tft.setTextColor(C_TEXT, C_BG);
         tft.drawString("Updating firmware", 240, 120);
-        tft.setFont(&fonts::FreeSans9pt7b);
+        tft.setFont(F_R15);
         tft.setTextColor(C_MUTED, C_BG);
         tft.drawString("Do not switch off - restarts by itself", 240, 210);
         tft.fillRoundRect(60, 156, 360, 18, 9, C_LINE);
@@ -2532,7 +2692,7 @@ static void uiTask(void *) {
         otaShown = pct;
         if (pct > 0) tft.fillRoundRect(60, 156, 360 * pct / 100, 18, 9, C_ACCENT);
         tft.fillRect(200, 178, 80, 22, C_BG);
-        tft.setFont(&fonts::FreeSansBold9pt7b);
+        tft.setFont(F_S15);
         tft.setTextColor(C_TEXT, C_BG);
         tft.drawString(String(pct) + "%", 240, 189);
       }
@@ -2541,6 +2701,19 @@ static void uiTask(void *) {
     }
     if (otaShown != -2) { otaShown = -2; drawnPage = -1; }
     uint32_t now = millis();
+    { // day / night colours: by the SETUP choice or the clock (AUTO)
+      static uint32_t lastTheme = 0;
+      bool tapped = dcfg.theme != 0 && (dcfg.theme == 2) != nightNow;
+      if (tapped || now - lastTheme > 1000) {
+        lastTheme = now;
+        bool want = themeWantNight();
+        if (want != nightNow) {
+          themeApply(want);
+          tft.fillScreen(C_BG);
+          drawnPage = -1;
+        }
+      }
+    }
     if (now - lastCopy > 250) {
       lastCopy = now;
       Lock l;
@@ -2596,7 +2769,11 @@ static void uiTask(void *) {
         int per;
         allView(m, idx, grouped, per);
         bool pager = page == P_ALL && (int)idx.size() > per;
-        if (hit(B_PREV, tp.x, tp.y) || hit(B_NEXT, tp.x, tp.y)) {
+        if (hit(B_THEME, tp.x, tp.y)) { // quick day / night switch (SETUP > Theme AUTO brings the clock back)
+          dcfg.theme = nightNow ? 1 : 2;
+          dcfgSave();
+          setupKey = "";
+        } else if (hit(B_PREV, tp.x, tp.y) || hit(B_NEXT, tp.x, tp.y)) {
           int dir = hit(B_NEXT, tp.x, tp.y) ? 1 : -1;
           if (nav) { moveFocus(m, dir); drawnPage = -1; }
           else if (pager) {
@@ -2769,16 +2946,8 @@ void setup() {
   tft.configure(invert, rgb);
   tft.init();
   tft.setRotation(dcfg.rot);
-  C_BG = tft.color565(11, 17, 23);
-  C_CARD = tft.color565(24, 33, 42);
-  C_LINE = tft.color565(45, 58, 70);
-  C_TEXT = tft.color565(236, 241, 244);
-  C_MUTED = tft.color565(132, 147, 158);
-  C_ACCENT = tft.color565(54, 196, 168);
-  C_GOOD = tft.color565(64, 200, 120);
-  C_WARN = tft.color565(232, 160, 64);
-  C_BAD = tft.color565(232, 84, 88);
-  C_BLUE = tft.color565(84, 148, 232);
+  fontsInit();
+  themeApply(true);
   tft.setBrightness(0);
   tft.fillScreen(TFT_BLACK);
   wifiApply();
