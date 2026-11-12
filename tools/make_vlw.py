@@ -5,7 +5,7 @@ import struct
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-INTER = '/usr/share/fonts/opentype/inter/'
+INTER = str(ROOT / 'assets/fonts') + '/'
 ASCII = ''.join(chr(c) for c in range(0x21, 0x7F)) + '°·Δ'
 DIGITS = '0123456789%.-+:'
 FONTS = [  # name, file, px, charset

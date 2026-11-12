@@ -11,7 +11,7 @@ OUT = ROOT / ('assets/screens_es3c40' if ES else 'assets/screens')
 OUT.mkdir(parents=True, exist_ok=True)
 S = 2
 FF = '/usr/share/fonts/truetype/freefont/'
-IF = '/usr/share/fonts/opentype/inter/'
+IF = str(ROOT / 'assets/fonts') + '/'
 def inter(name, px): return ImageFont.truetype(IF + name, px * S)
 # same faces / sizes as include/ui_fonts.h (tools/make_vlw.py)
 F9, F9B, F12S = inter('Inter-Regular.otf', 15), inter('Inter-SemiBold.otf', 15), inter('Inter-SemiBold.otf', 12)
