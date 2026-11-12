@@ -1580,12 +1580,6 @@ static void homePage(const Model &m, bool force) {
   if (ok) {
     pill(tft, LX + 14, LY + 198, "CHG", d.chg, 70);
     pill(tft, LX + 90, LY + 198, "DSG", d.dsg, 70);
-    if (d.cyc >= 0) {
-      tft.setFont(F_R15);
-      tft.setTextDatum(textdatum_t::middle_right);
-      tft.setTextColor(C_MUTED, C_CARD);
-      tft.drawString(String(d.cyc) + " cyc", LX + LW - 14, LY + 211);
-    }
   }
   // ---- right: six tiles
   const int x0 = 238, x1 = 356, w = 114, h = 70;
