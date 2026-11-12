@@ -1,0 +1,158 @@
+********************************************************************************
+If you like PlatformIO, please:
+- star it on GitHub > https://github.com/platformio/platformio-core
+- follow us on LinkedIn to stay up-to-date on the latest project news > https://www.linkedin.com/company/platformio/
+- try PlatformIO IDE for embedded development > https://platformio.org/platformio-ide
+********************************************************************************
+
+Processing p4c5 (platform: https://github.com/pioarduino/platform-espressif32/releases/download/53.03.13/platform-espressif32.zip; framework: arduino; board: esp32-p4-evboard)
+--------------------------------------------------------------------------------
+Platform Manager: Installing https://github.com/pioarduino/platform-espressif32/releases/download/53.03.13/platform-espressif32.zip
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Platform Manager: espressif32@53.3.13 has been installed!
+Tool Manager: Installing https://github.com/espressif/arduino-esp32/releases/download/3.1.3/esp32-3.1.3.zip
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: framework-arduinoespressif32@3.1.3 has been installed!
+Tool Manager: Installing https://github.com/espressif/esp32-arduino-lib-builder/releases/download/idf-release_v5.3/esp32-arduino-libs-idf-release_v5.3-489d7a2b-v1.zip
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: framework-arduinoespressif32-libs@5.3.0+sha.489d7a2b3a has been installed!
+Tool Manager: Installing platformio/toolchain-riscv32-esp @ 13.2.0+20240530
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: toolchain-riscv32-esp@13.2.0+20240530 has been installed!
+Tool Manager: Installing platformio/tool-xtensa-esp-elf-gdb @ 14.2.0+20240403
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-xtensa-esp-elf-gdb@14.2.0+20240403 has been installed!
+Tool Manager: Installing platformio/tool-riscv32-esp-elf-gdb @ 14.2.0+20240403
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-riscv32-esp-elf-gdb@14.2.0+20240403 has been installed!
+Tool Manager: Installing https://github.com/pioarduino/esptool/releases/download/v4.8.6/esptool.zip
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-esptoolpy@4.8.6 has been installed!
+Tool Manager: Installing tasmota/tool-mklittlefs @ ^3.2.0
+Downloading 0% 10% 20% 30% 40% 50% 60% 70%
+Unpacking 0% 10% 20%
+Tool Manager: tool-mklittlefs@3.2.0 has been installed!
+Tool Manager: Installing platformio/tool-scons @ ~4.41101.0
+Downloading 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Unpacking 0% 10% 20% 30% 40% 50% 60% 70% 80% 90% 100%
+Tool Manager: tool-scons@4.41101.0 has been installed!
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-p4-evboard.html
+PLATFORM: Espressif 32 (53.3.13) > Espressif ESP32-P4 Function EV Board
+HARDWARE: ESP32P4 360MHz, 500KB RAM, 16MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 3.1.3 
+ - framework-arduinoespressif32-libs @ 5.3.0+sha.489d7a2b3a 
+ - tool-esptoolpy @ 4.8.6 
+ - tool-mklittlefs @ 3.2.0 
+ - tool-riscv32-esp-elf-gdb @ 14.2.0+20240403 
+ - tool-xtensa-esp-elf-gdb @ 14.2.0+20240403 
+ - toolchain-riscv32-esp @ 13.2.0+20240530
+Installing Arduino Python dependencies
+Collecting wheel>=0.35.1
+  Downloading wheel-0.48.0-py3-none-any.whl.metadata (2.3 kB)
+Collecting packaging>=24.0 (from wheel>=0.35.1)
+  Downloading packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Downloading wheel-0.48.0-py3-none-any.whl (33 kB)
+Downloading packaging-26.3-py3-none-any.whl (129 kB)
+Installing collected packages: packaging, wheel
+
+Successfully installed packaging-26.3 wheel-0.48.0
+
+[notice] A new release of pip is available: 26.2.2 -> 26.3
+[notice] To update, run: pip install --upgrade pip
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 41 compatible libraries
+Scanning dependencies...
+No dependencies
+Building in release mode
+Compiling .pio/build/p4c5/src/p4/p4_main.cpp.o
+Building .pio/build/p4c5/bootloader.bin
+Generating partitions .pio/build/p4c5/partitions.bin
+Compiling .pio/build/p4c5/FrameworkArduino/ColorFormat.c.o
+esptool.py v4.8.6
+Creating esp32p4 image...
+Merged 2 ELF sections
+Successfully created esp32p4 image.
+Compiling .pio/build/p4c5/FrameworkArduino/Esp.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/FirmwareMSC.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/FunctionalInterrupt.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/HEXBuilder.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/HWCDC.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/HardwareSerial.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/IPAddress.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/MD5Builder.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/MacAddress.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/Print.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/SHA1Builder.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/Stream.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/StreamString.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/Tone.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/USB.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/USBCDC.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/USBMSC.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/WMath.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/WString.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/base64.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/cbuf.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/chip-debug-report.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-adc.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-bt.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-cpu.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-dac.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-gpio.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-i2c-slave.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-i2c.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-ledc.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-matrix.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-misc.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-periman.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-psram.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-rgb-led.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-rmt.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-sigmadelta.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-spi.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-time.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-timer.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-tinyusb.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-touch-ng.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-touch.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/esp32-hal-uart.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/firmware_msc_fat.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/freertos_stats.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/libb64/cdecode.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/libb64/cencode.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/main.cpp.o
+Compiling .pio/build/p4c5/FrameworkArduino/stdlib_noniso.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/wiring_pulse.c.o
+Compiling .pio/build/p4c5/FrameworkArduino/wiring_shift.c.o
+Archiving .pio/build/p4c5/libFrameworkArduino.a
+Indexing .pio/build/p4c5/libFrameworkArduino.a
+Linking .pio/build/p4c5/firmware.elf
+Retrieving maximum program size .pio/build/p4c5/firmware.elf
+Checking size .pio/build/p4c5/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]   9.3% (used 47804 bytes from 512000 bytes)
+Flash: [===       ]  25.8% (used 338025 bytes from 1310720 bytes)
+Building .pio/build/p4c5/firmware.bin with action:
+  "$PYTHONEXE" "$OBJCOPY" --chip esp32p4 elf2image --flash_mode ${__get_board_flash_mode(__env__)} --flash_freq ${__get_board_f_image(__env__)} --flash_size 16MB --elf-sha256-offset 0xb0 -o $TARGET $SOURCES
+Building .pio/build/p4c5/firmware.bin
+esptool.py v4.8.6
+Creating esp32p4 image...
+Merged 4 ELF sections
+Successfully created esp32p4 image.
+========================= [SUCCESS] Took 56.45 seconds =========================
+
+Environment    Status    Duration
+-------------  --------  ------------
+p4c5           SUCCESS   00:00:56.447
+========================= 1 succeeded in 00:00:56.447 =========================
