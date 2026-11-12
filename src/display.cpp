@@ -22,6 +22,9 @@ const char *displayCfgSet(JsonObjectConst) { return "this board has no screen"; 
 #include <algorithm>
 #include <vector>
 
+#ifdef BATTLAB_ES3C40
+#include "lgfx_es3c40.h"
+#else
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ST7796 panel_;
   lgfx::Bus_SPI bus_;
@@ -93,6 +96,10 @@ public:
     setPanel(&panel_);
   }
 };
+#endif
+#ifndef BATTLAB_SCREEN_INV_DEFAULT
+#define BATTLAB_SCREEN_INV_DEFAULT false
+#endif
 
 static LGFX tft;
 static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_MUTED, C_ACCENT, C_GOOD, C_WARN,
@@ -252,6 +259,10 @@ static void evalAlarm(const DisplaySnap &d) {
     alarmText = String("HIGH TEMP ") + int(t + .5f) + "C";
 }
 static void beep(int times) {
+#ifdef BATTLAB_ES3C40
+  (void)times;
+  return; // speaker on this board is an I2S codec (ES8311): no buzzer pin
+#endif
   for (int i = 0; i < times; i++) {
     ledcWriteTone(3, 2300);
     vTaskDelay(pdMS_TO_TICKS(110));
@@ -1174,7 +1185,9 @@ static void setupPage(const DisplaySnap &d, bool force) {
   label(12, 158, "Radio");
   button(S_WIFI, d.wifiOn ? "WIFI ON" : "WIFI OFF", d.wifiOn, C_GOOD);
   button(S_TX, d.radioMax ? "TX MAX" : "TX LOW", d.radioMax, C_GOOD);
+#ifndef BATTLAB_TOUCH_CAPACITIVE
   button(S_CAL, "CALIBRATE", false);
+#endif
   label(12, 204, "Low SOC alarm");
   button(S_SOC_MINUS, "-", false, 0, &fonts::FreeSansBold12pt7b);
   valueBox(204, 184, dcfg.lowSoc ? String(dcfg.lowSoc) + "%" : String("off"));
@@ -1201,7 +1214,10 @@ static void setupTouch(const DisplaySnap &d, int x, int y) {
     radioSetMaxPower(!d.radioMax);
     showToast(d.radioMax ? "Radio power LOW (weak power supply)" : "Radio power MAX");
     changed = false;
-  } else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
+  } 
+#ifndef BATTLAB_TOUCH_CAPACITIVE
+  else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
+#endif
   else if (hit(S_SOC_MINUS, x, y)) dcfg.lowSoc = dcfg.lowSoc >= 5 ? dcfg.lowSoc - 5 : 0;
   else if (hit(S_SOC_PLUS, x, y)) dcfg.lowSoc = dcfg.lowSoc <= 45 ? dcfg.lowSoc + 5 : 50;
   else if (hit(S_T_MINUS, x, y)) dcfg.hiTemp = dcfg.hiTemp > 30 ? dcfg.hiTemp - 5 : 0;
@@ -1477,6 +1493,9 @@ static void infoTouch(int x, int y) {
 
 // ------------------------------------------------------ touch calibrate --
 static void calibrate() {
+#ifdef BATTLAB_TOUCH_CAPACITIVE
+  return; // capacitive touch is factory-calibrated
+#endif
   uint16_t cal[8];
   tft.fillScreen(C_BG);
   tft.setFont(&fonts::FreeSansBold12pt7b);
@@ -1813,12 +1832,18 @@ static void displayTask(void *) {
     p.begin("battlab-disp", true);
     bool have = p.getBytes("cal", cal, sizeof cal) == sizeof cal;
     p.end();
+    #ifndef BATTLAB_TOUCH_CAPACITIVE
     if (have) tft.setTouchCalibrate(cal);
     else calibrate();
+    #else
+    (void)have;
+    #endif
   }
+#ifndef BATTLAB_ES3C40 // GPIO26 is a flash pin on the ESP32-S3
   ledcSetup(3, 2000, 8);
   ledcAttachPin(26, 3);
   ledcWriteTone(3, 0);
+#endif
   int page = P_HOME, drawnPage = -1;
   uint32_t lastDraw = 0, lastTouch = 0, lastActivity = millis();
   bool wasDown = false, asleep = false, alarmWas = false;
@@ -1987,7 +2012,7 @@ void displayStart() {
   dcfgLoad();
   Preferences p;
   p.begin("battlab-disp", true);
-  bool invert = p.getBool("inv", false);
+  bool invert = p.getBool("inv", BATTLAB_SCREEN_INV_DEFAULT);
   bool rgb = p.getBool("rgb", false);
   p.end();
   tft.configure(invert, rgb);

@@ -5,7 +5,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / 'assets/screens'
+import os
+ES = os.environ.get('ES3C40') == '1'  # LCDwiki ES3C40P 4.0" (capacitive touch: no CALIB button)
+OUT = ROOT / ('assets/screens_es3c40' if ES else 'assets/screens')
 OUT.mkdir(parents=True, exist_ok=True)
 S = 2
 FF = '/usr/share/fonts/truetype/freefont/'
@@ -18,7 +20,7 @@ TAB_Y, TAB_W = 278, 80
 TABS = ["ALL", "HOME", "CELLS", "GRAPH", "CONTROL", "SETUP"]
 LOGO_BIG = Image.open(ROOT / 'assets/battlab_logo_preview.png').convert('L')
 LOGO_S = Image.open(ROOT / 'assets/battlab_logo_header_preview.png').convert('L')
-FW = re.search(r'#define BATTLAB_FW "([^"]+)"', (ROOT / 'src/viewer/viewer.cpp').read_text()).group(1)
+FW = re.search(r'#define BATTLAB_FW "([^"]+-cloudscreen' + ('-es3c40' if ES else '') + ')"', (ROOT / 'src/viewer/viewer.cpp').read_text()).group(1)
 
 class Scr:
     def __init__(s, bg=BG):
@@ -355,7 +357,9 @@ def setup(eco=1, toast=None):
     s.button((270, 138, 52, 40), '+', f=F12B); s.button((340, 138, 134, 40), 'BEEP ON', True, GOOD)
     s.text('High temp alarm', 12, 204, F9, MUTED); s.button((150, 184, 52, 40), '-', f=F12B); s.text('55C', 236, 205, F12B, TEXT, 'mm')
     s.button((270, 184, 52, 40), '+', f=F12B); s.button((340, 184, 134, 40), 'OFFLINE ON', True, GOOD)
-    for i, (b, t) in enumerate(zip([(8, 230, 88, 42), (101, 230, 88, 42), (194, 230, 92, 42), (291, 230, 92, 42), (388, 230, 86, 42)], ['WI-FI', 'PAIRING', 'SHOW ON', 'CALIB', ['NORMAL', 'ECO', 'ECO MAX'][eco]])): s.button(b, t, i in (0, 2) or (i == 4 and eco > 0), GOOD)
+    for i, (b, t) in enumerate(zip([(8, 230, 88, 42), (101, 230, 88, 42), (194, 230, 92, 42), (291, 230, 92, 42), (388, 230, 86, 42)], ['WI-FI', 'PAIRING', 'SHOW ON', 'CALIB', ['NORMAL', 'ECO', 'ECO MAX'][eco]])):
+        if ES and t == 'CALIB': continue
+        s.button(b, t, i in (0, 2) or (i == 4 and eco > 0), GOOD)
     tabs(s, 5); ECO = 1; return s
 
 def pairing(paired=False):
@@ -447,7 +451,7 @@ pad, capH, cols = 24, 40, 2
 rows = (len(paths) + cols - 1) // cols
 sheet = Image.new('RGB', (cols * (W + pad) + pad, 90 + rows * (H + capH + pad) + pad), (238, 241, 244))
 d = ImageDraw.Draw(sheet)
-d.text((pad, 30), f'BATTLAB {FW} - CLOUD SCREEN (ESP32-3248S035)', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
+d.text((pad, 30), f'BATTLAB {FW} - CLOUD SCREEN (' + ('ES3C40 4.0" ESP32-S3' if ES else 'ESP32-3248S035') + ')', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
 for k, (p, cap) in enumerate(paths):
     r, c = divmod(k, cols)
     x, y = pad + c * (W + pad), 90 + r * (H + capH + pad)

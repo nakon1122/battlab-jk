@@ -24,9 +24,20 @@
 #include "improv_serial.h"
 #include <string>
 
+#ifdef BATTLAB_ES3C40
+#define BATTLAB_FW "2.10.1-cloudscreen-es3c40"
+#define VIEWER_OTA_KEY "cloudscreen_es3c40"
+#define VIEWER_CHIP "ESP32-S3"
+#else
 #define BATTLAB_FW "2.9.3-cloudscreen"
+#define VIEWER_OTA_KEY "cloudscreen"
+#define VIEWER_CHIP "ESP32"
+#endif
 
 // ------------------------------------------------------------ display ----
+#ifdef BATTLAB_ES3C40
+#include "lgfx_es3c40.h"
+#else
 class LGFX : public lgfx::LGFX_Device {
   lgfx::Panel_ST7796 panel_;
   lgfx::Bus_SPI bus_;
@@ -98,6 +109,11 @@ public:
     setPanel(&panel_);
   }
 };
+#endif
+#ifndef BATTLAB_SCREEN_INV_DEFAULT
+#define BATTLAB_SCREEN_INV_DEFAULT false
+#endif
+
 static LGFX tft;
 static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_MUTED, C_ACCENT, C_GOOD, C_WARN, C_BAD, C_BLUE;
 
@@ -340,7 +356,7 @@ static void improvTask(void *) {
         improvSend(improv::T_STATE, {uint8_t(conn ? improv::S_PROVISIONED : improv::S_AUTHORIZED)});
         if (conn) improvSend(improv::T_RESULT, improv::result(improv::C_STATE, {url()}));
       } else if (d[0] == improv::C_INFO) {
-        improvSend(improv::T_RESULT, improv::result(improv::C_INFO, {"BATTLAB Cloud Screen", BATTLAB_FW, "ESP32", name}));
+        improvSend(improv::T_RESULT, improv::result(improv::C_INFO, {"BATTLAB Cloud Screen", BATTLAB_FW, VIEWER_CHIP, name}));
       } else if (d[0] == improv::C_SCAN) {
         int n = -1;
         for (int k = 0; k < 3 && n < 0; k++) { n = WiFi.scanNetworks(false, false); if (n < 0) vTaskDelay(pdMS_TO_TICKS(800)); }
@@ -660,10 +676,14 @@ static void netTask(void *) {
       if (g.begin(tls, String("https://") + CLOUD_SITE + "/fw/manifest.json")) {
         int code = g.GET();
         if (code == 200) {
-          DynamicJsonDocument d(4096);
-          if (!deserializeJson(d, g.getString())) {
-            ver = d["boards"]["cloudscreen"]["version"] | "";
-            String rel = d["boards"]["cloudscreen"]["url"] | "";
+          // the manifest lists every board (~7 KB): keep only this screen's entry
+          StaticJsonDocument<192> flt;
+          flt["boards"][VIEWER_OTA_KEY]["version"] = true;
+          flt["boards"][VIEWER_OTA_KEY]["url"] = true;
+          DynamicJsonDocument d(1024);
+          if (!deserializeJson(d, g.getString(), DeserializationOption::Filter(flt))) {
+            ver = d["boards"][VIEWER_OTA_KEY]["version"] | "";
+            String rel = d["boards"][VIEWER_OTA_KEY]["url"] | "";
             if (rel.length()) url = String("https://") + CLOUD_SITE + "/" + rel;
           }
         }
@@ -813,6 +833,10 @@ static void showToast(const String &t, uint32_t ms = 3000) {
   toastUntil = millis() + ms;
 }
 static void beep(int times) {
+#ifdef BATTLAB_ES3C40
+  (void)times;
+  return; // speaker on this board is an I2S codec (ES8311): no buzzer pin
+#endif
   for (int i = 0; i < times; i++) {
     ledcWriteTone(3, 2300);
     vTaskDelay(pdMS_TO_TICKS(110));
@@ -2135,7 +2159,9 @@ static void setupPage(bool force) {
   button(S_WIFI, "WI-FI", WiFi.status() == WL_CONNECTED, C_GOOD);
   button(S_PAIR, "PAIRING", false);
   button(S_SHOW, dcfg.show ? "SHOW ON" : "SHOW OFF", dcfg.show, C_GOOD);
+#ifndef BATTLAB_TOUCH_CAPACITIVE
   button(S_CAL, "CALIB", false);
+#endif
   button(S_ECO, ECO_NAME[dcfg.eco], dcfg.eco > 0, C_GOOD);
 }
 
@@ -2340,7 +2366,10 @@ static void setupTouch(int x, int y) {
   else if (hit(S_SHOW, x, y)) { dcfg.show = !dcfg.show; showToast(dcfg.show ? "Show mode: HOME rotates through all batteries" : "Show mode off"); }
   else if (hit(S_WIFI, x, y)) { overlay = OV_WIFI; ovKey = ""; if (!netScanJson().length() || nets.empty()) netScanStart(); changed = false; }
   else if (hit(S_PAIR, x, y)) { overlay = OV_PAIR; ovKey = ""; changed = false; }
+  
+#ifndef BATTLAB_TOUCH_CAPACITIVE
   else if (hit(S_CAL, x, y)) { wantCalibrate = true; changed = false; }
+#endif
   else if (hit(S_ECO, x, y)) {
     dcfg.eco = (dcfg.eco + 1) % 3;
     ecoPending = true;
@@ -2359,6 +2388,9 @@ static void setupTouch(int x, int y) {
 
 // ------------------------------------------------- calibrate + splash ----
 static void calibrate() {
+#ifdef BATTLAB_TOUCH_CAPACITIVE
+  return; // capacitive touch is factory-calibrated
+#endif
   uint16_t cal[8];
   tft.fillScreen(C_BG);
   tft.setFont(&fonts::FreeSansBold12pt7b);
@@ -2458,12 +2490,18 @@ static void uiTask(void *) {
     p.begin("battlab-disp", true);
     bool have = p.getBytes("cal", cal, sizeof cal) == sizeof cal;
     p.end();
+    #ifndef BATTLAB_TOUCH_CAPACITIVE
     if (have) tft.setTouchCalibrate(cal);
     else calibrate();
+    #else
+    (void)have;
+    #endif
   }
+#ifndef BATTLAB_ES3C40 // GPIO26 is a flash pin on the ESP32-S3
   ledcSetup(3, 2000, 8);
   ledcAttachPin(26, 3);
   ledcWriteTone(3, 0);
+#endif
   int page = P_ALL, drawnPage = -1;
   uint32_t lastDraw = 0, lastTouch = 0, lastActivity = millis();
   bool wasDown = false, asleep = false;
@@ -2726,7 +2764,7 @@ void setup() {
   xTaskCreatePinnedToCore(improvTask, "improv", 6144, nullptr, 1, nullptr, 1);
   Preferences p;
   p.begin("battlab-disp", true);
-  bool invert = p.getBool("inv", false), rgb = p.getBool("rgb", false);
+  bool invert = p.getBool("inv", BATTLAB_SCREEN_INV_DEFAULT), rgb = p.getBool("rgb", false);
   p.end();
   tft.configure(invert, rgb);
   tft.init();

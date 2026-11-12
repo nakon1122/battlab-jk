@@ -33,7 +33,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          pio run -e esp32-s3 -e esp32-035 -e cyd35-cloud 2>&1 | tee out/build.log
+          pio run -e esp32-s3 -e esp32-035 -e cyd35-cloud -e es3c40 -e es3c40-cloud 2>&1 | tee out/build.log
       - name: Make single install images (flash at 0x0)
         run: |
           BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
@@ -50,6 +50,15 @@ jobs:
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 $CL/bootloader.bin 0x8000 $CL/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $CL/firmware.bin
           cp $CL/firmware.bin out/BATTLAB_CLOUDSCREEN_APP_UPDATE.bin
+          for E in es3c40:ES3C40 es3c40-cloud:ES3C40_CLOUDSCREEN; do
+            B=.pio/build/${E%%:*}; N=${E##*:}
+            python -m esptool --chip esp32s3 merge_bin -o out/BATTLAB_${N}_INSTALL.bin \
+              --flash_mode dio --flash_freq 80m --flash_size 16MB \
+              0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
+            cp $B/firmware.bin out/BATTLAB_${N}_APP_UPDATE.bin
+          done
+          cp .pio/build/es3c40/bootloader.bin out/ES3C40_BOOTLOADER.bin
+          cp .pio/build/es3c40/partitions.bin out/ES3C40_PARTITIONS.bin
           # pieces for the UPDATE_*.bat scripts (keep settings, switch to the OTA partition table)
           cp $S3/bootloader.bin out/S3_BOOTLOADER.bin
           cp $S3/partitions.bin out/S3_PARTITIONS.bin

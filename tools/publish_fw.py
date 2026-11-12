@@ -14,13 +14,17 @@ ver_cyd = re.search(r'#define BATTLAB_FW "([0-9.]+)-cyd35"', (ROOT / 'src/main.c
 ver_s3 = re.search(r'#define BATTLAB_FW "([0-9.]+)-s3"', (ROOT / 'src/main.cpp').read_text()).group(1)
 ver_view = re.search(r'#define BATTLAB_FW "([0-9.]+)-cloudscreen"', (ROOT / 'src/viewer/viewer.cpp').read_text()).group(1)
 _vn = lambda v: tuple(int(x) for x in re.search(r'(\d+)\.(\d+)\.(\d+)', v).groups())
-ver_main = max([ver_cyd, ver_s3, ver_view], key=_vn)  # release / zip number = highest board version
+ver_es = re.search(r'#define BATTLAB_FW "([0-9.]+)-es3c40"', (ROOT / 'src/main.cpp').read_text()).group(1)
+ver_view_es = re.search(r'#define BATTLAB_FW "([0-9.]+)-cloudscreen-es3c40"', (ROOT / 'src/viewer/viewer.cpp').read_text()).group(1)
+ver_main = max([ver_cyd, ver_s3, ver_view, ver_es, ver_view_es], key=_vn)  # release / zip number = highest board version
 # board: app image, version, merged install image, chip, bootloader, offset of bootloader
 # each board carries its OWN firmware version so an unchanged board is not offered a needless update
 boards = {
     's3': ('BATTLAB_S3_APP_UPDATE.bin', ver_s3, 'BATTLAB_S3_BLEFIX_INSTALL.bin', 'ESP32-S3', 'S3_BOOTLOADER.bin', 'S3_PARTITIONS.bin', 0x0, 'ESP32-S3 (BMS board)'),
     'cyd35': ('BATTLAB_CYD35_APP_UPDATE.bin', ver_cyd, 'BATTLAB_CYD35_INSTALL.bin', 'ESP32', 'CYD_BOOTLOADER.bin', 'CYD_PARTITIONS.bin', 0x1000, 'CYD 3.5" (BMS screen)'),
     'cloudscreen': ('BATTLAB_CLOUDSCREEN_APP_UPDATE.bin', ver_view, 'BATTLAB_CLOUDSCREEN_INSTALL.bin', 'ESP32', 'CYD_BOOTLOADER.bin', 'CYD_PARTITIONS.bin', 0x1000, 'Cloud Screen (CYD 3.5")'),
+    'es3c40': ('BATTLAB_ES3C40_APP_UPDATE.bin', ver_es, 'BATTLAB_ES3C40_INSTALL.bin', 'ESP32-S3', 'ES3C40_BOOTLOADER.bin', 'ES3C40_PARTITIONS.bin', 0x0, 'ES3C40 4.0" (BMS screen, S3)'),
+    'cloudscreen_es3c40': ('BATTLAB_ES3C40_CLOUDSCREEN_APP_UPDATE.bin', ver_view_es, 'BATTLAB_ES3C40_CLOUDSCREEN_INSTALL.bin', 'ESP32-S3', 'ES3C40_BOOTLOADER.bin', 'ES3C40_PARTITIONS.bin', 0x0, 'Cloud Screen (ES3C40 4.0")'),
 }
 fw = site / 'fw'
 fw.mkdir(exist_ok=True)

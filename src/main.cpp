@@ -31,10 +31,27 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
-#ifdef BATTLAB_CYD35
+// BATTLAB_FULL: ESP32-S3 boards (RS485 bank, Bluetooth pack match). The old ESP32 CYD has the
+// screen only; the ES3C40 (ESP32-S3 + 4.0" screen) has both.
+#if !defined(BATTLAB_DISPLAY) || defined(BATTLAB_ES3C40)
+#define BATTLAB_FULL 1
+#endif
+#if defined(BATTLAB_ES3C40)
+#define BATTLAB_FW "2.10.1-es3c40"
+#define BATTLAB_BOARD "es3c40"
+#define BATTLAB_LED_PIN 42
+#elif defined(BATTLAB_CYD35)
 #define BATTLAB_FW "2.10.1-cyd35"
+#define BATTLAB_BOARD "cyd35"
 #else
 #define BATTLAB_FW "2.10.1-s3"
+#endif
+#ifdef BATTLAB_ES3C40
+#define RS485_RX_DEF 44 // UART header on the ES3C40 (RXD/TXD/5V/GND)
+#define RS485_TX_DEF 43
+#else
+#define RS485_RX_DEF 18
+#define RS485_TX_DEF 17
 #endif
 WebServer web(80);
 // Why the chip restarted last time (shown on screen / API to diagnose resets).
@@ -92,7 +109,7 @@ struct Shared {
   uint32_t devStamp = 0;
   float pv[bset::MAX_N] = {};   // ANT / JBD protection settings (bms_settings.h)
   uint64_t pvHave = 0;          // bit i = pv[i] was read from the BMS    // when the last BLE scan finished
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
   // RS485 bus with several packs (index = DIP / Modbus address 0..15)
   struct Pack { jk::Sample s; uint32_t stamp = 0; bmsw::JkSettings js; uint32_t setStamp = 0; String model; char serial[12] = {0}; String codeBt, codeSet; };
   Pack packs[16];
@@ -107,7 +124,7 @@ bool persistWanted = false;
 // BMS link: Bluetooth (default) or the RS485 cable (JK, ESP32-S3 only)
 struct LinkCfg {
   bool rs485 = false;
-  int8_t rx = 18, tx = 17;
+  int8_t rx = RS485_RX_DEF, tx = RS485_TX_DEF;
   uint32_t baud = 115200;
   uint8_t addr = 1;
   uint8_t bus = 0;   // several packs on the bus: 0 auto, 1 listen only, 2 board polls
@@ -117,7 +134,7 @@ struct LinkCfg {
 // Usage profile (set from the website): changes the screen layout and alarms.
 struct ProfileCfg { uint8_t type = 0; uint16_t whkm = 0; uint8_t rangeAlarm = 10; } profCfg; // 0 solar,1 ev,2 car,3 ups,4 camp
 static const char *const PROF_NAME[5] = {"solar", "ev", "car", "ups", "camp"};
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
 // Bluetooth link to each pack of an RS485 bank (used to change its settings)
 struct BtLink { char mac[18] = {0}; uint8_t type = 0; char name[20] = {0}; };
 static BtLink btMap[16];
@@ -257,7 +274,7 @@ void stateApi() {
           a.add(nullptr);
       }
     }
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
     if (linkRs485 && (shared.bankN > 1 || shared.busMode == 1)) { // RS485 bank = one group
       auto b = d.createNestedObject("bank");
       b["n"] = shared.bankN;
@@ -387,7 +404,7 @@ static const char *queueCmd(const BmsCmd &c, uint8_t addr = 0xFF) {
 // Returns nullptr when queued, otherwise the reason it was refused.
 const char *bmsWriteParam(int idx, float value, int addr) {
   if (addr >= 0) { // one pack of an RS485 bank
-#ifdef BATTLAB_DISPLAY
+#ifndef BATTLAB_FULL
     return "pack address needs the ESP32-S3 RS485 board";
 #else
     Guard g;
@@ -432,7 +449,7 @@ const char *bmsWriteParam(int idx, float value, int addr) {
 const char *bmsSetSwitch(int which, bool on, int addr) {
   if (which < 0 || which >= bmsw::SW_COUNT) return "unknown switch";
   if (addr >= 0) {
-#ifdef BATTLAB_DISPLAY
+#ifndef BATTLAB_FULL
     return "pack address needs the ESP32-S3 RS485 board";
 #else
     Guard g;
@@ -458,7 +475,7 @@ const char *bmsSetSwitch(int which, bool on, int addr) {
   return queueCmd({true, uint8_t(which), 0, on}, addr >= 0 ? uint8_t(addr) : 0xFF);
 }
 
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
 static void btSave() { // "a,mac,type,name;..."
   String o;
   for (int a = 0; a < 16; a++)
@@ -703,7 +720,7 @@ void bleWorker(void *) {
     if (xQueueSend(queue, &q, 0) != pdTRUE)
       dropped++;
   };
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
   // ---- RS485 bank: Bluetooth is used only to match packs and to change their settings ----
   static uint8_t pjBuf[300], pjBuf2[300];
   auto pjConnect = [&](const char *mac, uint8_t type, NimBLERemoteCharacteristic *&w) -> bool {
@@ -895,7 +912,7 @@ void bleWorker(void *) {
       continue;
     }
     if (linkRs485) { // BMS on the RS485 cable: Bluetooth only for bank jobs
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
       if (client->isConnected()) client->disconnect();
       packJobs();
 #endif
@@ -1787,7 +1804,7 @@ static void ledPersist() {
   p.end();
 }
 static void ledOut(uint8_t r, uint8_t g, uint8_t b) {
-#ifdef BATTLAB_CYD35
+#if defined(BATTLAB_CYD35) && !defined(BATTLAB_ES3C40)
   ledcWrite(0, 255 - r);
   ledcWrite(1, 255 - g);
   ledcWrite(2, 255 - b);
@@ -1808,7 +1825,7 @@ static void hueToRgb(float hue, float &r, float &g, float &b) {
   }
 }
 void ledTask(void *) {
-#ifdef BATTLAB_CYD35
+#if defined(BATTLAB_CYD35) && !defined(BATTLAB_ES3C40)
   const uint8_t pins[3] = {4, 16, 17};
   for (int i = 0; i < 3; i++) {
     ledcSetup(i, 5000, 8);
@@ -2056,7 +2073,7 @@ static String jkCodesJson(int pack) {
   StaticJsonDocument<256> d;
   Guard g;
   String bt = shared.codeBt, st = shared.codeSet;
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
   if (pack >= 0 && pack < 16) { bt = shared.packs[pack].codeBt; st = shared.packs[pack].codeSet; }
 #endif
   d["ok"] = bt.length() > 0 || st.length() > 0;
@@ -2101,7 +2118,7 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   }
   if (c == "bms_read") { Guard g; readWanted = true; return "reading"; }
   if (c == "bms_runtime_reset") {
-#ifdef BATTLAB_DISPLAY
+#ifndef BATTLAB_FULL
     ok = false; return "RS485 is on the ESP32-S3 board";
 #else
     if (!linkRs485) { ok = false; return "RS485 only: connect the BMS over the RS485 cable first"; }
@@ -2128,16 +2145,28 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
   }
   if (c == "restart") { restartAfterSend = true; return "restarting"; }
   if (c == "link") {
-#ifdef BATTLAB_DISPLAY
+#ifndef BATTLAB_FULL
     ok = false;
     return "RS485 is available on the ESP32-S3 board";
 #else
     String mode = a["mode"] | "ble";
     int rx = a["rx"] | int(linkCfg.rx), tx = a["tx"] | int(linkCfg.tx), addr = a["addr"] | int(linkCfg.addr);
     uint32_t baud = a["baud"] | linkCfg.baud;
-    auto badPin = [](int p) { return p < 0 || p > 48 || p == 19 || p == 20 || (p >= 26 && p <= 37); };
+    auto badPin = [](int p) {
+      if (p < 0 || p > 48 || p == 19 || p == 20 || (p >= 26 && p <= 37)) return true;
+#ifdef BATTLAB_ES3C40
+      static const int8_t used[] = {0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 38, 39, 40, 41, 42, 45, 46, 47, 48};
+      for (int8_t u : used) if (p == u) return true; // screen, touch, SD, audio, LED
+#endif
+      return false;
+    };
     if (mode != "ble" && mode != "rs485") { ok = false; return "mode ble or rs485"; }
-    if (badPin(rx) || badPin(tx) || rx == tx) { ok = false; return "pick two free GPIO pins (not 19/20, not 26-37)"; }
+    if (badPin(rx) || badPin(tx) || rx == tx) { ok = false; return
+#ifdef BATTLAB_ES3C40
+      "use the UART header: RX 44, TX 43 (or IO2/3/14/21)";
+#else
+      "pick two free GPIO pins (not 19/20, not 26-37)";
+#endif }
     if (baud != 9600 && baud != 19200 && baud != 38400 && baud != 57600 && baud != 115200) { ok = false; return "baud 9600-115200"; }
     if (addr < 0 || addr > 15) { ok = false; return "address 0-15"; }
     String bus = a["bus"] | (linkCfg.bus == 1 ? "listen" : linkCfg.bus == 2 ? "poll" : "auto");
@@ -2197,7 +2226,7 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
     return String("profile ") + t;
   }
   if (c == "bt_match" || c == "bt_clear") {
-#ifdef BATTLAB_DISPLAY
+#ifndef BATTLAB_FULL
     ok = false;
     return "needs the ESP32-S3 RS485 board";
 #else
@@ -2259,7 +2288,7 @@ static void cloudTask(void *) {
   tls.setCACertBundle(CLOUD_CA_BUNDLE);
   tls.setTimeout(10);
   HTTPClient http;
-#ifdef BATTLAB_DISPLAY
+#if defined(BATTLAB_DISPLAY) && !defined(BATTLAB_ES3C40)
   // CYD: a new TLS session per upload, so its ~40 KB go back to the heap
   // between uploads (the screen needs them).
   http.setReuse(false);
@@ -2307,7 +2336,7 @@ static void cloudTask(void *) {
     String json;
     bool sentWscan = false;
     {
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
       { Guard g; DOC = 10240 + size_t(shared.bankN) * 1700; }
       if (luxNow) DOC += 4096;
 #else
@@ -2333,14 +2362,14 @@ static void cloudTask(void *) {
       }
       auto c = d.createNestedObject("cfg");
 #ifdef BATTLAB_DISPLAY
-      c["board"] = "cyd35";
+      c["board"] = BATTLAB_BOARD;
       displayCfgGet(c.createNestedObject("disp"));
 #else
       c["board"] = "s3";
 #endif
       c["remote"] = 1;
       c["ota"] = 1;
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
       c["link"] = linkCfg.rs485 ? "rs485" : "ble";
       c["lrx"] = linkCfg.rx;
       c["ltx"] = linkCfg.tx;
@@ -2409,7 +2438,7 @@ static void cloudTask(void *) {
       d["up"] = millis() / 1000;
       d["rst"] = resetReasonText;
       d["boots"] = bootCount;
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
       if (linkRs485) {
         auto rd = d.createNestedObject("rd");
         rd["b"] = rsBytesTot;
@@ -2500,7 +2529,7 @@ static void cloudTask(void *) {
         d["chg"] = s.charge;
         d["dsg"] = s.discharge;
         float mn = 9, mx = 0;
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
         bool bank = linkRs485 && (shared.bankN > 1 || shared.busMode == 1);
 #else
         bool bank = false;
@@ -2514,7 +2543,7 @@ static void cloudTask(void *) {
               mx = max(mx, s.cells[k]);
             }
         }
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
         else {
           // RS485 bank: totals on top, every pack in "packs"
           d["bank"] = shared.bankN;
@@ -2591,7 +2620,7 @@ static void cloudTask(void *) {
     json = String();
     char why[96] = {0};
     int e = code < 0 ? tls.lastError(why, sizeof why) : 0;
-#ifdef BATTLAB_DISPLAY
+#if defined(BATTLAB_DISPLAY) && !defined(BATTLAB_ES3C40)
     tls.stop(); // free the TLS buffers before the screen draws again
 #else
     if (code < 0) tls.stop();
@@ -2848,7 +2877,7 @@ static void bleRefresh(bool slow) {
     c["ap"] = wifiOn;
     c["tx"] = radioMax;
 #ifdef BATTLAB_DISPLAY
-    c["board"] = "cyd35";
+    c["board"] = BATTLAB_BOARD;
     displayCfgGet(c.createNestedObject("disp"));
 #else
     c["board"] = "s3";
@@ -3022,7 +3051,7 @@ static void bleSetupTick() {
   bleRefresh(slow);
 }
 
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
 // ---- JK BMS over the RS485 cable (RS485-to-TTL board on two GPIOs) -------
 // Tries the JK-PB Modbus request and the older 4E 57 request in turn; if
 // nothing answers it also tries with RX/TX swapped (common wiring mistake).
@@ -3596,7 +3625,7 @@ static void serialSetupTask(void *) {
           improvSend(improv::T_STATE, {uint8_t(conn ? improv::S_PROVISIONED : improv::S_AUTHORIZED)});
           if (conn) improvSend(improv::T_RESULT, improv::result(improv::C_STATE, {claimUrl()}));
         } else if (cmd == improv::C_INFO) {
-#ifdef BATTLAB_DISPLAY
+#if defined(BATTLAB_DISPLAY) && !defined(BATTLAB_ES3C40)
           const char *chip = "ESP32";
 #else
           const char *chip = "ESP32-S3";
@@ -3707,10 +3736,10 @@ void setup() {
   wifiOn = prefs.getBool("wifi", true); // can be switched off on the screen
 #endif
   radioMax = prefs.getBool("txmax", true);
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
   linkCfg.rs485 = prefs.getBool("l485", false);
-  linkCfg.rx = prefs.getChar("lrx", 18);
-  linkCfg.tx = prefs.getChar("ltx", 17);
+  linkCfg.rx = prefs.getChar("lrx", RS485_RX_DEF);
+  linkCfg.tx = prefs.getChar("ltx", RS485_TX_DEF);
   linkCfg.baud = prefs.getUInt("lbaud", 115200);
   linkCfg.addr = prefs.getUChar("laddr", 1);
   linkCfg.bus = prefs.getUChar("lbus", 0);
@@ -3890,6 +3919,11 @@ void setup() {
     ledJson(d);
     json(200, d);
   });
+#ifdef BATTLAB_ES3C40
+#define INV_DEF true // IPS panel
+#else
+#define INV_DEF false
+#endif
   web.on("/api/display", HTTP_GET, []() {
     // Screen orientation / colour fixes for the on-board display, e.g.
     // /api/display?rotation=3  or  ?invert=1  or  ?rgb=1 (reboots to apply)
@@ -3902,7 +3936,7 @@ void setup() {
     if (web.hasArg("invert")) { p.putBool("inv", web.arg("invert").toInt() != 0); changed = true; }
     if (web.hasArg("rgb")) { p.putBool("rgb", web.arg("rgb").toInt() != 0); changed = true; }
     String out = String("{\"rotation\":") + p.getUChar("rot", 1) +
-                 ",\"invert\":" + (p.getBool("inv", false) ? "true" : "false") +
+                 ",\"invert\":" + (p.getBool("inv", INV_DEF) ? "true" : "false") +
                  ",\"rgb\":" + (p.getBool("rgb", false) ? "true" : "false") +
                  ",\"rebooting\":" + (changed ? "true" : "false") + "}";
     p.end();
@@ -4006,7 +4040,7 @@ void setup() {
   luxd::start();
   invd::start();
   xTaskCreatePinnedToCore(cloudTask, "cloud", 10240, nullptr, 1, nullptr, 1);
-#ifndef BATTLAB_DISPLAY
+#ifdef BATTLAB_FULL
   xTaskCreatePinnedToCore(rs485Task, "rs485", 10240, nullptr, 1, nullptr, 1);
 #endif
   displayStart();

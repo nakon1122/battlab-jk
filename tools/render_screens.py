@@ -5,7 +5,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / 'assets/screens'
+import os
+ES = os.environ.get('ES3C40') == '1'  # LCDwiki ES3C40P 4.0" (capacitive touch: no calibration)
+OUT = ROOT / ('assets/screens_es3c40' if ES else 'assets/screens')
 OUT.mkdir(parents=True, exist_ok=True)
 S = 2
 FF = '/usr/share/fonts/truetype/freefont/'
@@ -304,7 +306,7 @@ def setup():
         s.button((150 + i*82, 92, 76, 40), t, i == 2)
     s.text('Radio', 12, 158, F9, MUTED)
     s.button((150, 138, 104, 40), 'WIFI ON', True, GOOD); s.button((260, 138, 96, 40), 'TX MAX', True, GOOD)
-    s.button((362, 138, 112, 40), 'CALIBRATE')
+    if not ES: s.button((362, 138, 112, 40), 'CALIBRATE')
     s.text('Low SOC alarm', 12, 204, F9, MUTED)
     s.button((150, 184, 52, 40), '-', f=F12B); s.text('15%', 236, 205, F12B, TEXT, 'mm'); s.button((270, 184, 52, 40), '+', f=F12B)
     s.button((340, 184, 134, 40), 'BEEP ON', True, GOOD)
@@ -317,7 +319,7 @@ def info():
     s = Scr(); header(s, 'JK02_24S  LIVE')
     rows = [('Hardware ID', 'BATTLAB-A3F1C2   C8:47:80:A3:F1:C2'), ('BMS', 'JK02_24S   JK_BD6A24S20P'), ('Bluetooth', '10:23:81:A9:C0:D6  AUTO  TX +9 dBm'),
             ('State', 'LIVE   rx 48210 B, 162 frames'), ('Home Wi-Fi', 'MyHome_5G  192.168.1.57  -61 dBm'),
-            ('Cloud', 'online   sent 1284'), ('System', 'cyd35  power on  RAM 58/31k')]
+            ('Cloud', 'online   sent 1284'), ('System', ('es3c40' if ES else 'cyd35') + '  power on  RAM 58/31k')]
     for i, (k, v) in enumerate(rows):
         y = 44 + i * 25
         s.text(k, 13, y + 12, F9, MUTED); s.text(v, 139, y + 12, F9, TEXT)
@@ -459,7 +461,7 @@ LUX2 = [dict(sn='61730V3039', soc=31, v=53.4, p=3778, ppv=4946, pl=938, pg=0, ep
         dict(sn='61730V3123', soc=30, v=53.3, p=3383, ppv=4795, pl=933, pg=0, epv=17.9, el=5.8)]
 shots = [
     ('01_boot.png', 'Boot: BattLab logo, 5 s', boot()),
-    ('02_touch_calibration.png', 'First start: touch calibration', calib()),
+] + ([] if ES else [('02_touch_calibration.png', 'First start: touch calibration', calib())]) + [
     ('03_home.png', 'HOME: SOC gauge + live values', home()),
     ('03b_home_energy.png', 'HOME line 2 alternates every 4 s: time left <-> energy today (+in / -out kWh, counted on the board)', home(line2='+3.42/-1.87kWh')),
     ('04_home_alarm.png', 'HOME with low-SOC alarm', home(soc=12, alarm='LOW SOC 12%')),
@@ -511,8 +513,9 @@ rows = (len(paths) + cols - 1) // cols
 sheet = Image.new('RGB', (cols * (W + pad) + pad, 90 + rows * (H + capH + pad) + pad), (238, 241, 244))
 d = ImageDraw.Draw(sheet)
 import re as _re
-_fw = _re.search(r'#define BATTLAB_FW "([^"]+)-cyd35"', (ROOT / 'src/main.cpp').read_text()).group(1)
-d.text((pad, 30), f'BATTLAB {_fw} - CYD35 BMS screen (ESP32-3248S035)', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
+_fw = _re.search(r'#define BATTLAB_FW "([^"]+)-' + ('es3c40' if ES else 'cyd35') + '"', (ROOT / 'src/main.cpp').read_text()).group(1)
+_bn = 'ES3C40 4.0" BMS screen (ESP32-S3, capacitive touch)' if ES else 'CYD35 BMS screen (ESP32-3248S035)'
+d.text((pad, 30), f'BATTLAB {_fw} - {_bn}', font=ImageFont.truetype(FF + 'FreeSansBold.ttf', 30), fill=(20, 30, 40))
 for k, (p, cap) in enumerate(paths):
     r, c = divmod(k, cols)
     x, y = pad + c * (W + pad), 90 + r * (H + capH + pad)
