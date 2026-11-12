@@ -2166,7 +2166,8 @@ static String runCloudCmd(const String &c, JsonObjectConst a, bool &ok) {
       "use the UART header: RX 44, TX 43 (or IO2/3/14/21)";
 #else
       "pick two free GPIO pins (not 19/20, not 26-37)";
-#endif }
+#endif
+    }
     if (baud != 9600 && baud != 19200 && baud != 38400 && baud != 57600 && baud != 115200) { ok = false; return "baud 9600-115200"; }
     if (addr < 0 || addr > 15) { ok = false; return "address 0-15"; }
     String bus = a["bus"] | (linkCfg.bus == 1 ? "listen" : linkCfg.bus == 2 ? "poll" : "auto");
