@@ -1,0 +1,4 @@
+-- Applied 2026-11-17 (Supabase migration energy_hourly_90d).
+-- Hourly kWh in / out per device, kept 90 days, filled by a trigger on every new readings row
+-- (dt = time since the previous reading, max 2 min). Read by energy_hours() / share_energy().
+-- See the migration in Supabase for the full text; this file is a pointer for the repo.
